@@ -24,7 +24,10 @@ Orbit opens on a welcome home (logo, version, quick actions) — no shell until 
 | `P` / `3` | Command Palette |
 | `S` / `4` | Settings / Config |
 | `H` / `5` | Help & Shortcuts |
+| `Q` / `6` | Quit Orbit |
 | `Ctrl+Shift+H` | Return to home anytime |
+| `Cmd+W` / `Ctrl+Shift+W` | Close tab (from home → quit) |
+| `Cmd+Q` / `Ctrl+Q` | Quit Orbit (anywhere) |
 
 ## Font size
 

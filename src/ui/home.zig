@@ -12,6 +12,7 @@ pub const Action = enum {
     command_palette,
     settings,
     help,
+    quit,
 };
 
 pub const Entry = struct {
@@ -26,6 +27,7 @@ pub const entries = [_]Entry{
     .{ .action = .command_palette, .label = "Command Palette", .key = "P" },
     .{ .action = .settings, .label = "Settings", .key = "S" },
     .{ .action = .help, .label = "Help", .key = "H" },
+    .{ .action = .quit, .label = "Quit Orbit", .key = "Q" },
 };
 
 pub const Home = struct {
@@ -170,6 +172,8 @@ fn drawHelp(
         "Ctrl+Shift+O/S   Open / save workspace",
         "Ctrl+Shift+F     Search",
         "Ctrl+Shift+H     Home",
+        "Cmd+W / Ctrl+Shift+W  Close tab",
+        "Cmd+Q / Ctrl+Q   Quit Orbit",
         "",
         "~/.config/orbit/config.toml",
         "",

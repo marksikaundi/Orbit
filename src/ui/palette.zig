@@ -23,6 +23,7 @@ pub const Action = enum {
     font_reset,
     settings,
     go_home,
+    quit,
     reload_config,
     reload_plugins,
     list_plugins,
@@ -36,7 +37,7 @@ pub const BuiltinEntry = struct {
 
 pub const catalog = [_]BuiltinEntry{
     .{ .action = .new_tab, .label = "New Tab", .hint = "Ctrl+Shift+T" },
-    .{ .action = .close_tab, .label = "Close Tab", .hint = "Ctrl+Shift+W" },
+    .{ .action = .close_tab, .label = "Close Tab", .hint = "Cmd+W / Ctrl+Shift+W" },
     .{ .action = .split_right, .label = "Split Right", .hint = "Ctrl+Shift+D" },
     .{ .action = .split_down, .label = "Split Down", .hint = "Ctrl+Shift+E" },
     .{ .action = .next_tab, .label = "Next Tab", .hint = "Ctrl+Tab" },
@@ -54,6 +55,7 @@ pub const catalog = [_]BuiltinEntry{
     .{ .action = .font_reset, .label = "Font: Reset Size", .hint = "Ctrl+0" },
     .{ .action = .settings, .label = "Settings", .hint = "show config" },
     .{ .action = .go_home, .label = "Go Home", .hint = "Ctrl+Shift+H" },
+    .{ .action = .quit, .label = "Quit Orbit", .hint = "Cmd+Q / Ctrl+Q" },
     .{ .action = .reload_config, .label = "Reload Config", .hint = "" },
     .{ .action = .reload_plugins, .label = "Reload Plugins", .hint = "" },
     .{ .action = .list_plugins, .label = "List Plugins", .hint = "" },

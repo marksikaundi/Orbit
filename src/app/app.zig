@@ -499,6 +499,17 @@ pub const App = struct {
         const shift = (mods & c.GLFW_MOD_SHIFT) != 0;
         const super = (mods & c.GLFW_MOD_SUPER) != 0;
 
+        // Quit anywhere: Cmd+Q (macOS) / Ctrl+Q
+        if ((super or ctrl) and !shift and key == c.GLFW_KEY_Q) {
+            self.requestQuit();
+            return;
+        }
+        // Close tab / quit from home: Cmd+W or Ctrl+Shift+W
+        if ((super and !shift and key == c.GLFW_KEY_W) or (ctrl and shift and key == c.GLFW_KEY_W)) {
+            self.closeTabOrQuit();
+            return;
+        }
+
         if (self.ui == .home) {
             self.handleHomeKey(key, ctrl, shift);
             return;
@@ -555,15 +566,6 @@ pub const App = struct {
                 },
                 c.GLFW_KEY_T => {
                     self.newTab() catch {};
-                    return;
-                },
-                c.GLFW_KEY_W => {
-                    if (self.tabs.items.items.len <= 1) {
-                        self.tabs.clear();
-                        self.goHome();
-                    } else {
-                        self.tabs.closeActive();
-                    }
                     return;
                 },
                 c.GLFW_KEY_D => {
@@ -664,6 +666,24 @@ pub const App = struct {
         self.palette.close();
     }
 
+    fn requestQuit(self: *App) void {
+        self.window.requestClose();
+    }
+
+    /// Cmd+W / Ctrl+Shift+W: close active tab; from home or with no tabs → quit.
+    fn closeTabOrQuit(self: *App) void {
+        if (self.ui == .home or self.tabs.items.items.len == 0) {
+            self.requestQuit();
+            return;
+        }
+        if (self.tabs.items.items.len <= 1) {
+            self.tabs.clear();
+            self.goHome();
+            return;
+        }
+        self.tabs.closeActive();
+    }
+
     fn handleHomeChar(self: *App, codepoint: u32) void {
         if (self.home.show_help) return;
         if (codepoint >= 'a' and codepoint <= 'z') {
@@ -680,6 +700,7 @@ pub const App = struct {
             'P' => self.runHomeAction(.command_palette),
             'S' => self.runHomeAction(.settings),
             'H' => self.runHomeAction(.help),
+            'Q' => self.runHomeAction(.quit),
             else => {},
         }
     }
@@ -704,10 +725,12 @@ pub const App = struct {
             c.GLFW_KEY_3 => self.runHomeAction(.command_palette),
             c.GLFW_KEY_4 => self.runHomeAction(.settings),
             c.GLFW_KEY_5 => self.runHomeAction(.help),
+            c.GLFW_KEY_6 => self.runHomeAction(.quit),
             c.GLFW_KEY_O => self.runHomeAction(.open_workspace),
             c.GLFW_KEY_P => self.runHomeAction(.command_palette),
             c.GLFW_KEY_S => self.runHomeAction(.settings),
             c.GLFW_KEY_H => self.runHomeAction(.help),
+            c.GLFW_KEY_Q => self.runHomeAction(.quit),
             else => {},
         }
     }
@@ -735,6 +758,7 @@ pub const App = struct {
             .help => {
                 self.home.show_help = true;
             },
+            .quit => self.requestQuit(),
         }
     }
 
@@ -810,14 +834,8 @@ pub const App = struct {
     fn runAction(self: *App, action: palette_mod.Action) void {
         switch (action) {
             .new_tab => self.newTab() catch {},
-            .close_tab => {
-                if (self.tabs.items.items.len <= 1) {
-                    self.tabs.clear();
-                    self.goHome();
-                } else {
-                    self.tabs.closeActive();
-                }
-            },
+            .close_tab => self.closeTabOrQuit(),
+            .quit => self.requestQuit(),
             .split_right => self.splitPane(.horizontal) catch {},
             .split_down => self.splitPane(.vertical) catch {},
             .next_tab => self.tabs.next(),

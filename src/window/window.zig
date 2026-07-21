@@ -66,6 +66,13 @@ pub const Window = struct {
         return c.glfwWindowShouldClose(self.handle) == c.GLFW_TRUE;
     }
 
+    /// Ask the window to close (Cmd+Q / Quit). Honors the red traffic-light button path.
+    pub fn requestClose(self: *Window) void {
+        if (self.handle) |h| {
+            c.glfwSetWindowShouldClose(h, c.GLFW_TRUE);
+        }
+    }
+
     pub fn poll() void {
         c.glfwPollEvents();
     }
