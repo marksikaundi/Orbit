@@ -33,6 +33,8 @@ pub fn build(b: *std.Build) void {
         root_module.linkFramework("Cocoa", .{});
         root_module.linkFramework("IOKit", .{});
         root_module.linkFramework("CoreVideo", .{});
+        root_module.linkFramework("CoreText", .{});
+        root_module.linkFramework("CoreGraphics", .{});
     } else if (target.result.os.tag == .linux) {
         root_module.linkSystemLibrary("GL", .{});
         root_module.linkSystemLibrary("util", .{}); // openpty

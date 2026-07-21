@@ -1,4 +1,4 @@
-//! Startup home screen — welcome, logo, version, and quick actions.
+//! Startup home — minimal Ghostty-like welcome (no heavy chrome).
 
 const std = @import("std");
 const Renderer = @import("../renderer/renderer.zig").Renderer;
@@ -24,8 +24,8 @@ pub const entries = [_]Entry{
     .{ .action = .new_terminal, .label = "New Terminal", .key = "Enter" },
     .{ .action = .open_workspace, .label = "Open Workspace", .key = "O" },
     .{ .action = .command_palette, .label = "Command Palette", .key = "P" },
-    .{ .action = .settings, .label = "Settings / Config", .key = "S" },
-    .{ .action = .help, .label = "Help & Shortcuts", .key = "H" },
+    .{ .action = .settings, .label = "Settings", .key = "S" },
+    .{ .action = .help, .label = "Help", .key = "H" },
 };
 
 pub const Home = struct {
@@ -53,177 +53,144 @@ pub fn draw(
     fb_h: i32,
     home: *const Home,
     theme_name: []const u8,
-    font_scale: f32,
+    font_size: f32,
     plugin_count: usize,
 ) !void {
-    // Atmosphere — deep slate bands (not flat)
-    try renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(12, 14, 18), 1.0);
-    try renderer.drawRect(0, 0, fb_w, @divTrunc(fb_h, 3), Color.rgb(16, 22, 30), 1.0);
-    try renderer.drawRect(0, @divTrunc(fb_h * 2, 3), fb_w, @divTrunc(fb_h, 3) + 8, Color.rgb(10, 12, 16), 1.0);
+    const bg = renderer.theme.background;
+    const fg = renderer.theme.foreground;
+    const muted = Color.rgb(
+        @intCast(@divTrunc(@as(i32, fg.r) + @as(i32, bg.r) * 2, 3)),
+        @intCast(@divTrunc(@as(i32, fg.g) + @as(i32, bg.g) * 2, 3)),
+        @intCast(@divTrunc(@as(i32, fg.b) + @as(i32, bg.b) * 2, 3)),
+    );
+    const dim = Color.rgb(
+        @intCast(@divTrunc(@as(i32, fg.r) + @as(i32, bg.r) * 4, 5)),
+        @intCast(@divTrunc(@as(i32, fg.g) + @as(i32, bg.g) * 4, 5)),
+        @intCast(@divTrunc(@as(i32, fg.b) + @as(i32, bg.b) * 4, 5)),
+    );
 
+    try renderer.drawRect(0, 0, fb_w, fb_h, bg, 1.0);
+
+    const cw = @as(i32, @intFromFloat(renderer.cell_w));
+    const ch = @as(i32, @intFromFloat(renderer.cell_h));
     const cx = @divTrunc(fb_w, 2);
-    const top = @max(28, @divTrunc(fb_h, 12));
-    const logo_h = try drawLogo(renderer, cx, top);
 
-    // Brand — hero signal under the mark
+    // Ghostty-like: generous outer padding, single vertical composition.
+    const pad_y = @max(ch * 2, @divTrunc(fb_h, 8));
+    var y = pad_y;
+
+    // Prompt mark instead of a heavy logo
+    const prompt = "~ >";
+    const prompt_x = cx - @divTrunc(@as(i32, @intCast(prompt.len)) * cw, 2);
+    try renderer.drawText(prompt_x, y, "~", Color.rgb(120, 160, 140));
+    try renderer.drawText(prompt_x + cw + @divTrunc(cw, 4), y, ">", Color.rgb(90, 175, 220));
+    try renderer.drawRect(prompt_x + cw * 2 + @divTrunc(cw, 2), y + 2, @max(6, cw - 4), ch - 4, fg, 0.85);
+    y += ch + @divTrunc(ch, 2);
+
+    // Brand — hero
     const brand = "Orbit";
-    const brand_y = top + logo_h + 18;
-    const brand_x = cx - @divTrunc(@as(i32, @intCast(brand.len)) * @as(i32, @intFromFloat(renderer.cell_w)), 2);
-    try renderer.drawText(brand_x, brand_y, brand, Color.rgb(236, 242, 248));
+    const brand_x = cx - @divTrunc(@as(i32, @intCast(brand.len)) * cw, 2);
+    try renderer.drawText(brand_x, y, brand, fg);
+    y += ch + 6;
 
     const tag = "Stay in the flow.";
-    const tag_y = brand_y + @as(i32, @intFromFloat(renderer.cell_h)) + 6;
-    const tag_x = cx - @divTrunc(@as(i32, @intCast(tag.len)) * @as(i32, @intFromFloat(renderer.cell_w)), 2);
-    try renderer.drawText(tag_x, tag_y, tag, Color.rgb(140, 165, 190));
+    const tag_x = cx - @divTrunc(@as(i32, @intCast(tag.len)) * cw, 2);
+    try renderer.drawText(tag_x, y, tag, muted);
+    y += ch + @divTrunc(ch, 2);
 
-    var meta: [80]u8 = undefined;
-    const meta_line = std.fmt.bufPrint(&meta, "v{s}  ·  theme {s}  ·  scale {d:.1}", .{ version, theme_name, font_scale }) catch "v0.1.0";
-    const meta_y = tag_y + @as(i32, @intFromFloat(renderer.cell_h)) + 10;
-    const meta_x = cx - @divTrunc(@as(i32, @intCast(meta_line.len)) * @as(i32, @intFromFloat(renderer.cell_w)), 2);
-    try renderer.drawText(meta_x, meta_y, meta_line, Color.rgb(100, 115, 130));
+    var meta: [96]u8 = undefined;
+    const meta_line = std.fmt.bufPrint(
+        &meta,
+        "v{s}  {s}  {d:.0}pt",
+        .{ version, theme_name, font_size },
+    ) catch "v0.1.0";
+    const meta_x = cx - @divTrunc(@as(i32, @intCast(meta_line.len)) * cw, 2);
+    try renderer.drawText(meta_x, y, meta_line, dim);
+    y += ch * 2;
 
     if (home.show_help) {
-        try drawHelp(renderer, fb_w, fb_h, cx);
+        try drawHelp(renderer, fb_w, fb_h, cx, bg, fg, muted);
         return;
     }
 
-    // Welcome panel
-    const panel_w: i32 = @min(520, fb_w - 48);
-    const row_h: i32 = @max(26, @as(i32, @intFromFloat(renderer.cell_h)) + 10);
-    const panel_h: i32 = 36 + @as(i32, @intCast(entries.len)) * row_h + 56;
-    const panel_x = cx - @divTrunc(panel_w, 2);
-    const panel_y = meta_y + @as(i32, @intFromFloat(renderer.cell_h)) + 28;
+    // Action list — no cards; selection is a quiet bar only
+    const list_w: i32 = @min(cw * 36, fb_w - cw * 4);
+    const list_x = cx - @divTrunc(list_w, 2);
+    const row_h = ch + @divTrunc(ch, 3);
 
-    try renderer.drawRect(panel_x, panel_y, panel_w, panel_h, Color.rgb(20, 24, 32), 0.96);
-    // Accent edge
-    try renderer.drawRect(panel_x, panel_y, 3, panel_h, Color.rgb(70, 140, 200), 1.0);
-
-    try renderer.drawText(panel_x + 20, panel_y + 14, "Welcome — what would you like to do?", Color.rgb(210, 220, 230));
+    try renderer.drawText(list_x, y, "What would you like to do?", muted);
+    y += ch + @divTrunc(ch, 2);
 
     for (entries, 0..) |entry, i| {
-        const ry = panel_y + 40 + @as(i32, @intCast(i)) * row_h;
+        const ry = y + @as(i32, @intCast(i)) * row_h;
         if (i == home.selected) {
-            try renderer.drawRect(panel_x + 10, ry - 2, panel_w - 20, row_h - 2, Color.rgb(40, 70, 105), 1.0);
+            try renderer.drawRect(list_x - 8, ry - 2, list_w + 16, row_h - 2, Color.rgb(
+                @intCast(@min(255, @as(i32, bg.r) + 18)),
+                @intCast(@min(255, @as(i32, bg.g) + 22)),
+                @intCast(@min(255, @as(i32, bg.b) + 28)),
+            ), 1.0);
+            try renderer.drawRect(list_x - 8, ry - 2, 3, row_h - 2, Color.rgb(90, 175, 220), 1.0);
         }
-        var line: [64]u8 = undefined;
-        const label = std.fmt.bufPrint(&line, "  {s}", .{entry.label}) catch entry.label;
-        try renderer.drawText(panel_x + 16, ry + 4, label, Color.rgb(230, 235, 240));
-        const key_x = panel_x + panel_w - 20 - @as(i32, @intCast(entry.key.len)) * @as(i32, @intFromFloat(renderer.cell_w));
-        try renderer.drawText(key_x, ry + 4, entry.key, Color.rgb(120, 160, 200));
+        try renderer.drawText(list_x + 8, ry + 2, entry.label, fg);
+        const key_x = list_x + list_w - @as(i32, @intCast(entry.key.len)) * cw;
+        try renderer.drawText(key_x, ry + 2, entry.key, muted);
     }
+
+    y += @as(i32, @intCast(entries.len)) * row_h + ch;
 
     var foot: [96]u8 = undefined;
     const foot_line = std.fmt.bufPrint(
         &foot,
-        "config ~/.config/orbit/  ·  plugins {d}  ·  Up/Down + Enter",
+        "~/.config/orbit  ·  {d} plugins  ·  up/down enter",
         .{plugin_count},
-    ) catch "config ~/.config/orbit/";
-    const foot_y = panel_y + panel_h + 18;
-    const foot_x = cx - @divTrunc(@as(i32, @intCast(foot_line.len)) * @as(i32, @intFromFloat(renderer.cell_w)), 2);
-    if (foot_y + 20 < fb_h) {
-        try renderer.drawText(foot_x, foot_y, foot_line, Color.rgb(90, 105, 120));
+    ) catch "~/.config/orbit";
+    const foot_x = cx - @divTrunc(@as(i32, @intCast(foot_line.len)) * cw, 2);
+    if (y + ch < fb_h - ch) {
+        try renderer.drawText(foot_x, y, foot_line, dim);
     }
 }
 
-/// Terminal-window brand mark. Returns drawn height for layout.
-fn drawLogo(renderer: *Renderer, cx: i32, top: i32) !i32 {
-    const win_w: i32 = 148;
-    const title_h: i32 = 22;
-    const body_h: i32 = 72;
-    const win_h = title_h + body_h;
-    const wx = cx - @divTrunc(win_w, 2);
-    const wy = top;
-
-    // Soft ambient behind the window (subtle orbit glow)
-    try renderer.drawRect(wx - 14, wy - 8, win_w + 28, win_h + 16, Color.rgb(22, 36, 52), 0.35);
-
-    // Outer frame / shadow
-    try renderer.drawRect(wx - 2, wy + 3, win_w + 4, win_h + 2, Color.rgb(6, 8, 12), 0.55);
-    try renderer.drawRect(wx, wy, win_w, win_h, Color.rgb(28, 34, 44), 1.0);
-
-    // Title bar
-    try renderer.drawRect(wx, wy, win_w, title_h, Color.rgb(38, 46, 58), 1.0);
-    try renderer.drawRect(wx, wy + title_h - 1, win_w, 1, Color.rgb(18, 22, 28), 1.0);
-
-    // Traffic lights
-    const dot_y = wy + 7;
-    try renderer.drawRect(wx + 10, dot_y, 8, 8, Color.rgb(232, 98, 92), 1.0);
-    try renderer.drawRect(wx + 24, dot_y, 8, 8, Color.rgb(230, 176, 72), 1.0);
-    try renderer.drawRect(wx + 38, dot_y, 8, 8, Color.rgb(88, 186, 110), 1.0);
-
-    // Title caption
-    const caption = "orbit";
-    const cap_x = wx + 58;
-    try renderer.drawText(cap_x, wy + 4, caption, Color.rgb(150, 165, 185));
-
-    // Screen body
-    const screen_x = wx + 4;
-    const screen_y = wy + title_h + 4;
-    const screen_w = win_w - 8;
-    const screen_h = body_h - 8;
-    try renderer.drawRect(screen_x, screen_y, screen_w, screen_h, Color.rgb(10, 12, 16), 1.0);
-
-    // Left accent rail (terminal feel)
-    try renderer.drawRect(screen_x, screen_y, 2, screen_h, Color.rgb(55, 120, 175), 0.9);
-
-    // Prompt lines inside the window
+fn drawHelp(
+    renderer: *Renderer,
+    fb_w: i32,
+    fb_h: i32,
+    cx: i32,
+    bg: Color,
+    fg: Color,
+    muted: Color,
+) !void {
     const cw = @as(i32, @intFromFloat(renderer.cell_w));
     const ch = @as(i32, @intFromFloat(renderer.cell_h));
-    const line1_y = screen_y + 10;
-    const line2_y = line1_y + ch + 6;
-    try renderer.drawText(screen_x + 10, line1_y, "~", Color.rgb(120, 160, 140));
-    try renderer.drawText(screen_x + 10 + cw + 2, line1_y, ">", Color.rgb(90, 175, 220));
-
-    // Block cursor after the prompt
-    const cursor_x = screen_x + 10 + cw * 2 + 8;
-    const cursor_h = @max(12, ch - 2);
-    try renderer.drawRect(cursor_x, line1_y + 1, @max(8, cw - 2), cursor_h, Color.rgb(200, 220, 240), 0.95);
-
-    // Dim second line — keep short so it fits the window
-    if (line2_y + ch < screen_y + screen_h - 4) {
-        try renderer.drawText(screen_x + 10, line2_y, "$ orbit", Color.rgb(70, 85, 100));
-    }
-
-    // Thin orbit ring under the window (brand cue, not the main mark)
-    const ring_y = wy + win_h + 2;
-    try renderer.drawRect(cx - 40, ring_y, 80, 2, Color.rgb(55, 110, 160), 0.45);
-    try renderer.drawRect(cx + 36, ring_y - 2, 5, 5, Color.rgb(200, 180, 100), 0.7);
-
-    return win_h + 8;
-}
-
-fn drawHelp(renderer: *Renderer, fb_w: i32, fb_h: i32, cx: i32) !void {
-    const panel_w: i32 = @min(560, fb_w - 40);
-    const panel_h: i32 = @min(340, fb_h - 80);
-    const panel_x = cx - @divTrunc(panel_w, 2);
-    const panel_y = @divTrunc(fb_h - panel_h, 2);
-
-    try renderer.drawRect(panel_x, panel_y, panel_w, panel_h, Color.rgb(18, 22, 28), 0.98);
-    try renderer.drawRect(panel_x, panel_y, panel_w, 3, Color.rgb(70, 140, 200), 1.0);
-    try renderer.drawText(panel_x + 20, panel_y + 16, "Help & Shortcuts", Color.rgb(230, 235, 240));
-
+    const panel_w: i32 = @min(cw * 48, fb_w - cw * 4);
     const lines = [_][]const u8{
-        "Ctrl+Shift+P   Command palette",
-        "Ctrl+= / - / 0 Font larger / smaller / reset",
-        "Ctrl+Shift+T   New tab",
-        "Ctrl+Shift+D/E Split right / down",
-        "Ctrl+Shift+O/S Open / save workspace",
-        "Ctrl+Shift+F   Search",
-        "Ctrl+Shift+H   Return to home",
+        "Ctrl+Shift+P     Command palette",
+        "Ctrl+= / - / 0   Font larger / smaller / reset",
+        "Ctrl+Shift+T     New tab",
+        "Ctrl+Shift+D/E   Split right / down",
+        "Ctrl+Shift+O/S   Open / save workspace",
+        "Ctrl+Shift+F     Search",
+        "Ctrl+Shift+H     Home",
         "",
-        "Config:  ~/.config/orbit/config.toml",
-        "Plugins: ~/.config/orbit/plugins/",
+        "~/.config/orbit/config.toml",
         "",
-        "Esc  back to home",
+        "Esc  back",
     };
+    const panel_h = ch * 2 + @as(i32, @intCast(lines.len)) * (ch + 4) + ch;
+    const panel_x = cx - @divTrunc(panel_w, 2);
+    const panel_y = @max(ch, @divTrunc(fb_h - panel_h, 2));
 
-    var y = panel_y + 48;
-    const step = @max(18, @as(i32, @intFromFloat(renderer.cell_h)) + 4);
+    try renderer.drawRect(panel_x, panel_y, panel_w, panel_h, Color.rgb(
+        @intCast(@min(255, @as(i32, bg.r) + 8)),
+        @intCast(@min(255, @as(i32, bg.g) + 8)),
+        @intCast(@min(255, @as(i32, bg.b) + 10)),
+    ), 1.0);
+    try renderer.drawText(panel_x + cw, panel_y + @divTrunc(ch, 2), "Help", fg);
+
+    var ly = panel_y + ch * 2;
     for (lines) |line| {
         if (line.len > 0) {
-            try renderer.drawText(panel_x + 24, y, line, Color.rgb(180, 195, 210));
+            try renderer.drawText(panel_x + cw, ly, line, muted);
         }
-        y += step;
-        if (y > panel_y + panel_h - 24) break;
+        ly += ch + 4;
     }
 }

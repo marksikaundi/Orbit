@@ -1,8 +1,8 @@
 # Orbit config — copy to ~/.config/orbit/config.toml
 
 [window]
-width = 900
-height = 560
+width = 980
+height = 620
 opacity = 1.0
 
 [theme]
@@ -11,5 +11,8 @@ name = "orbit-dark"
 
 [terminal]
 scrollback = 2000
-# Glyph scale (1.0 = tiny 8×16). 2.0 is the default; use Ctrl+= / Ctrl+- in the app.
-font_scale = 2.0
+# Point size (Ghostty-style). Retina scale is applied automatically.
+font_size = 14
+# Interior padding in logical pixels
+padding_x = 10
+padding_y = 6

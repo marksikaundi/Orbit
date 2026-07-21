@@ -16,7 +16,6 @@ const theme_mod = @import("../config/theme.zig");
 const WsManager = @import("../workspace/workspace.zig").Manager;
 const PluginRegistry = @import("../plugins/registry.zig").Registry;
 const clipboard = @import("../clipboard/clipboard.zig");
-const bitmap = @import("../font/bitmap.zig");
 const Color = @import("../terminal/cell.zig").Color;
 
 const UiMode = enum { home, normal, search, ws_picker, ws_save, palette, ssh_prompt, settings };
@@ -59,7 +58,8 @@ pub const App = struct {
         renderer.setFramebufferSize(window.fb_width, window.fb_height);
         renderer.setTheme(theme);
         renderer.opacity = config.opacity;
-        renderer.setFontScale(config.font_scale);
+        renderer.setContentScale(window.contentScale());
+        renderer.setFontSize(config.font_size);
 
         var tabs = Tabs.init(allocator);
         errdefer tabs.deinit();
@@ -123,12 +123,17 @@ pub const App = struct {
         }
     }
 
-    fn contentRect(fb_w: i32, fb_h: i32) Rect {
+    fn contentRect(self: *const App) Rect {
+        const scale = self.window.contentScale();
+        const pad_x: i32 = @intFromFloat(@round(@as(f32, @floatFromInt(self.config.padding_x)) * scale));
+        const pad_y: i32 = @intFromFloat(@round(@as(f32, @floatFromInt(self.config.padding_y)) * scale));
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
         return .{
-            .x = 0,
-            .y = Tabs.bar_height,
-            .w = fb_w,
-            .h = @max(1, fb_h - Tabs.bar_height),
+            .x = pad_x,
+            .y = Tabs.bar_height + pad_y,
+            .w = @max(1, fb_w - pad_x * 2),
+            .h = @max(1, fb_h - Tabs.bar_height - pad_y * 2),
         };
     }
 
@@ -151,12 +156,13 @@ pub const App = struct {
         if (self.window.fb_width == prev_w and self.window.fb_height == prev_h) return;
 
         self.renderer.setFramebufferSize(self.window.fb_width, self.window.fb_height);
+        self.renderer.setContentScale(self.window.contentScale());
         self.resizeAllSessions();
     }
 
     fn resizeAllSessions(self: *App) void {
         const tab = self.tabs.current() orelse return;
-        const bounds = contentRect(self.window.fb_width, self.window.fb_height);
+        const bounds = self.contentRect();
         const Ctx = struct {
             app: *App,
             fn cb(ctx: *@This(), session: *Session, r: Rect) void {
@@ -197,7 +203,7 @@ pub const App = struct {
                 self.window.fb_height,
                 &self.home,
                 self.config.theme_name,
-                self.renderer.font_scale,
+                self.renderer.font_size,
                 self.plugins.count(),
             );
             return;
@@ -205,26 +211,42 @@ pub const App = struct {
 
         self.renderer.clearBackground();
 
-        // Tab bar
-        try self.renderer.drawRect(0, 0, self.window.fb_width, Tabs.bar_height, Color.rgb(28, 32, 40), 1.0);
-        var x: i32 = 8;
+        // Ghostty-like integrated tab strip (matches terminal background)
+        const tbg = self.renderer.theme.background;
+        const tfg = self.renderer.theme.foreground;
+        try self.renderer.drawRect(0, 0, self.window.fb_width, Tabs.bar_height, tbg, 1.0);
+        try self.renderer.drawRect(0, Tabs.bar_height - 1, self.window.fb_width, 1, Color.rgb(
+            @intCast(@min(255, @as(i32, tbg.r) + 22)),
+            @intCast(@min(255, @as(i32, tbg.g) + 22)),
+            @intCast(@min(255, @as(i32, tbg.b) + 26)),
+        ), 1.0);
+        const cell_w_i: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
+        var x: i32 = 10;
         for (self.tabs.items.items, 0..) |tab, i| {
             const active = i == self.tabs.active;
-            const bg = if (active) Color.rgb(50, 70, 100) else Color.rgb(35, 40, 50);
-            const label_w: i32 = @intCast(@min(tab.title.len, 16) * bitmap.glyph_width + 16);
-            try self.renderer.drawRect(x, 4, label_w, Tabs.bar_height - 8, bg, 1.0);
-            const fg = if (active) Color.rgb(240, 245, 255) else Color.rgb(160, 170, 180);
-            try self.renderer.drawText(x + 8, 8, tab.title[0..@min(tab.title.len, 16)], fg);
-            x += label_w + 4;
+            const label_w: i32 = @intCast(@min(tab.title.len, 16)) * cell_w_i + 20;
+            if (active) {
+                try self.renderer.drawRect(x, 6, label_w, Tabs.bar_height - 12, Color.rgb(
+                    @intCast(@min(255, @as(i32, tbg.r) + 16)),
+                    @intCast(@min(255, @as(i32, tbg.g) + 18)),
+                    @intCast(@min(255, @as(i32, tbg.b) + 22)),
+                ), 1.0);
+            }
+            const fg = if (active) tfg else Color.rgb(
+                @intCast(@divTrunc(@as(i32, tfg.r) + @as(i32, tbg.r) * 2, 3)),
+                @intCast(@divTrunc(@as(i32, tfg.g) + @as(i32, tbg.g) * 2, 3)),
+                @intCast(@divTrunc(@as(i32, tfg.b) + @as(i32, tbg.b) * 2, 3)),
+            );
+            try self.renderer.drawText(x + 10, 10, tab.title[0..@min(tab.title.len, 16)], fg);
+            x += label_w + 6;
         }
 
         // Workspace badge on the right
         if (self.workspaces.current_name) |wn| {
             const label = wn[0..@min(wn.len, 20)];
-            const lw: i32 = @intCast(label.len * bitmap.glyph_width + 16);
-            const bx = self.window.fb_width - lw - 8;
-            try self.renderer.drawRect(bx, 4, lw, Tabs.bar_height - 8, Color.rgb(40, 90, 70), 1.0);
-            try self.renderer.drawText(bx + 8, 8, label, Color.rgb(200, 240, 210));
+            const lw: i32 = @as(i32, @intCast(label.len)) * cell_w_i + 20;
+            const bx = self.window.fb_width - lw - 10;
+            try self.renderer.drawText(bx + 8, 10, label, Color.rgb(140, 180, 160));
         }
 
         const tab = self.tabs.current() orelse {
@@ -246,7 +268,7 @@ pub const App = struct {
             }
             return;
         };
-        const bounds = contentRect(self.window.fb_width, self.window.fb_height);
+        const bounds = self.contentRect();
 
         const DrawCtx = struct {
             app: *App,
@@ -337,7 +359,7 @@ pub const App = struct {
                 }
                 try self.renderer.drawText(x + 20, ry + 4, entry.label[0..@min(entry.label.len, 36)], Color.rgb(220, 225, 230));
                 if (entry.hint.len > 0) {
-                    const hx = x + w - 8 - @as(i32, @intCast(@min(entry.hint.len, 18) * bitmap.glyph_width));
+                    const hx = x + w - 8 - @as(i32, @intCast(@min(entry.hint.len, 18))) * @as(i32, @intFromFloat(self.renderer.cell_w));
                     try self.renderer.drawText(hx, ry + 4, entry.hint[0..@min(entry.hint.len, 18)], Color.rgb(120, 130, 145));
                 }
             }
@@ -368,7 +390,7 @@ pub const App = struct {
         var line: [96]u8 = undefined;
         const t1 = std.fmt.bufPrint(&line, "Theme: {s}", .{self.config.theme_name}) catch "Theme:";
         try self.renderer.drawText(x + 16, y + 44, t1, Color.rgb(200, 210, 220));
-        const t2 = std.fmt.bufPrint(&line, "Opacity: {d:.2}  Font scale: {d:.2}", .{ self.config.opacity, self.renderer.font_scale }) catch "";
+        const t2 = std.fmt.bufPrint(&line, "Opacity: {d:.2}  Font: {d:.0}pt", .{ self.config.opacity, self.renderer.font_size }) catch "";
         try self.renderer.drawText(x + 16, y + 66, t2, Color.rgb(200, 210, 220));
         const t3 = std.fmt.bufPrint(&line, "Scrollback: {d}  Plugins: {d}", .{ self.config.scrollback, self.plugins.count() }) catch "";
         try self.renderer.drawText(x + 16, y + 88, t3, Color.rgb(200, 210, 220));
@@ -586,11 +608,11 @@ pub const App = struct {
         if ((ctrl or super) and !shift) {
             switch (key) {
                 c.GLFW_KEY_EQUAL, c.GLFW_KEY_KP_ADD => {
-                    self.adjustFont(0.25);
+                    self.adjustFont(1.0);
                     return;
                 },
                 c.GLFW_KEY_MINUS, c.GLFW_KEY_KP_SUBTRACT => {
-                    self.adjustFont(-0.25);
+                    self.adjustFont(-1.0);
                     return;
                 },
                 c.GLFW_KEY_0, c.GLFW_KEY_KP_0 => {
@@ -770,19 +792,19 @@ pub const App = struct {
     }
 
     fn adjustFont(self: *App, delta: f32) void {
-        self.renderer.bumpFontScale(delta);
-        self.config.font_scale = self.renderer.font_scale;
+        self.renderer.bumpFontSize(delta);
+        self.config.font_size = self.renderer.font_size;
         self.resizeAllSessions();
         var buf: [48]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "font scale {d:.2}", .{self.renderer.font_scale}) catch "font changed";
+        const msg = std.fmt.bufPrint(&buf, "font {d:.0}pt", .{self.renderer.font_size}) catch "font changed";
         self.setStatus(msg);
     }
 
     fn resetFont(self: *App) void {
-        self.renderer.setFontScale(2.0);
-        self.config.font_scale = 2.0;
+        self.renderer.setFontSize(14.0);
+        self.config.font_size = 14.0;
         self.resizeAllSessions();
-        self.setStatus("font scale 2.00");
+        self.setStatus("font 14pt");
     }
 
     fn runAction(self: *App, action: palette_mod.Action) void {
@@ -816,15 +838,16 @@ pub const App = struct {
             .theme_orbit_dark => self.applyTheme("orbit-dark"),
             .theme_orbit_light => self.applyTheme("orbit-light"),
             .theme_nord => self.applyTheme("nord"),
-            .font_larger => self.adjustFont(0.25),
-            .font_smaller => self.adjustFont(-0.25),
+            .font_larger => self.adjustFont(1.0),
+            .font_smaller => self.adjustFont(-1.0),
             .font_reset => self.resetFont(),
             .settings => self.ui = .settings,
             .go_home => self.goHome(),
             .reload_config => {
                 self.config.reload(self.allocator, self.io);
                 self.renderer.opacity = self.config.opacity;
-                self.renderer.setFontScale(self.config.font_scale);
+                self.renderer.setContentScale(self.window.contentScale());
+                self.renderer.setFontSize(self.config.font_size);
                 self.applyTheme(self.config.theme_name);
                 self.resizeAllSessions();
                 self.setStatus("config reloaded");
@@ -1054,7 +1077,7 @@ pub const App = struct {
         var loaded = try self.workspaces.loadSpec(name);
         defer loaded.deinit();
 
-        const bounds = contentRect(self.window.fb_width, self.window.fb_height);
+        const bounds = self.contentRect();
         const cols, const rows = self.gridSize(bounds.w, bounds.h);
         const theme = self.config.theme();
         try self.workspaces.applyToTabs(
@@ -1073,7 +1096,7 @@ pub const App = struct {
     }
 
     fn newTab(self: *App) !void {
-        const bounds = contentRect(self.window.fb_width, self.window.fb_height);
+        const bounds = self.contentRect();
         const cols, const rows = self.gridSize(bounds.w, bounds.h);
         const theme = self.config.theme();
         var title_buf: [32]u8 = undefined;
@@ -1091,7 +1114,7 @@ pub const App = struct {
 
     fn splitPane(self: *App, dir: layout_mod.Dir) !void {
         const tab = self.tabs.current() orelse return;
-        const bounds = contentRect(self.window.fb_width, self.window.fb_height);
+        const bounds = self.contentRect();
         const half = if (dir == .horizontal)
             Rect{ .x = 0, .y = 0, .w = @divTrunc(bounds.w, 2), .h = bounds.h }
         else
@@ -1128,7 +1151,7 @@ pub const App = struct {
         const self: *App = @ptrCast(@alignCast(ptr));
         if (self.ui != .normal) return;
         const tab = self.tabs.current() orelse return;
-        const bounds = contentRect(self.window.fb_width, self.window.fb_height);
+        const bounds = self.contentRect();
         const fb = self.window.windowToFb(self.mouse_x, self.mouse_y);
 
         if (button == c.GLFW_MOUSE_BUTTON_LEFT) {
@@ -1175,7 +1198,7 @@ pub const App = struct {
         if (!session.selection.selecting) return;
 
         const tab = self.tabs.current() orelse return;
-        const bounds = contentRect(self.window.fb_width, self.window.fb_height);
+        const bounds = self.contentRect();
         const fb = self.window.windowToFb(x, y);
 
         const Hit = struct {

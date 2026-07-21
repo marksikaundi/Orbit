@@ -3,7 +3,7 @@ const c = @import("../c.zig").c;
 const Screen = @import("../terminal/screen.zig").Screen;
 const Selection = @import("../terminal/selection.zig").Selection;
 const Color = @import("../terminal/cell.zig").Color;
-const bitmap = @import("../font/bitmap.zig");
+const atlas_mod = @import("../font/atlas.zig");
 const theme_mod = @import("../config/theme.zig");
 
 pub const Renderer = struct {
@@ -11,11 +11,12 @@ pub const Renderer = struct {
     vao: c.GLuint = 0,
     vbo: c.GLuint = 0,
     atlas_tex: c.GLuint = 0,
-    atlas_w: f32 = 0,
-    atlas_h: f32 = 0,
-    cell_w: f32 = @floatFromInt(bitmap.glyph_width),
-    cell_h: f32 = @floatFromInt(bitmap.glyph_height),
-    font_scale: f32 = 2.0,
+    atlas: ?atlas_mod.Atlas = null,
+    cell_w: f32 = 8,
+    cell_h: f32 = 16,
+    /// Logical point size (Ghostty-style). Scaled by content_scale for Retina.
+    font_size: f32 = 14.0,
+    content_scale: f32 = 2.0,
     fb_w: i32 = 0,
     fb_h: i32 = 0,
     vertices: std.ArrayList(f32) = .empty,
@@ -23,7 +24,7 @@ pub const Renderer = struct {
     theme: theme_mod.Theme = theme_mod.orbit_dark,
     opacity: f32 = 1.0,
 
-    // Vertex: x y u v r g b a  (8 floats) — mode via a: 1=glyph, 0=solid
+    // Vertex: x y u v r g b a  (8 floats)
     const vert_src =
         \\#version 330 core
         \\layout(location = 0) in vec2 a_pos;
@@ -46,11 +47,10 @@ pub const Renderer = struct {
         \\out vec4 out_color;
         \\void main() {
         \\  if (v_uv.x < 0.0) {
-        \\    // solid rect (background / cursor / selection)
         \\    out_color = v_color;
         \\  } else {
         \\    float a = texture(u_atlas, v_uv).a;
-        \\    if (a < 0.1) discard;
+        \\    if (a < 0.02) discard;
         \\    out_color = vec4(v_color.rgb, v_color.a * a);
         \\  }
         \\}
@@ -59,12 +59,13 @@ pub const Renderer = struct {
     pub fn init(allocator: std.mem.Allocator) !Renderer {
         var self: Renderer = .{ .allocator = allocator };
         try self.initGl();
-        self.setFontScale(self.font_scale);
+        try self.rebuildAtlas();
         return self;
     }
 
     pub fn deinit(self: *Renderer) void {
         self.vertices.deinit(self.allocator);
+        if (self.atlas) |*a| a.deinit();
         if (self.atlas_tex != 0) c.glDeleteTextures(1, &self.atlas_tex);
         if (self.vbo != 0) c.glDeleteBuffers(1, &self.vbo);
         if (self.vao != 0) c.glDeleteVertexArrays(1, &self.vao);
@@ -88,19 +89,27 @@ pub const Renderer = struct {
         c.glVertexAttribPointer(2, 4, c.GL_FLOAT, c.GL_FALSE, stride, @ptrFromInt(4 * @sizeOf(f32)));
         c.glBindVertexArray(0);
 
-        const aw = bitmap.atlasWidth();
-        const ah = bitmap.atlasHeight();
-        self.atlas_w = @floatFromInt(aw);
-        self.atlas_h = @floatFromInt(ah);
-
-        const atlas = try self.allocator.alloc(u8, aw * ah * 4);
-        defer self.allocator.free(atlas);
-        bitmap.buildAtlas(atlas);
-
         c.glGenTextures(1, &self.atlas_tex);
+        c.glEnable(c.GL_BLEND);
+        c.glBlendFunc(c.GL_SRC_ALPHA, c.GL_ONE_MINUS_SRC_ALPHA);
+    }
+
+    pub fn rebuildAtlas(self: *Renderer) !void {
+        const px: u32 = @intFromFloat(@round(@max(10.0, self.font_size * self.content_scale)));
+        var new_atlas = try atlas_mod.Atlas.create(self.allocator, px);
+        if (self.atlas) |*old| old.deinit();
+        self.atlas = new_atlas;
+        self.cell_w = @floatFromInt(new_atlas.cell_w);
+        self.cell_h = @floatFromInt(new_atlas.cell_h);
+        self.uploadAtlas();
+    }
+
+    fn uploadAtlas(self: *Renderer) void {
+        const a = self.atlas orelse return;
         c.glBindTexture(c.GL_TEXTURE_2D, self.atlas_tex);
-        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MIN_FILTER, c.GL_NEAREST);
-        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MAG_FILTER, c.GL_NEAREST);
+        // Linear within glyph for AA; clamp to edge so cells don't bleed.
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MIN_FILTER, c.GL_LINEAR);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MAG_FILTER, c.GL_LINEAR);
         c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_S, c.GL_CLAMP_TO_EDGE);
         c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_T, c.GL_CLAMP_TO_EDGE);
         c.glPixelStorei(c.GL_UNPACK_ALIGNMENT, 1);
@@ -108,16 +117,13 @@ pub const Renderer = struct {
             c.GL_TEXTURE_2D,
             0,
             c.GL_RGBA,
-            @intCast(aw),
-            @intCast(ah),
+            @intCast(a.width),
+            @intCast(a.height),
             0,
             c.GL_RGBA,
             c.GL_UNSIGNED_BYTE,
-            atlas.ptr,
+            a.rgba.ptr,
         );
-
-        c.glEnable(c.GL_BLEND);
-        c.glBlendFunc(c.GL_SRC_ALPHA, c.GL_ONE_MINUS_SRC_ALPHA);
     }
 
     pub fn setFramebufferSize(self: *Renderer, w: i32, h: i32) void {
@@ -126,18 +132,35 @@ pub const Renderer = struct {
         c.glViewport(0, 0, w, h);
     }
 
+    pub fn setContentScale(self: *Renderer, scale: f32) void {
+        const s = @max(1.0, scale);
+        if (@abs(s - self.content_scale) < 0.01) return;
+        self.content_scale = s;
+        self.rebuildAtlas() catch {};
+    }
+
     pub fn setTheme(self: *Renderer, theme: theme_mod.Theme) void {
         self.theme = theme;
     }
 
+    pub fn setFontSize(self: *Renderer, size: f32) void {
+        self.font_size = @min(28.0, @max(9.0, size));
+        self.rebuildAtlas() catch {};
+    }
+
+    pub fn bumpFontSize(self: *Renderer, delta: f32) void {
+        self.setFontSize(self.font_size + delta);
+    }
+
+    /// Back-compat with older font_scale config (2.0 ≈ 14pt).
     pub fn setFontScale(self: *Renderer, scale: f32) void {
-        self.font_scale = @min(3.0, @max(0.75, scale));
-        self.cell_w = @as(f32, @floatFromInt(bitmap.glyph_width)) * self.font_scale;
-        self.cell_h = @as(f32, @floatFromInt(bitmap.glyph_height)) * self.font_scale;
+        self.setFontSize(14.0 * scale / 2.0);
     }
 
     pub fn bumpFontScale(self: *Renderer, delta: f32) void {
-        self.setFontScale(self.font_scale + delta);
+        // Map old ±0.25 scale steps to ±1pt.
+        const pts = if (delta > 0) 1.0 else -1.0;
+        self.bumpFontSize(pts);
     }
 
     pub fn clearBackground(self: *Renderer) void {
@@ -152,7 +175,6 @@ pub const Renderer = struct {
         c.glClear(c.GL_COLOR_BUFFER_BIT);
     }
 
-    /// Draw a screen into a pixel rect (origin top-left of framebuffer).
     pub fn drawScreen(
         self: *Renderer,
         screen: *const Screen,
@@ -163,15 +185,12 @@ pub const Renderer = struct {
         highlight_col: ?u16,
         highlight_len: u16,
     ) !void {
-        if (self.fb_w <= 0 or self.fb_h <= 0) return;
-
         self.vertices.clearRetainingCapacity();
-
         const fw: f32 = @floatFromInt(self.fb_w);
         const fh: f32 = @floatFromInt(self.fb_h);
         const cell_w = self.cell_w;
         const cell_h = self.cell_h;
-        const glyph_count: f32 = @floatFromInt(bitmap.last_codepoint - bitmap.first_codepoint + 1);
+        const glyph_count: f32 = @floatFromInt(atlas_mod.glyph_count);
         const ox: f32 = @floatFromInt(origin_x);
         const oy: f32 = @floatFromInt(origin_y);
 
@@ -194,14 +213,13 @@ pub const Renderer = struct {
                     }
                 }
 
-                // Background quad (uv.x < 0 => solid)
                 try self.appendSolid(ox, oy, fw, fh, col, row, cell_w, cell_h, bg, self.opacity);
 
                 const cp = cell.codepoint;
-                if (cp < bitmap.first_codepoint or cp > bitmap.last_codepoint) continue;
+                if (cp < atlas_mod.first_codepoint or cp > atlas_mod.last_codepoint) continue;
                 if (cp == ' ') continue;
 
-                const gi: f32 = @floatFromInt(cp - bitmap.first_codepoint);
+                const gi: f32 = @floatFromInt(cp - atlas_mod.first_codepoint);
                 const uv_left = gi / glyph_count;
                 const uv_right = (gi + 1.0) / glyph_count;
 
@@ -217,7 +235,6 @@ pub const Renderer = struct {
             }
         }
 
-        // Cursor
         if (screen.cursor_visible and screen.view_offset == 0) {
             try self.appendSolid(
                 ox,
@@ -229,14 +246,13 @@ pub const Renderer = struct {
                 cell_w,
                 cell_h,
                 self.theme.cursor,
-                0.55,
+                0.9,
             );
         }
 
         try self.flush();
     }
 
-    /// Simple filled bar for tab UI / search chrome.
     pub fn drawRect(self: *Renderer, x: i32, y: i32, w: i32, h: i32, color: Color, alpha: f32) !void {
         self.vertices.clearRetainingCapacity();
         const fw: f32 = @floatFromInt(self.fb_w);
@@ -249,12 +265,12 @@ pub const Renderer = struct {
         self.vertices.clearRetainingCapacity();
         const fw: f32 = @floatFromInt(self.fb_w);
         const fh: f32 = @floatFromInt(self.fb_h);
-        const glyph_count: f32 = @floatFromInt(bitmap.last_codepoint - bitmap.first_codepoint + 1);
+        const glyph_count: f32 = @floatFromInt(atlas_mod.glyph_count);
         var i: usize = 0;
         while (i < text.len) : (i += 1) {
             const cp: u21 = text[i];
-            if (cp < bitmap.first_codepoint or cp > bitmap.last_codepoint) continue;
-            const gi: f32 = @floatFromInt(cp - bitmap.first_codepoint);
+            if (cp < atlas_mod.first_codepoint or cp > atlas_mod.last_codepoint) continue;
+            const gi: f32 = @floatFromInt(cp - atlas_mod.first_codepoint);
             const uv_left = gi / glyph_count;
             const uv_right = (gi + 1.0) / glyph_count;
             const px = @as(f32, @floatFromInt(x)) + @as(f32, @floatFromInt(i)) * self.cell_w;
@@ -292,7 +308,6 @@ pub const Renderer = struct {
         const r = @as(f32, @floatFromInt(color.r)) / 255.0;
         const g = @as(f32, @floatFromInt(color.g)) / 255.0;
         const b = @as(f32, @floatFromInt(color.b)) / 255.0;
-        // uv.x = -1 marks solid
         try self.vertices.appendSlice(self.allocator, &.{
             nx0, ny0, -1, 0, r, g, b, alpha,
             nx1, ny0, -1, 0, r, g, b, alpha,

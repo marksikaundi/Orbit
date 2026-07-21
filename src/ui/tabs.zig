@@ -94,6 +94,7 @@ pub const Tabs = struct {
         }
     }
 
-    pub const bar_height: i32 = 28;
+    /// Ghostty-like slim integrated tab strip.
+    pub const bar_height: i32 = 34;
 };
 

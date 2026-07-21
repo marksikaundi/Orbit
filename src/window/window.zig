@@ -92,6 +92,11 @@ pub const Window = struct {
     }
 
     /// Convert window coords to framebuffer coords.
+    pub fn contentScale(self: *const Window) f32 {
+        if (self.width <= 0) return 1.0;
+        return @as(f32, @floatFromInt(self.fb_width)) / @as(f32, @floatFromInt(self.width));
+    }
+
     pub fn windowToFb(self: *const Window, wx: f64, wy: f64) struct { x: i32, y: i32 } {
         const sx = if (self.width > 0) @as(f64, @floatFromInt(self.fb_width)) / @as(f64, @floatFromInt(self.width)) else 1.0;
         const sy = if (self.height > 0) @as(f64, @floatFromInt(self.fb_height)) / @as(f64, @floatFromInt(self.height)) else 1.0;
