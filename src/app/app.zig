@@ -17,6 +17,7 @@ const theme_mod = @import("../config/theme.zig");
 const WsManager = @import("../workspace/workspace.zig").Manager;
 const PluginRegistry = @import("../plugins/registry.zig").Registry;
 const clipboard = @import("../clipboard/clipboard.zig");
+const folder_picker = @import("../platform/folder_picker.zig");
 const Color = @import("../terminal/cell.zig").Color;
 
 const UiMode = enum { home, normal, search, ws_picker, ws_save, palette, ssh_prompt, settings };
@@ -455,11 +456,11 @@ pub const App = struct {
         const x = @divTrunc(self.window.fb_width - w, 2);
         const y = @divTrunc(self.window.fb_height - h, 2);
         try self.renderer.drawRect(x, y, w, h, Color.rgb(24, 28, 36), 0.97);
-        try self.renderer.drawText(x + 16, y + 12, "Open Workspace", Color.rgb(230, 235, 240));
+        try self.renderer.drawText(x + 16, y + 12, "Load Saved Workspace", Color.rgb(230, 235, 240));
         try self.renderer.drawText(x + 16, y + h - 28, "Enter open  |  Esc close  |  Del delete", Color.rgb(140, 150, 160));
 
         if (self.workspaces.names.items.len == 0) {
-            try self.renderer.drawText(x + 16, y + header + 8, "(no workspaces yet — Ctrl+Shift+S to save)", Color.rgb(160, 170, 180));
+            try self.renderer.drawText(x + 16, y + header + 8, "(none saved yet — Ctrl+Shift+S to save)", Color.rgb(160, 170, 180));
             return;
         }
         for (self.workspaces.names.items, 0..) |name, i| {
@@ -634,7 +635,7 @@ pub const App = struct {
                     return;
                 },
                 c.GLFW_KEY_O => {
-                    self.openPicker();
+                    self.openFolderWorkspace();
                     return;
                 },
                 c.GLFW_KEY_S => {
@@ -797,7 +798,7 @@ pub const App = struct {
                 self.ui = .normal;
             },
             .open_workspace => {
-                self.openPicker();
+                self.openFolderWorkspace();
             },
             .command_palette => {
                 self.rebuildPalette();
@@ -894,7 +895,8 @@ pub const App = struct {
             .focus_next_pane => {
                 if (self.tabs.current()) |tab| tab.layout.focusNext();
             },
-            .open_workspace => self.openPicker(),
+            .open_workspace => self.openFolderWorkspace(),
+            .load_saved_workspace => self.openPicker(),
             .save_workspace => self.openSavePrompt(),
             .search => {
                 self.search.open();
@@ -1147,6 +1149,36 @@ pub const App = struct {
         self.setStatus("ssh started");
     }
 
+    fn openFolderWorkspace(self: *App) void {
+        const path = folder_picker.pickFolder(self.allocator, self.io) catch {
+            self.setStatus("folder picker failed");
+            return;
+        } orelse {
+            // User cancelled — stay on current UI.
+            return;
+        };
+        defer self.allocator.free(path);
+
+        self.openFolderAsWorkspace(path) catch {
+            self.setStatus("failed to open folder");
+            return;
+        };
+    }
+
+    fn openFolderAsWorkspace(self: *App, path: []const u8) !void {
+        // Confirm the path is a readable directory before spawning a shell.
+        const dir = std.Io.Dir.openDirAbsolute(self.io, path, .{}) catch return error.NotADirectory;
+        dir.close(self.io);
+
+        const name = folder_picker.folderBasename(path);
+        try self.newTabInDir(path, name);
+        self.workspaces.setCurrent(name) catch {};
+        self.updateWindowTitle();
+        self.fireHooks(.on_workspace_open);
+        self.ui = .normal;
+        self.setStatus("workspace opened");
+    }
+
     fn openPicker(self: *App) void {
         self.workspaces.refresh() catch {};
         self.picker_index = 0;
@@ -1242,11 +1274,19 @@ pub const App = struct {
     }
 
     fn newTab(self: *App) !void {
+        try self.newTabInDir(self.sessionCwd(), null);
+    }
+
+    fn newTabInDir(self: *App, cwd: []const u8, title_opt: ?[]const u8) !void {
         const bounds = self.contentRect();
         const cols, const rows = self.gridSize(bounds.w, bounds.h);
         const theme = self.config.theme();
-        var title_buf: [32]u8 = undefined;
-        const title = std.fmt.bufPrint(&title_buf, "Shell {d}", .{self.tabs.items.items.len + 1}) catch "Shell";
+
+        var title_buf: [64]u8 = undefined;
+        const title = if (title_opt) |t|
+            t
+        else
+            (std.fmt.bufPrint(&title_buf, "Shell {d}", .{self.tabs.items.items.len + 1}) catch "Shell");
 
         const launch = self.config.resolveLaunchShell();
         if (self.config.shellPath()) |configured| {
@@ -1261,7 +1301,7 @@ pub const App = struct {
             .cols = cols,
             .rows = rows,
             .title = title,
-            .cwd = self.sessionCwd(),
+            .cwd = cwd,
             .shell = launch,
         });
         session.setTheme(theme.foreground, theme.background);

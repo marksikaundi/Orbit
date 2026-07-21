@@ -302,14 +302,14 @@ Optional config: copy `assets/config.example.toml` to `~/.config/orbit/config.to
 | `Ctrl/Cmd+=` | Font larger |
 | `Ctrl/Cmd+-` | Font smaller |
 | `Ctrl/Cmd+0` | Font reset (2.0) |
-| `Ctrl+Shift+O` | Open workspace picker |
+| `Ctrl+Shift+O` | Open folder as workspace (native picker) |
 | `Ctrl+Shift+S` | Save current layout as workspace |
 | Drag + release | Select text (copies on release) |
 | Scroll / PageUp/Down | Scrollback |
 
 Workspaces are stored in `~/.config/orbit/workspaces/<name>.toml`.
 
-Palette commands include New Tab, Split Right/Down, Open/Save Workspace, SSH, Theme, Font size, Settings, Reload Config/Plugins, and any commands contributed by plugins.
+Palette commands include New Tab, Split Right/Down, Open Workspace (folder), Load Saved Workspace, Save Workspace, SSH, Theme, Font size, Settings, Reload Config/Plugins, and any commands contributed by plugins.
 
 ### Plugins (Phase 6)
 

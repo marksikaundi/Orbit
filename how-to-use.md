@@ -46,7 +46,7 @@ Orbit opens on a welcome home (logo, version, quick actions) — no shell until 
 | Key | Action |
 | --- | ------ |
 | `Enter` / `1` | New Terminal |
-| `O` / `2` | Open Workspace |
+| `O` / `2` | Open Workspace (pick a folder) |
 | `P` / `3` | Command Palette |
 | `S` / `4` | Settings / Config |
 | `H` / `5` | Help & Shortcuts (full reference; ↑↓ to scroll) |
@@ -103,6 +103,9 @@ Open **Ctrl+Shift+P** → `Reload Plugins` (or restart).
 
 ## Workspaces (Phase 4)
 
-1. Arrange tabs/splits as you like.
-2. **Ctrl+Shift+S** — save workspace.
-3. **Ctrl+Shift+O** — open picker.
+1. **Open Workspace** (`O` on home, or `Ctrl+Shift+O`) — pick a folder from your computer; Orbit opens a shell there.
+2. Arrange tabs/splits as you like.
+3. **Ctrl+Shift+S** — save the layout as a named workspace.
+4. Command palette → **Load Saved Workspace** — restore a previously saved layout.
+
+Saved layouts live in `~/.config/orbit/workspaces/<name>.toml`.

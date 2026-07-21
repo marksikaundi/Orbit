@@ -14,6 +14,10 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 - Appearance settings (themes, cursor, shell)
 - Full Help & Shortcuts reference
 - Quit / close tab / shell-exit handling
+- **Open Workspace** opens a native folder picker and starts a shell in that directory
+
+### Changed
+- Saved layout restore moved to palette command **Load Saved Workspace**
 
 ## [2.1.0] — 2026-07-21
 

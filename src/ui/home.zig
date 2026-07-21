@@ -43,7 +43,7 @@ pub const HelpRow = union(enum) {
 pub const help_rows = [_]HelpRow{
     .{ .heading = "Home screen" },
     .{ .item = .{ .keys = "Enter / 1", .desc = "Open a new terminal tab" } },
-    .{ .item = .{ .keys = "O / 2", .desc = "Open a saved workspace" } },
+    .{ .item = .{ .keys = "O / 2", .desc = "Open a folder as workspace" } },
     .{ .item = .{ .keys = "P / 3", .desc = "Open the command palette" } },
     .{ .item = .{ .keys = "S / 4", .desc = "Show settings / config paths" } },
     .{ .item = .{ .keys = "H / 5", .desc = "Open this Help reference" } },
@@ -96,10 +96,11 @@ pub const help_rows = [_]HelpRow{
     .{ .spacer = {} },
 
     .{ .heading = "Workspaces" },
+    .{ .item = .{ .keys = "Ctrl+Shift+O", .desc = "Open a folder from disk (native picker)" } },
     .{ .item = .{ .keys = "Ctrl+Shift+S", .desc = "Save current tabs/splits" } },
-    .{ .item = .{ .keys = "Ctrl+Shift+O", .desc = "Open workspace picker" } },
-    .{ .item = .{ .keys = "↑ ↓ Enter", .desc = "Choose a workspace" } },
-    .{ .item = .{ .keys = "Delete", .desc = "Delete selected workspace" } },
+    .{ .item = .{ .keys = "Palette → Load Saved", .desc = "Restore a previously saved layout" } },
+    .{ .item = .{ .keys = "↑ ↓ Enter", .desc = "Choose a saved workspace" } },
+    .{ .item = .{ .keys = "Delete", .desc = "Delete selected saved workspace" } },
     .{ .spacer = {} },
 
     .{ .heading = "Terminal scrollback" },
