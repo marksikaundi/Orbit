@@ -29,6 +29,15 @@ pub const Session = struct {
     read_buf: [8192]u8 = undefined,
     /// False after the shell exits (`exit`, Ctrl+D, crash).
     alive: bool = true,
+    /// Pending status toast from OSC notify or notable terminal lines.
+    pending_status: [96]u8 = undefined,
+    pending_status_len: usize = 0,
+    /// Strip ANSI while assembling printable lines for event detection.
+    line_buf: [160]u8 = undefined,
+    line_len: usize = 0,
+    ansi: AnsiSkip = .none,
+
+    const AnsiSkip = enum { none, esc, csi, osc };
 
     pub fn create(allocator: std.mem.Allocator, cols: u16, rows: u16, title: []const u8) !*Session {
         return createWith(allocator, .{
@@ -126,7 +135,13 @@ pub const Session = struct {
         while (true) {
             const result = self.pty.read(&self.read_buf);
             if (result.len > 0) {
-                self.parser.feed(&self.screen, self.read_buf[0..result.len]);
+                const chunk = self.read_buf[0..result.len];
+                self.parser.feed(&self.screen, chunk);
+                self.ingestForStatus(chunk);
+                if (self.parser.notify_len > 0) {
+                    self.pushStatus(self.parser.notify_msg[0..self.parser.notify_len]);
+                    self.parser.notify_len = 0;
+                }
             }
             if (result.eof) {
                 self.alive = false;
@@ -136,9 +151,95 @@ pub const Session = struct {
         }
     }
 
+    /// Consume a pending status message produced by OSC / notable lines.
+    pub fn takeStatus(self: *Session) ?[]const u8 {
+        if (self.pending_status_len == 0) return null;
+        const msg = self.pending_status[0..self.pending_status_len];
+        self.pending_status_len = 0;
+        return msg;
+    }
+
     pub fn write(self: *Session, bytes: []const u8) void {
         if (!self.alive) return;
         self.pty.write(bytes);
+    }
+
+    fn pushStatus(self: *Session, msg: []const u8) void {
+        const trimmed = trimWs(msg);
+        if (trimmed.len == 0) return;
+        const n = @min(trimmed.len, self.pending_status.len);
+        @memcpy(self.pending_status[0..n], trimmed[0..n]);
+        self.pending_status_len = n;
+    }
+
+    /// Build printable lines (skipping CSI/OSC) and surface create/edit/error notices.
+    fn ingestForStatus(self: *Session, bytes: []const u8) void {
+        for (bytes) |b| {
+            switch (self.ansi) {
+                .none => {
+                    if (b == 0x1B) {
+                        self.ansi = .esc;
+                        continue;
+                    }
+                    if (b == '\n' or b == '\r') {
+                        self.classifyCompletedLine();
+                        self.line_len = 0;
+                        continue;
+                    }
+                    if (b >= 0x20 and b != 0x7F) {
+                        if (self.line_len < self.line_buf.len) {
+                            self.line_buf[self.line_len] = b;
+                            self.line_len += 1;
+                        }
+                    }
+                },
+                .esc => {
+                    if (b == '[') {
+                        self.ansi = .csi;
+                    } else if (b == ']') {
+                        self.ansi = .osc;
+                    } else {
+                        self.ansi = .none;
+                    }
+                },
+                .csi => {
+                    if (b >= 0x40 and b <= 0x7E) self.ansi = .none;
+                },
+                .osc => {
+                    if (b == 0x07) {
+                        self.ansi = .none;
+                    } else if (b == 0x1B) {
+                        self.ansi = .esc; // OSC … ST (ESC \)
+                    }
+                },
+            }
+        }
+    }
+
+    fn classifyCompletedLine(self: *Session) void {
+        if (self.line_len < 4) return;
+        const line = trimWs(self.line_buf[0..self.line_len]);
+        if (line.len < 4) return;
+
+        // Conservative markers so everyday prompts don't spam the toast.
+        const notable =
+            containsIgnoreCase(line, "error:") or
+            containsIgnoreCase(line, "fatal:") or
+            containsIgnoreCase(line, "panic:") or
+            startsWithIgnoreCase(line, "error ") or
+            containsIgnoreCase(line, " failed") or
+            containsIgnoreCase(line, "created ") or
+            containsIgnoreCase(line, "created:") or
+            containsIgnoreCase(line, "wrote ") or
+            containsIgnoreCase(line, "written ") or
+            containsIgnoreCase(line, "saved ") or
+            containsIgnoreCase(line, "saved.") or
+            containsIgnoreCase(line, "edited ") or
+            containsIgnoreCase(line, "deleted ") or
+            containsIgnoreCase(line, "removed ");
+
+        if (!notable) return;
+        self.pushStatus(line);
     }
 
     fn freeEnv(allocator: std.mem.Allocator, env: [][]u8) void {
@@ -156,3 +257,25 @@ pub const Session = struct {
         return "/bin/zsh";
     }
 };
+
+fn trimWs(s: []const u8) []const u8 {
+    var start: usize = 0;
+    var end = s.len;
+    while (start < end and (s[start] == ' ' or s[start] == '\t')) : (start += 1) {}
+    while (end > start and (s[end - 1] == ' ' or s[end - 1] == '\t')) : (end -= 1) {}
+    return s[start..end];
+}
+
+fn containsIgnoreCase(hay: []const u8, needle: []const u8) bool {
+    if (needle.len == 0 or needle.len > hay.len) return false;
+    var i: usize = 0;
+    while (i + needle.len <= hay.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(hay[i .. i + needle.len], needle)) return true;
+    }
+    return false;
+}
+
+fn startsWithIgnoreCase(hay: []const u8, needle: []const u8) bool {
+    if (needle.len > hay.len) return false;
+    return std.ascii.eqlIgnoreCase(hay[0..needle.len], needle);
+}

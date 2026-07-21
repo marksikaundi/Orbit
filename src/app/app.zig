@@ -24,6 +24,12 @@ const dev_root = @import("../dev_root.zig");
 
 const UiMode = enum { home, normal, search, ws_picker, ws_save, palette, ssh_prompt, settings, plugins };
 
+const StatusKind = enum { info, success, err };
+
+/// How long the bottom-left toast stays visible (seconds).
+const status_ttl_s: f64 = 2.8;
+const status_ttl_error_s: f64 = 4.2;
+
 pub const App = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -44,6 +50,10 @@ pub const App = struct {
     ssh_host_len: usize = 0,
     status_msg: [96]u8 = undefined,
     status_len: usize = 0,
+    /// Seconds (glfwGetTime) when the toast should disappear (0 = hidden).
+    status_until: f64 = 0,
+    /// Soft styling: success (green), error (warm), info (default).
+    status_kind: StatusKind = .info,
     mouse_x: f64 = 0,
     mouse_y: f64 = 0,
     /// Settings row: 0 theme, 1 text, 2 cursor, 3 blink, 4 shell
@@ -146,6 +156,8 @@ pub const App = struct {
             Window.poll();
             self.handleResize();
             self.tabs.tickAll();
+            self.pollTerminalStatus();
+            self.tickStatus();
             self.reapExitedSessions();
             try self.draw();
             self.window.swap();
@@ -218,13 +230,80 @@ pub const App = struct {
         tab.layout.forEachLeaf(bounds, *Ctx, &ctx, Ctx.cb);
     }
 
+    fn clearStatus(self: *App) void {
+        self.status_len = 0;
+        self.status_until = 0;
+        self.status_kind = .info;
+    }
+
     fn setStatus(self: *App, msg: []const u8) void {
+        if (msg.len == 0) {
+            self.clearStatus();
+            return;
+        }
         const n = @min(msg.len, self.status_msg.len);
         @memcpy(self.status_msg[0..n], msg[0..n]);
         self.status_len = n;
+        self.status_kind = classifyStatus(msg);
+        const ttl: f64 = if (self.status_kind == .err) status_ttl_error_s else status_ttl_s;
+        self.status_until = c.glfwGetTime() + ttl;
+    }
+
+    fn classifyStatus(msg: []const u8) StatusKind {
+        if (containsIgnoreCase(msg, "fail") or
+            containsIgnoreCase(msg, "error") or
+            containsIgnoreCase(msg, "fatal") or
+            containsIgnoreCase(msg, "denied"))
+            return .err;
+        if (containsIgnoreCase(msg, "saved") or
+            containsIgnoreCase(msg, "created") or
+            containsIgnoreCase(msg, "wrote") or
+            containsIgnoreCase(msg, "written") or
+            containsIgnoreCase(msg, "applied") or
+            containsIgnoreCase(msg, "opened") or
+            containsIgnoreCase(msg, "loaded") or
+            containsIgnoreCase(msg, "installed") or
+            containsIgnoreCase(msg, "enabled") or
+            containsIgnoreCase(msg, "ready"))
+            return .success;
+        return .info;
+    }
+
+    fn containsIgnoreCase(hay: []const u8, needle: []const u8) bool {
+        if (needle.len == 0 or needle.len > hay.len) return false;
+        var i: usize = 0;
+        while (i + needle.len <= hay.len) : (i += 1) {
+            if (std.ascii.eqlIgnoreCase(hay[i .. i + needle.len], needle)) return true;
+        }
+        return false;
+    }
+
+    /// Hide the toast once its TTL elapses — it should not linger on screen.
+    fn tickStatus(self: *App) void {
+        if (self.status_len == 0) return;
+        if (c.glfwGetTime() >= self.status_until) {
+            self.clearStatus();
+        }
+    }
+
+    /// Pull ephemeral notices from PTY output (file ops, errors, OSC notifies).
+    fn pollTerminalStatus(self: *App) void {
+        if (self.ui != .normal and self.ui != .search) return;
+        const tab = self.tabs.current() orelse return;
+        const Ctx = struct {
+            app: *App,
+            fn cb(ctx: *@This(), session: *Session, _: Rect) void {
+                if (session.takeStatus()) |msg| {
+                    ctx.app.setStatus(msg);
+                }
+            }
+        };
+        var ctx: Ctx = .{ .app = self };
+        tab.layout.forEachLeaf(self.contentRect(), *Ctx, &ctx, Ctx.cb);
     }
 
     /// Floating status toast near the bottom-left — raised so it is not flush with the window edge.
+    /// Only drawn while a recent event is active (`status_len > 0`); auto-clears via `tickStatus`.
     fn drawStatusBar(self: *App) !void {
         if (self.status_len == 0) return;
 
@@ -245,9 +324,15 @@ pub const App = struct {
         const bar_w = @min(fb_w - 24, text_w + pad_x * 2 + 8);
         const bar_x: i32 = 12;
 
-        try self.renderer.drawRect(bar_x, bar_y, bar_w, bar_h, Color.rgb(28, 42, 34), 0.96);
-        try self.renderer.drawRect(bar_x, bar_y, 3, bar_h, Color.rgb(110, 200, 140), 1.0);
-        try self.renderer.drawText(bar_x + pad_x, bar_y + pad_y, text, Color.rgb(200, 240, 200));
+        const bg: Color, const accent: Color, const fg: Color = switch (self.status_kind) {
+            .err => .{ Color.rgb(48, 28, 28), Color.rgb(220, 120, 110), Color.rgb(255, 210, 205) },
+            .success => .{ Color.rgb(28, 42, 34), Color.rgb(110, 200, 140), Color.rgb(200, 240, 200) },
+            .info => .{ Color.rgb(28, 34, 44), Color.rgb(120, 170, 220), Color.rgb(210, 225, 240) },
+        };
+
+        try self.renderer.drawRect(bar_x, bar_y, bar_w, bar_h, bg, 0.96);
+        try self.renderer.drawRect(bar_x, bar_y, 3, bar_h, accent, 1.0);
+        try self.renderer.drawText(bar_x + pad_x, bar_y + pad_y, text, fg);
     }
 
     fn updateWindowTitle(self: *App) void {
@@ -622,7 +707,7 @@ pub const App = struct {
         const root = self.sessionCwd();
         self.search.open(self.allocator, root);
         self.ui = .search;
-        self.status_len = 0;
+        self.clearStatus();
         self.refreshSearchResults();
     }
 
@@ -1122,7 +1207,7 @@ pub const App = struct {
                     self.rebuildPalette();
                     self.palette.open();
                     self.ui = .palette;
-                    self.status_len = 0;
+                    self.clearStatus();
                     return;
                 },
                 c.GLFW_KEY_T => {
@@ -2197,7 +2282,7 @@ pub const App = struct {
         self.workspaces.refresh() catch {};
         self.picker_index = 0;
         self.ui = .ws_picker;
-        self.status_len = 0;
+        self.clearStatus();
     }
 
     fn openSavePrompt(self: *App) void {
@@ -2208,7 +2293,7 @@ pub const App = struct {
             self.save_name_len = len;
         }
         self.ui = .ws_save;
-        self.status_len = 0;
+        self.clearStatus();
     }
 
     fn handlePickerKey(self: *App, key: c_int) void {

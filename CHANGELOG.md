@@ -28,6 +28,8 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 - Saved layout restore moved to palette command **Load Saved Workspace**
 - Command palette & Appearance panels given more breathing room
 - Status toast raised above the window edge (bottom-left)
+- Status toast is ephemeral: shows only on events (save, theme, errors, terminal notices) and auto-hides after a few seconds
+- Terminal output can surface toasts for file create/edit/save/delete lines and `error:` / `failed` messages; OSC 9 / OSC 99 also drive the toast
 
 ## [2.1.0] — 2026-07-21
 
