@@ -15,7 +15,7 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 - Full Help & Shortcuts reference
 - Quit / close tab / shell-exit handling
 
-## [1.1.0] — 2026-07-21
+## [2.1.0] — 2026-07-21
 
 ### Added
 - Initial Orbit terminal: home screen, tabs, splits, workspaces
