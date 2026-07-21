@@ -90,7 +90,7 @@ Example workspaces: Backend, Frontend, Production, University.
 | Language | Zig |
 | Graphics | OpenGL (initial), WebGPU (future) |
 | Windowing | GLFW |
-| Fonts | FreeType, HarfBuzz (later) |
+| Fonts | SF Mono via stb_truetype (FreeType/HarfBuzz later) |
 | Shell I/O | POSIX PTY, Windows ConPTY |
 | Configuration | TOML |
 | Testing | Zig Test |

@@ -224,7 +224,7 @@ pub const App = struct {
         var x: i32 = 10;
         for (self.tabs.items.items, 0..) |tab, i| {
             const active = i == self.tabs.active;
-            const label_w: i32 = @intCast(@min(tab.title.len, 16)) * cell_w_i + 20;
+            const label_w: i32 = @as(i32, @intCast(@min(tab.title.len, 16))) * cell_w_i + 20;
             if (active) {
                 try self.renderer.drawRect(x, 6, label_w, Tabs.bar_height - 12, Color.rgb(
                     @intCast(@min(255, @as(i32, tbg.r) + 16)),

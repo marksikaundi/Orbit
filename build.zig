@@ -16,6 +16,13 @@ pub fn build(b: *std.Build) void {
         .root_module = root_module,
     });
 
+    // stb_truetype (public domain) for Ghostty-like font rasterization.
+    root_module.addIncludePath(b.path("vendor"));
+    root_module.addCSourceFile(.{
+        .file = b.path("vendor/stb_truetype_impl.c"),
+        .flags = &.{ "-std=c99", "-fno-sanitize=undefined" },
+    });
+
     // System GLFW via Homebrew.
     if (target.result.os.tag == .macos) {
         if (target.result.cpu.arch == .aarch64) {
@@ -33,8 +40,6 @@ pub fn build(b: *std.Build) void {
         root_module.linkFramework("Cocoa", .{});
         root_module.linkFramework("IOKit", .{});
         root_module.linkFramework("CoreVideo", .{});
-        root_module.linkFramework("CoreText", .{});
-        root_module.linkFramework("CoreGraphics", .{});
     } else if (target.result.os.tag == .linux) {
         root_module.linkSystemLibrary("GL", .{});
         root_module.linkSystemLibrary("util", .{}); // openpty

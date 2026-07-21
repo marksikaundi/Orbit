@@ -96,7 +96,7 @@ pub const Renderer = struct {
 
     pub fn rebuildAtlas(self: *Renderer) !void {
         const px: u32 = @intFromFloat(@round(@max(10.0, self.font_size * self.content_scale)));
-        var new_atlas = try atlas_mod.Atlas.create(self.allocator, px);
+        const new_atlas = try atlas_mod.Atlas.create(self.allocator, px);
         if (self.atlas) |*old| old.deinit();
         self.atlas = new_atlas;
         self.cell_w = @floatFromInt(new_atlas.cell_w);
@@ -108,8 +108,8 @@ pub const Renderer = struct {
         const a = self.atlas orelse return;
         c.glBindTexture(c.GL_TEXTURE_2D, self.atlas_tex);
         // Linear within glyph for AA; clamp to edge so cells don't bleed.
-        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MIN_FILTER, c.GL_LINEAR);
-        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MAG_FILTER, c.GL_LINEAR);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MIN_FILTER, c.GL_NEAREST);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MAG_FILTER, c.GL_NEAREST);
         c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_S, c.GL_CLAMP_TO_EDGE);
         c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_T, c.GL_CLAMP_TO_EDGE);
         c.glPixelStorei(c.GL_UNPACK_ALIGNMENT, 1);

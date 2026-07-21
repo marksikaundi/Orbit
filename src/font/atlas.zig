@@ -1,5 +1,4 @@
-//! GPU font atlas — CoreText (macOS) with bitmap fallback.
-//! Anti-aliased monospace strip for ASCII 32–126 (Ghostty-like clarity).
+//! GPU font atlas — TrueType (SF Mono / Menlo via stb) with bitmap fallback.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -16,25 +15,20 @@ pub const Atlas = struct {
     cell_w: u32,
     cell_h: u32,
     allocator: std.mem.Allocator,
-    source: enum { coretext, bitmap } = .bitmap,
+    source: enum { truetype, bitmap } = .bitmap,
 
     pub fn deinit(self: *Atlas) void {
         self.allocator.free(self.rgba);
         self.* = undefined;
     }
 
-    /// `pixel_size` is glyph pixel height in framebuffer pixels (Retina-aware).
     pub fn create(allocator: std.mem.Allocator, pixel_size: u32) !Atlas {
         const px = @max(10, @min(64, pixel_size));
-        if (builtin.os.tag == .macos) {
-            if (createCoreText(allocator, px)) |atlas| return atlas else |_| {}
+        if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
+            const ttf = @import("ttf_atlas.zig");
+            if (ttf.build(allocator, px)) |atlas| return atlas else |_| {}
         }
         return createBitmapScaled(allocator, px);
-    }
-
-    fn createCoreText(allocator: std.mem.Allocator, pixel_size: u32) !Atlas {
-        const ct = @import("coretext_atlas.zig");
-        return ct.build(allocator, pixel_size);
     }
 
     fn createBitmapScaled(allocator: std.mem.Allocator, pixel_size: u32) !Atlas {

@@ -21,15 +21,17 @@ Orbit opens on a welcome home (logo, version, quick actions) — no shell until 
 
 | Shortcut | Action |
 | -------- | ------ |
-| `Ctrl+=` / `Cmd+=` | Larger |
-| `Ctrl+-` / `Cmd+-` | Smaller |
-| `Ctrl+0` / `Cmd+0` | Reset to 2.0 |
+| `Ctrl+=` / `Cmd+=` | Larger (+1pt) |
+| `Ctrl+-` / `Cmd+-` | Smaller (−1pt) |
+| `Ctrl+0` / `Cmd+0` | Reset to 14pt |
 
-Default scale is **2.0** (1.0 is tiny on Retina). Or set in `~/.config/orbit/config.toml`:
+Default is **14pt** SF Mono (Retina-aware), Ghostty-style. Or set in `~/.config/orbit/config.toml`:
 
 ```toml
 [terminal]
-font_scale = 2.5
+font_size = 15
+padding_x = 10
+padding_y = 6
 ```
 
 ## Plugins (Phase 6)
