@@ -1,1 +1,292 @@
 # Orbit
+
+**A fast, lightweight, project-centric terminal emulator built in Zig.**
+
+> Stay in the flow.
+
+Orbit is a GPU-accelerated terminal inspired by Ghostty’s performance focus, with one core idea: keep developers in the flow by organizing everything around projects. Unlike traditional terminals that only launch shells, Orbit remembers workspaces, restores sessions, and stays out of your way.
+
+---
+
+## About
+
+> Keep developers in the flow by organizing everything around projects.
+
+### Core values
+
+- Fast
+- Lightweight
+- Beautiful
+- Project-centric
+- Privacy-first
+- Extensible
+- Cross-platform
+
+### Design principles
+
+1. Performance first
+2. Minimal UI
+3. No unnecessary features
+4. GPU-accelerated rendering
+5. Native experience
+6. Stable architecture
+7. Memory safety through Zig
+8. Project-aware workflows
+
+---
+
+## Philosophy
+
+| Terminal | Focus |
+| -------- | ----- |
+| Ghostty | Speed |
+| Warp | UX |
+| WezTerm | Configuration |
+| **Orbit** | **Projects** |
+
+Everything revolves around the developer’s workflow.
+
+---
+
+## Features
+
+### Terminal foundations
+
+- GPU-rendered text with dirty-cell redraws
+- POSIX PTY (Linux/macOS) and ConPTY (Windows)
+- Full ANSI parsing (CSI, OSC, SGR, DEC, DCS, UTF-8)
+- Colors, cursor, scrolling, selection, and clipboard
+- Tabs, split panes, search, themes, and transparency
+- TOML configuration with live reload (no restart)
+
+### Orbit Workspaces
+
+Projects are first-class. Each workspace can remember:
+
+- Working directory
+- Tabs and splits
+- Shell and environment
+- Layout and restore state
+
+Example workspaces: Backend, Frontend, Production, University.
+
+### Later
+
+- **Command palette** (`Ctrl+Shift+P`) — new tab, split, open workspace, SSH, theme, font, settings
+- **Plugin system** — commands, themes, renderer hooks, workspace hooks, lifecycle
+- **Optional AI assistant** — offline or cloud; explain errors and suggest commands; never executes automatically
+
+---
+
+## Status
+
+Orbit is in **early design / planning**. Application source, builds, and installs are not available yet. Detailed phase planning lives in [roamap.md](roamap.md).
+
+---
+
+## Tech stack
+
+| Layer | Choice |
+| ----- | ------ |
+| Language | Zig |
+| Graphics | OpenGL (initial), WebGPU (future) |
+| Windowing | GLFW |
+| Fonts | FreeType, HarfBuzz (later) |
+| Shell I/O | POSIX PTY, Windows ConPTY |
+| Configuration | TOML |
+| Testing | Zig Test |
+| Build | Zig Build |
+
+### Why Zig?
+
+- Tiny binaries
+- Excellent C interoperability
+- Explicit memory management
+- Strong performance and cross-compilation
+- Well suited to systems programming
+
+---
+
+## Architecture
+
+Every layer is isolated:
+
+```text
+Application
+    ↓
+Window
+    ↓
+Input
+    ↓
+PTY
+    ↓
+ANSI Parser
+    ↓
+Screen Buffer
+    ↓
+Renderer
+    ↓
+GPU
+```
+
+### Core modules
+
+| Module | Responsibilities |
+| ------ | ---------------- |
+| **Window** | Create/resize window, clipboard, DPI, cursor, monitor |
+| **PTY** | Create shell, send input, receive output, resize (Linux, macOS, Windows) |
+| **ANSI Parser** | CSI, OSC, SGR, DEC, DCS, UTF-8 → screen operations |
+| **Screen Buffer** | Cells: character, fg/bg, bold/italic/underline/blink/reverse, hyperlink, dirty flag |
+| **Renderer** | Glyph cache, texture atlas, vertex buffers, cursor, selection, background; redraw dirty cells only |
+| **Input** | Keyboard, mouse, clipboard, shortcuts, IME |
+| **Configuration** | `config.toml` with automatic reload |
+
+### GPU renderer pipeline
+
+```text
+Window → Renderer → Glyph Cache → Vertex Buffer → GPU → Screen
+```
+
+---
+
+## Performance targets
+
+| Metric | Target |
+| ------ | ------ |
+| Startup | &lt; 50ms |
+| Idle memory | &lt; 30MB |
+| Input latency | &lt; 5ms |
+| Frame rate | 144+ FPS |
+
+Benchmarks will cover launch, memory, frame time, parser speed, render speed, and PTY latency.
+
+---
+
+## Repository layout
+
+Planned structure:
+
+```text
+src/
+    main.zig
+    app/
+    renderer/
+    parser/
+    terminal/
+    workspace/
+    config/
+    platform/
+    window/
+    pty/
+    font/
+    clipboard/
+    ui/
+    plugins/
+    utils/
+    tests/
+assets/
+docs/
+build.zig
+```
+
+---
+
+## Configuration
+
+Orbit watches config changes and reloads automatically — no restart required.
+
+Example `config.toml`:
+
+```toml
+font = "JetBrains Mono"
+font_size = 14
+theme = "Orbit Dark"
+opacity = 0.95
+cursor = "beam"
+padding = 10
+```
+
+---
+
+## Platforms
+
+| Platform | Shell backend |
+| -------- | ------------- |
+| Linux | Native PTY |
+| macOS | Native PTY |
+| Windows | ConPTY |
+
+All platforms share one PTY interface.
+
+---
+
+## Development phases
+
+| Phase | Focus |
+| ----- | ----- |
+| 1 | MVP — window, PTY, shell I/O, text render, keyboard (no tabs/plugins/settings) |
+| 2 | ANSI, colors, resize, scroll, cursor, clipboard, selection |
+| 3 | Tabs, splits, search, themes, config, transparency |
+| 4 | Orbit Workspaces |
+| 5 | Command palette |
+| 6 | Plugin system |
+| 7 | Optional AI assistant |
+
+---
+
+## Release roadmap
+
+| Version | Milestone |
+| ------- | --------- |
+| v0.1 | Basic terminal |
+| v0.2 | ANSI support |
+| v0.3 | Themes |
+| v0.4 | Tabs |
+| v0.5 | Splits |
+| v0.6 | Workspaces |
+| v0.7 | Plugins |
+| v0.8 | Search |
+| v0.9 | Performance |
+| v1.0 | Stable release |
+
+### Future ideas
+
+SSH manager, cloud sync, workspace sharing, remote development, session recording, image protocol, GPU effects, multi-cursor, terminal replay, command timeline.
+
+See [roamap.md](roamap.md) for full phase detail.
+
+---
+
+## Testing
+
+- Unit tests — parser, renderer, PTY
+- Integration tests
+- Performance and rendering tests
+
+---
+
+## Getting started
+
+**Not buildable yet.** When the Zig tree lands:
+
+1. Install a recent [Zig](https://ziglang.org/) toolchain
+2. Clone this repository
+3. Build with `zig build` (exact flags TBD)
+
+Logging levels planned: Debug, Info, Warn, Error, Trace.
+
+---
+
+## Contributing
+
+The project is early. Feedback on architecture and the roadmap in [roamap.md](roamap.md) is welcome. Contribution guidelines will land with the first buildable release.
+
+---
+
+## License
+
+License TBD.
+
+---
+
+**Orbit — Stay in the flow.**
