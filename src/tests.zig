@@ -25,6 +25,8 @@ comptime {
 
     _ = @import("tests/workspace/workspace_test.zig");
 
+    _ = @import("tests/version_test.zig");
+
     // Private workspace parse helpers (same-file tests)
     _ = @import("workspace/workspace.zig");
 }

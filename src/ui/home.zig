@@ -3,8 +3,9 @@
 const std = @import("std");
 const Renderer = @import("../renderer/renderer.zig").Renderer;
 const Color = @import("../terminal/cell.zig").Color;
+const app_version = @import("../version.zig");
 
-pub const version = "0.1.0";
+pub const version = app_version.string;
 
 pub const Action = enum {
     new_terminal,

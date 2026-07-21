@@ -1,5 +1,9 @@
 # Orbit
 
+[![Version](https://img.shields.io/github/v/release/marksikaundi/Orbit?style=for-the-badge&label=VERSION&color=1a1b1e&labelColor=0b0c0f)](https://github.com/marksikaundi/Orbit/releases/latest)
+[![2026-live](https://img.shields.io/badge/branch-2026--live-3d8bfd?style=for-the-badge&labelColor=0b0c0f)](https://github.com/marksikaundi/Orbit/tree/2026-live)
+[![License](https://img.shields.io/badge/license-see%20repo-6c757d?style=for-the-badge&labelColor=0b0c0f)](https://github.com/marksikaundi/Orbit)
+
 **A fast, lightweight, project-centric terminal emulator built in Zig.**
 
 > Stay in the flow.

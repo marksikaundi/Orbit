@@ -13,6 +13,32 @@ zig build test
 ```
 
 You’ll see live status for each test (`ok` / `FAIL` / `skip`) and a final summary.
+
+## Versioning & releases (`2026-live`)
+
+Orbit uses [SemVer](https://semver.org/) in the root `VERSION` file (shown on the home screen).
+
+When you’re happy with features:
+
+```bash
+./scripts/bump-version.sh patch   # or minor / major
+# edit CHANGELOG.md for the new section
+git add VERSION src/VERSION CHANGELOG.md
+git commit -m "release: v$(tr -d '[:space:]' < VERSION)"
+git checkout -B 2026-live
+git push -u origin 2026-live
+```
+
+Pushing to **`2026-live`** runs GitHub Actions which:
+
+1. Creates tag `vX.Y.Z` from `VERSION`
+2. Publishes a GitHub Release (notes from `CHANGELOG.md`)
+3. Updates floating tags `latest` and `2026-live-latest` (for badges)
+
+Keep `VERSION` and `src/VERSION` in sync (the bump script updates both).
+
+See [CHANGELOG.md](CHANGELOG.md) and [Releases](https://github.com/marksikaundi/Orbit/releases).
+
 ## Home screen
 
 Orbit opens on a welcome home (logo, version, quick actions) — no shell until you pick one:

@@ -1,0 +1,140 @@
+name: Release (2026-live)
+
+# When VERSION is bumped and you push to 2026-live, this workflow:
+#   1. Creates git tag vX.Y.Z
+#   2. Publishes a GitHub Release (nice notes from CHANGELOG)
+#   3. Moves the floating tag `latest` to this commit (badge-friendly)
+
+on:
+  push:
+    branches:
+      - 2026-live
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Re-create tag/release if vVERSION already exists"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-2026-live
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Tag & GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read VERSION
+        id: ver
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::VERSION must be semver X.Y.Z (got: ${VERSION})"
+            exit 1
+          fi
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${TAG}"
+
+      - name: Extract changelog section
+        id: notes
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          VERSION="${{ steps.ver.outputs.version }}"
+          NOTES_FILE="${RUNNER_TEMP}/release-notes.md"
+          {
+            echo "## Orbit ${TAG}"
+            echo
+            echo "GPU terminal for staying in the flow — [marksikaundi/Orbit](https://github.com/marksikaundi/Orbit)."
+            echo
+            if [[ -f CHANGELOG.md ]]; then
+              # Grab ## [0.1.0] … until next ## 
+              awk -v ver="$VERSION" '
+                $0 ~ "^## \\[" ver "\\]" { capture=1; print; next }
+                capture && /^## \[/ { exit }
+                capture { print }
+              ' CHANGELOG.md
+            fi
+            echo
+            echo "---"
+            echo
+            echo "**Branch:** \`2026-live\` · **Commit:** \`${GITHUB_SHA:0:7}\`"
+            echo
+            echo "### Install (from source)"
+            echo '```bash'
+            echo "git clone https://github.com/marksikaundi/Orbit.git"
+            echo "cd Orbit && git checkout ${TAG}"
+            echo "zig build -Doptimize=ReleaseFast"
+            echo "```"
+          } > "$NOTES_FILE"
+          echo "path=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update tag
+        env:
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ver.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            EXISTING="$(git rev-list -n 1 "$TAG")"
+            if [[ "$EXISTING" == "$GITHUB_SHA" ]]; then
+              echo "Tag $TAG already points at this commit."
+            elif [[ "$FORCE" == "true" ]]; then
+              echo "Force-updating tag $TAG → $GITHUB_SHA"
+              git tag -f -a "$TAG" -m "Orbit $TAG"
+              git push -f origin "refs/tags/$TAG"
+            else
+              echo "::error::Tag $TAG already exists on another commit."
+              echo "Bump VERSION with ./scripts/bump-version.sh patch|minor|major,"
+              echo "or re-run this workflow with force=true to move the tag."
+              exit 1
+            fi
+          else
+            git tag -a "$TAG" -m "Orbit $TAG"
+            git push origin "refs/tags/$TAG"
+            echo "Created tag $TAG"
+          fi
+
+          # Floating pointers for badges / “what’s live”
+          git tag -f -a latest -m "Latest release on 2026-live ($TAG)"
+          git push -f origin refs/tags/latest
+          git tag -f -a 2026-live-latest -m "Latest 2026-live release ($TAG)"
+          git push -f origin refs/tags/2026-live-latest
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ver.outputs.tag }}"
+          NOTES="${{ steps.notes.outputs.path }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if [[ "$FORCE" == "true" ]]; then
+              gh release edit "$TAG" --title "Orbit $TAG" --notes-file "$NOTES" --latest
+            else
+              echo "Release $TAG already exists — leaving notes unchanged."
+              echo "Use workflow_dispatch with force=true to refresh."
+            fi
+          else
+            gh release create "$TAG" \
+              --title "Orbit $TAG" \
+              --notes-file "$NOTES" \
+              --latest
+          fi
+          echo "Release page: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
