@@ -29,9 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          # Needed so the workflow can push tags back to the repo
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Read VERSION
@@ -43,23 +44,28 @@ jobs:
             exit 1
           fi
           TAG="v${VERSION}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=${VERSION}"
+            echo "tag=${TAG}"
+          } >> "$GITHUB_OUTPUT"
           echo "Releasing ${TAG}"
 
       - name: Extract changelog section
         id: notes
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          TAG="${{ steps.ver.outputs.tag }}"
-          VERSION="${{ steps.ver.outputs.version }}"
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA:0:7}"
           NOTES_FILE="${RUNNER_TEMP}/release-notes.md"
+
           {
             echo "## Orbit ${TAG}"
             echo
             echo "GPU terminal for staying in the flow — [marksikaundi/Orbit](https://github.com/marksikaundi/Orbit)."
             echo
             if [[ -f CHANGELOG.md ]]; then
-              # Grab ## [0.1.0] … until next ## 
               awk -v ver="$VERSION" '
                 $0 ~ "^## \\[" ver "\\]" { capture=1; print; next }
                 capture && /^## \[/ { exit }
@@ -69,23 +75,24 @@ jobs:
             echo
             echo "---"
             echo
-            echo "**Branch:** \`2026-live\` · **Commit:** \`${GITHUB_SHA:0:7}\`"
+            printf '**Branch:** `2026-live` · **Commit:** `%s`\n' "$SHORT_SHA"
             echo
             echo "### Install (from source)"
-            echo '```bash'
+            printf '%s\n' '```bash'
             echo "git clone https://github.com/marksikaundi/Orbit.git"
             echo "cd Orbit && git checkout ${TAG}"
             echo "zig build -Doptimize=ReleaseFast"
-            echo "```"
+            printf '%s\n' '```'
           } > "$NOTES_FILE"
+
           echo "path=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
 
       - name: Create or update tag
         env:
-          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true }}
+          TAG: ${{ steps.ver.outputs.tag }}
         run: |
           set -euo pipefail
-          TAG="${{ steps.ver.outputs.tag }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -109,7 +116,7 @@ jobs:
             echo "Created tag $TAG"
           fi
 
-          # Floating pointers for badges / “what’s live”
+          # Floating pointers for badges / "what's live"
           git tag -f -a latest -m "Latest release on 2026-live ($TAG)"
           git push -f origin refs/tags/latest
           git tag -f -a 2026-live-latest -m "Latest 2026-live release ($TAG)"
@@ -118,11 +125,11 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          NOTES: ${{ steps.notes.outputs.path }}
         run: |
           set -euo pipefail
-          TAG="${{ steps.ver.outputs.tag }}"
-          NOTES="${{ steps.notes.outputs.path }}"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             if [[ "$FORCE" == "true" ]]; then
