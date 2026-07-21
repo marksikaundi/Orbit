@@ -9,6 +9,9 @@ opacity = 1.0
 [theme]
 # orbit-dark | orbit-light | nord | dracula | gruvbox-dark | solarized-dark
 name = "orbit-dark"
+# Text color override (optional). theme | soft-white | bright | cool-gray | warm-gray
+# mint | green | amber | sky | lavender | rose
+foreground = "theme"
 
 [terminal]
 scrollback = 2000

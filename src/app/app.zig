@@ -515,7 +515,7 @@ pub const App = struct {
 
         const max_w = fb_w - cw * 4;
         const w = @min(@max(cw * 48, 540), max_w);
-        const rows_n: i32 = 4;
+        const rows_n: i32 = 5;
         const list_h = rows_n * row_h;
         const h = pad_y + title_h + subtitle_h + gap + list_h + gap + footer_h;
         const x = @divTrunc(fb_w - w, 2);
@@ -534,13 +534,14 @@ pub const App = struct {
         var cy = y + pad_y;
         try self.renderer.drawText(x + pad_x, cy, "Appearance", fg);
         cy += title_h;
-        try self.renderer.drawText(x + pad_x, cy, "Terminal look, cursor, and shell for new tabs", muted);
+        try self.renderer.drawText(x + pad_x, cy, "Theme, text color, cursor, and shell for new tabs", muted);
         cy += subtitle_h + gap;
 
         try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
 
         const rows = [_]struct { label: []const u8, value: []const u8 }{
             .{ .label = "Theme", .value = self.config.theme_name },
+            .{ .label = "Text", .value = self.config.fgDisplay() },
             .{ .label = "Cursor", .value = self.config.cursor_style.name() },
             .{ .label = "Blink", .value = if (self.config.cursor_blink) "on" else "off" },
             .{ .label = "Shell", .value = self.config.shellDisplay() },
@@ -1093,7 +1094,7 @@ pub const App = struct {
                 if (self.settings_row > 0) self.settings_row -= 1;
             },
             c.GLFW_KEY_DOWN => {
-                if (self.settings_row + 1 < 4) self.settings_row += 1;
+                if (self.settings_row + 1 < 5) self.settings_row += 1;
             },
             c.GLFW_KEY_LEFT => self.nudgeSettings(-1),
             c.GLFW_KEY_RIGHT, c.GLFW_KEY_ENTER => self.nudgeSettings(1),
@@ -1109,6 +1110,16 @@ pub const App = struct {
                 self.applyTheme(next);
             },
             1 => {
+                self.config.cycleFgPreset(self.allocator, delta) catch {
+                    self.setStatus("text color failed");
+                    return;
+                };
+                self.refreshThemeColors();
+                var buf: [64]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "text {s}", .{self.config.fgDisplay()}) catch "text color";
+                self.setStatus(msg);
+            },
+            2 => {
                 self.config.cursor_style = if (delta >= 0)
                     self.config.cursor_style.next()
                 else
@@ -1116,8 +1127,8 @@ pub const App = struct {
                 self.renderer.cursor_style = self.config.cursor_style;
                 self.setStatus("cursor style");
             },
-            2 => self.toggleCursorBlink(),
-            3 => {
+            3 => self.toggleCursorBlink(),
+            4 => {
                 self.config.cycleShell(self.allocator, delta) catch {
                     self.setStatus("shell change failed");
                     return;
@@ -1257,12 +1268,17 @@ pub const App = struct {
         }
     }
 
-    fn applyTheme(self: *App, name: []const u8) void {
-        self.config.setThemeName(self.allocator, name) catch {
-            self.setStatus("theme failed");
-            return;
-        };
-        const theme = if (self.plugins.findTheme(name)) |t| t else theme_mod.byName(name);
+    /// Active theme (builtin or plugin) with the configured text-color override.
+    fn resolvedTheme(self: *App) theme_mod.Theme {
+        const base = if (self.plugins.findTheme(self.config.theme_name)) |t|
+            t
+        else
+            theme_mod.byName(self.config.theme_name);
+        return theme_mod.withFgOverride(base, self.config.fg_preset);
+    }
+
+    fn refreshThemeColors(self: *App) void {
+        const theme = self.resolvedTheme();
         self.renderer.setTheme(theme);
         for (self.tabs.items.items) |*tab| {
             var list: std.ArrayList(*Session) = .empty;
@@ -1273,6 +1289,14 @@ pub const App = struct {
             }
         }
         self.applyRendererHooks();
+    }
+
+    fn applyTheme(self: *App, name: []const u8) void {
+        self.config.setThemeName(self.allocator, name) catch {
+            self.setStatus("theme failed");
+            return;
+        };
+        self.refreshThemeColors();
         self.setStatus("theme applied");
     }
 

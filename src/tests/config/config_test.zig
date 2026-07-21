@@ -91,12 +91,19 @@ test "font_size is clamped" {
     try std.testing.expectEqual(@as(f32, 28.0), cfg.font_size);
 }
 
-test "theme() resolves by name" {
+test "parse theme foreground preset" {
     var cfg: Config = .{};
     defer cfg.deinit(std.testing.allocator);
-    try cfg.setThemeName(std.testing.allocator, "orbit-light");
+    Config.parseInto(&cfg, std.testing.allocator,
+        \\[theme]
+        \\name = "nord"
+        \\foreground = "mint"
+    );
+    try std.testing.expectEqualStrings("nord", cfg.theme_name);
+    try std.testing.expectEqualStrings("mint", cfg.fg_preset);
+    try std.testing.expectEqualStrings("mint", cfg.fgDisplay());
     const t = cfg.theme();
-    try std.testing.expectEqualStrings("orbit-light", t.name);
+    try std.testing.expectEqual(@as(u8, 160), t.foreground.r);
 }
 
 test "comments and blank lines ignored" {

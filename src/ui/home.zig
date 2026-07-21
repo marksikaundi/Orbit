@@ -119,8 +119,8 @@ pub const help_rows = [_]HelpRow{
     .{ .spacer = {} },
 
     .{ .heading = "Appearance" },
-    .{ .item = .{ .keys = "S / Settings", .desc = "Theme, cursor, shell (←→ to change)" } },
-    .{ .item = .{ .keys = "Ctrl+Shift+P", .desc = "Palette → Theme: … / Cursor: …" } },
+    .{ .item = .{ .keys = "S / Settings", .desc = "Theme, text color, cursor, shell (Left/Right to change)" } },
+    .{ .item = .{ .keys = "Ctrl+Shift+P", .desc = "Palette -> Theme: ... / Cursor: ..." } },
     .{ .note = "Prompt text (zsh/bash) comes from your shell rc — Orbit styles colors & cursor" },
     .{ .spacer = {} },
 

@@ -56,6 +56,8 @@ pub const Config = struct {
     window_height: i32 = 560,
     opacity: f32 = 1.0,
     theme_name: []const u8 = "orbit-dark",
+    /// Text color preset id (`theme` = use theme default). See `theme.fg_presets`.
+    fg_preset: []const u8 = "theme",
     scrollback: usize = 2000,
     /// Font size in points (Ghostty-style). Scaled for Retina automatically.
     font_size: f32 = 14.0,
@@ -68,18 +70,25 @@ pub const Config = struct {
     cursor_blink: bool = true,
     /// Owned theme name buffer when loaded from file.
     theme_name_owned: ?[]u8 = null,
+    fg_preset_owned: ?[]u8 = null,
     shell_owned: ?[]u8 = null,
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         if (self.theme_name_owned) |t| allocator.free(t);
+        if (self.fg_preset_owned) |f| allocator.free(f);
         if (self.shell_owned) |s| allocator.free(s);
         self.theme_name_owned = null;
+        self.fg_preset_owned = null;
         self.shell_owned = null;
         self.shell = null;
     }
 
     pub fn theme(self: *const Config) theme_mod.Theme {
-        return theme_mod.byName(self.theme_name);
+        return theme_mod.withFgOverride(theme_mod.byName(self.theme_name), self.fg_preset);
+    }
+
+    pub fn fgDisplay(self: *const Config) []const u8 {
+        return theme_mod.fgPresetById(self.fg_preset).label;
     }
 
     pub fn shellPath(self: *const Config) ?[]const u8 {
@@ -121,6 +130,19 @@ pub const Config = struct {
         const owned = try allocator.dupe(u8, name);
         self.theme_name_owned = owned;
         self.theme_name = owned;
+    }
+
+    pub fn setFgPreset(self: *Config, allocator: std.mem.Allocator, id: []const u8) !void {
+        const canonical = theme_mod.fgPresetById(id).id;
+        if (self.fg_preset_owned) |old| allocator.free(old);
+        const owned = try allocator.dupe(u8, canonical);
+        self.fg_preset_owned = owned;
+        self.fg_preset = owned;
+    }
+
+    pub fn cycleFgPreset(self: *Config, allocator: std.mem.Allocator, delta: i32) !void {
+        const next = theme_mod.nextFgPresetId(self.fg_preset, delta);
+        try self.setFgPreset(allocator, next);
     }
 
     pub fn setShell(self: *Config, allocator: std.mem.Allocator, path: []const u8) !void {
@@ -211,6 +233,7 @@ pub const Config = struct {
         try appendFmt(&body, allocator, "opacity = {d:.2}\n", .{self.opacity});
         try body.appendSlice(allocator, "\n[theme]\n");
         try appendFmt(&body, allocator, "name = \"{s}\"\n", .{self.theme_name});
+        try appendFmt(&body, allocator, "foreground = \"{s}\"\n", .{self.fg_preset});
         try body.appendSlice(allocator,
             \\
             \\[terminal]
@@ -273,6 +296,13 @@ pub const Config = struct {
                         const owned = allocator.dupe(u8, val) catch continue;
                         cfg.theme_name_owned = owned;
                         cfg.theme_name = owned;
+                    }
+                    if (std.mem.eql(u8, key, "foreground") or std.mem.eql(u8, key, "text") or std.mem.eql(u8, key, "fg")) {
+                        if (cfg.fg_preset_owned) |old| allocator.free(old);
+                        const canonical = theme_mod.fgPresetById(val).id;
+                        const owned = allocator.dupe(u8, canonical) catch continue;
+                        cfg.fg_preset_owned = owned;
+                        cfg.fg_preset = owned;
                     }
                 },
                 .terminal => {

@@ -63,6 +63,7 @@ Open **Settings** (`S` on home) and use **↑↓** + **←→** to change:
 | Option | Choices |
 | ------ | ------- |
 | Theme | orbit-dark, orbit-light, nord, dracula, gruvbox-dark, solarized-dark |
+| Text | theme (default), soft white, bright, mint, amber, sky, … |
 | Cursor | block, underline, bar |
 | Blink | on / off |
 | Shell | `$SHELL`, zsh, bash, sh, fish… (applies to **new** tabs) |

@@ -48,3 +48,20 @@ test "orbit_dark has readable contrast" {
     const bg_sum = @as(u16, t.background.r) + t.background.g + t.background.b;
     try std.testing.expect(fg_sum > bg_sum);
 }
+
+test "nextFgPresetId cycles text colors" {
+    try std.testing.expectEqualStrings("soft-white", theme.nextFgPresetId("theme", 1));
+    try std.testing.expectEqualStrings("theme", theme.nextFgPresetId("rose", 1));
+    try std.testing.expectEqualStrings("rose", theme.nextFgPresetId("theme", -1));
+}
+
+test "withFgOverride replaces foreground" {
+    const base = theme.orbit_dark;
+    const overridden = theme.withFgOverride(base, "mint");
+    const mint = theme.fgPresetById("mint").color.?;
+    try std.testing.expectEqual(mint.r, overridden.foreground.r);
+    try std.testing.expectEqual(mint.g, overridden.foreground.g);
+    // theme preset leaves colors alone
+    const kept = theme.withFgOverride(base, "theme");
+    try std.testing.expectEqual(base.foreground.r, kept.foreground.r);
+}
