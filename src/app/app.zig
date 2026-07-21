@@ -359,37 +359,107 @@ pub const App = struct {
     }
 
     fn drawPalette(self: *App) !void {
-        const w: i32 = 520;
-        const row_h: i32 = 22;
-        const header: i32 = 56;
-        const visible = @min(self.palette.match_count, 12);
-        const h: i32 = header + @as(i32, @intCast(@max(1, visible))) * row_h + 36;
-        const x = @divTrunc(self.window.fb_width - w, 2);
-        const y = @max(40, @divTrunc(self.window.fb_height - h, 4));
-        try self.renderer.drawRect(x, y, w, h, Color.rgb(22, 26, 34), 0.98);
-        try self.renderer.drawText(x + 16, y + 12, "Command Palette", Color.rgb(230, 235, 240));
-        var qbuf: [80]u8 = undefined;
-        const qline = std.fmt.bufPrint(&qbuf, "> {s}", .{self.palette.querySlice()}) catch "> ";
-        try self.renderer.drawText(x + 16, y + 32, qline, Color.rgb(160, 200, 255));
+        const cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+
+        // Dim the scene so the palette reads as a focused overlay.
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.45);
+
+        const pad_x = @max(20, cw + 8);
+        const pad_y = @max(16, @divTrunc(ch, 2) + 6);
+        const row_h = ch + @divTrunc(ch, 2) + 4;
+        const title_h = ch + 6;
+        const search_h = ch + @divTrunc(ch, 2) + 8;
+        const footer_h = ch + pad_y;
+        const gap = @max(10, @divTrunc(ch, 2));
+
+        const max_w = fb_w - cw * 4;
+        const w = @min(@max(cw * 52, 560), max_w);
+        const max_rows_by_height = @max(1, @divTrunc(fb_h - title_h - search_h - footer_h - gap * 3 - 80, row_h));
+        const max_visible: usize = @min(12, @as(usize, @intCast(max_rows_by_height)));
+
+        var start: usize = 0;
+        if (self.palette.match_count > 0 and self.palette.selected >= max_visible) {
+            start = self.palette.selected + 1 - max_visible;
+        }
+        const visible = if (self.palette.match_count == 0)
+            @as(usize, 1)
+        else
+            @min(self.palette.match_count - start, max_visible);
+
+        const list_h = @as(i32, @intCast(visible)) * row_h;
+        const h = pad_y + title_h + search_h + gap + list_h + footer_h;
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @max(ch * 2, @divTrunc(fb_h - h, 5));
+
+        const panel = Color.rgb(22, 26, 34);
+        const fg = Color.rgb(230, 235, 240);
+        const muted = Color.rgb(140, 150, 165);
+        const dim = Color.rgb(100, 110, 125);
+        const accent = Color.rgb(90, 175, 220);
+        const sel_bg = Color.rgb(36, 48, 64);
+
+        try self.renderer.drawRect(x, y, w, h, panel, 0.98);
+        // Soft top accent line
+        try self.renderer.drawRect(x, y, w, 2, accent, 0.55);
+
+        var cy = y + pad_y;
+        try self.renderer.drawText(x + pad_x, cy, "Command Palette", fg);
+        cy += title_h;
+
+        // Search field
+        try self.renderer.drawRect(x + pad_x - 4, cy - 4, w - pad_x * 2 + 8, search_h, Color.rgb(16, 19, 26), 1.0);
+        var qbuf: [96]u8 = undefined;
+        const query = self.palette.querySlice();
+        const qline = if (query.len == 0)
+            "Type to filter commands…"
+        else
+            (std.fmt.bufPrint(&qbuf, "> {s}", .{query}) catch "> ");
+        const qcolor = if (query.len == 0) dim else accent;
+        try self.renderer.drawText(x + pad_x + 4, cy + @divTrunc(search_h - ch, 2) - 2, qline, qcolor);
+        cy += search_h + gap;
+
+        // Divider under search
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
 
         if (self.palette.match_count == 0) {
-            try self.renderer.drawText(x + 16, y + header, "No matching commands", Color.rgb(140, 150, 160));
+            try self.renderer.drawText(x + pad_x, cy + @divTrunc(row_h - ch, 2), "No matching commands", muted);
         } else {
+            const hint_reserve = cw * 18;
+            const label_max_cols = @max(12, @divTrunc(w - pad_x * 2 - hint_reserve - cw * 2, cw));
+
             var i: usize = 0;
             while (i < visible) : (i += 1) {
-                const entry = self.palette.items[self.palette.matches[i]];
-                const ry = y + header + @as(i32, @intCast(i)) * row_h;
-                if (i == self.palette.selected) {
-                    try self.renderer.drawRect(x + 8, ry, w - 16, row_h, Color.rgb(50, 80, 120), 1.0);
+                const mi = start + i;
+                const entry = self.palette.items[self.palette.matches[mi]];
+                const ry = cy + @as(i32, @intCast(i)) * row_h;
+                const text_y = ry + @divTrunc(row_h - ch, 2);
+
+                if (mi == self.palette.selected) {
+                    try self.renderer.drawRect(x + 10, ry, w - 20, row_h - 2, sel_bg, 1.0);
+                    try self.renderer.drawRect(x + 10, ry, 3, row_h - 2, accent, 1.0);
                 }
-                try self.renderer.drawText(x + 20, ry + 4, entry.label[0..@min(entry.label.len, 36)], Color.rgb(220, 225, 230));
+
+                const label_len = @min(entry.label.len, @as(usize, @intCast(label_max_cols)));
+                try self.renderer.drawText(x + pad_x + 6, text_y, entry.label[0..label_len], fg);
+
                 if (entry.hint.len > 0) {
-                    const hx = x + w - 8 - @as(i32, @intCast(@min(entry.hint.len, 18))) * @as(i32, @intFromFloat(self.renderer.cell_w));
-                    try self.renderer.drawText(hx, ry + 4, entry.hint[0..@min(entry.hint.len, 18)], Color.rgb(120, 130, 145));
+                    const hint_len = @min(entry.hint.len, 16);
+                    const hx = x + w - pad_x - @as(i32, @intCast(hint_len)) * cw;
+                    try self.renderer.drawText(hx, text_y, entry.hint[0..hint_len], muted);
                 }
             }
         }
-        try self.renderer.drawText(x + 16, y + h - 24, "Enter run  |  Esc close", Color.rgb(130, 140, 155));
+
+        // Footer with match count when filtering
+        var foot: [64]u8 = undefined;
+        const foot_line = if (self.palette.query_len > 0 and self.palette.match_count > 0)
+            (std.fmt.bufPrint(&foot, "{d} matches   Enter run   Esc close", .{self.palette.match_count}) catch "Enter run   Esc close")
+        else
+            "↑↓ move   Enter run   Esc close";
+        try self.renderer.drawText(x + pad_x, y + h - footer_h + @divTrunc(pad_y, 2), foot_line, dim);
     }
 
     fn drawSshPrompt(self: *App) !void {
