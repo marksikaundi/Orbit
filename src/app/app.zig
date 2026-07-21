@@ -202,6 +202,32 @@ pub const App = struct {
         self.status_len = n;
     }
 
+    /// Floating status toast near the bottom-left — raised so it is not flush with the window edge.
+    fn drawStatusBar(self: *App) !void {
+        if (self.status_len == 0) return;
+
+        const cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+
+        const pad_x: i32 = 16;
+        const pad_y: i32 = 10;
+        const bar_h = ch + pad_y * 2;
+        // Sit clearly above the window edge (not flush to the bottom).
+        const margin_bottom = @max(48, ch * 2 + 16);
+        const bar_y = fb_h - margin_bottom - bar_h;
+
+        const text = self.status_msg[0..self.status_len];
+        const text_w = @as(i32, @intCast(text.len)) * cw;
+        const bar_w = @min(fb_w - 24, text_w + pad_x * 2 + 8);
+        const bar_x: i32 = 12;
+
+        try self.renderer.drawRect(bar_x, bar_y, bar_w, bar_h, Color.rgb(28, 42, 34), 0.96);
+        try self.renderer.drawRect(bar_x, bar_y, 3, bar_h, Color.rgb(110, 200, 140), 1.0);
+        try self.renderer.drawText(bar_x + pad_x, bar_y + pad_y, text, Color.rgb(200, 240, 200));
+    }
+
     fn updateWindowTitle(self: *App) void {
         var buf: [128]u8 = undefined;
         const title = if (self.workspaces.current_name) |n|
@@ -227,9 +253,7 @@ pub const App = struct {
                 self.plugins.count(),
             );
             if (self.status_len > 0) {
-                const bar_y = self.window.fb_height - 28;
-                try self.renderer.drawRect(0, bar_y, self.window.fb_width, 28, Color.rgb(25, 35, 30), 0.92);
-                try self.renderer.drawText(12, bar_y + 6, self.status_msg[0..self.status_len], Color.rgb(180, 220, 180));
+                try self.drawStatusBar();
             }
             return;
         }
@@ -287,9 +311,7 @@ pub const App = struct {
                 .home, .normal => self.ui = .home,
             }
             if (self.status_len > 0) {
-                const bar_y = self.window.fb_height - 24;
-                try self.renderer.drawRect(0, bar_y, self.window.fb_width, 24, Color.rgb(25, 35, 30), 0.9);
-                try self.renderer.drawText(8, bar_y + 4, self.status_msg[0..self.status_len], Color.rgb(180, 220, 180));
+                try self.drawStatusBar();
             }
             return;
         };
@@ -351,10 +373,9 @@ pub const App = struct {
         if (self.ui == .settings) {
             try self.drawSettings();
         }
-        if (self.status_len > 0 and self.ui == .normal) {
-            const bar_y = self.window.fb_height - 24;
-            try self.renderer.drawRect(0, bar_y, self.window.fb_width, 24, Color.rgb(25, 35, 30), 0.9);
-            try self.renderer.drawText(8, bar_y + 4, self.status_msg[0..self.status_len], Color.rgb(180, 220, 180));
+        // Always on top of overlays so "saved" / theme notes stay readable.
+        if (self.status_len > 0) {
+            try self.drawStatusBar();
         }
     }
 
