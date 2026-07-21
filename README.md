@@ -80,7 +80,7 @@ Example workspaces: Backend, Frontend, Production, University.
 
 ## Status
 
-**Phases 1–4 are implemented.** Terminal foundations, ANSI/colors/selection, tabs/splits/search/config, and Orbit Workspaces (save/restore cwd, tabs, splits, shell, layout). Command palette is next (Phase 5). See [roamap.md](roamap.md).
+**Phases 1–5 are implemented.** Terminal foundations through workspaces, plus a command palette (`Ctrl+Shift+P`). Plugin system is next (Phase 6). See [roamap.md](roamap.md).
 
 ---
 
@@ -280,10 +280,11 @@ zig build test     # unit tests (screen + parser)
 
 Optional config: copy `assets/config.example.toml` to `~/.config/orbit/config.toml`.
 
-### Shortcuts (Phases 2–4)
+### Shortcuts (Phases 2–5)
 
 | Shortcut | Action |
 | -------- | ------ |
+| `Ctrl+Shift+P` | Command palette |
 | `Ctrl+Shift+T` | New tab |
 | `Ctrl+Shift+W` | Close tab |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
@@ -300,6 +301,8 @@ Optional config: copy `assets/config.example.toml` to `~/.config/orbit/config.to
 | Scroll / PageUp/Down | Scrollback |
 
 Workspaces are stored in `~/.config/orbit/workspaces/<name>.toml`.
+
+Palette commands include New Tab, Split Right/Down, Open/Save Workspace, SSH, Theme, Font size, Settings, and Reload Config.
 
 Logging levels planned: Debug, Info, Warn, Error, Trace.
 

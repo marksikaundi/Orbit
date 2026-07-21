@@ -395,17 +395,27 @@ pub const App = struct {
                 if (self.focused()) |s| self.search.findNext(&s.screen);
                 return;
             },
+            .palette => {
+                self.palette.inputChar(codepoint);
+                return;
+            },
+            .ssh_prompt => {
+                if (codepoint < 32 or codepoint > 126) return;
+                if (self.ssh_host_len + 1 >= self.ssh_host.len) return;
+                self.ssh_host[self.ssh_host_len] = @intCast(codepoint);
+                self.ssh_host_len += 1;
+                return;
+            },
             .ws_save => {
                 if (codepoint < 32 or codepoint > 126) return;
                 if (self.save_name_len + 1 >= self.save_name.len) return;
-                // Allow name-safe chars
                 const ch: u8 = @intCast(codepoint);
                 if (ch == '/' or ch == '\\' or ch == '"' or ch == ' ') return;
                 self.save_name[self.save_name_len] = ch;
                 self.save_name_len += 1;
                 return;
             },
-            .ws_picker => return,
+            .ws_picker, .settings => return,
             .normal => {},
         }
         const session = self.focused() orelse return;
@@ -422,6 +432,18 @@ pub const App = struct {
         const shift = (mods & c.GLFW_MOD_SHIFT) != 0;
         const super = (mods & c.GLFW_MOD_SUPER) != 0;
 
+        if (self.ui == .palette) {
+            self.handlePaletteKey(key);
+            return;
+        }
+        if (self.ui == .ssh_prompt) {
+            self.handleSshKey(key);
+            return;
+        }
+        if (self.ui == .settings) {
+            if (key == c.GLFW_KEY_ESCAPE) self.ui = .normal;
+            return;
+        }
         if (self.ui == .ws_picker) {
             self.handlePickerKey(key);
             return;
@@ -449,6 +471,12 @@ pub const App = struct {
 
         if (ctrl and shift) {
             switch (key) {
+                c.GLFW_KEY_P => {
+                    self.palette.open();
+                    self.ui = .palette;
+                    self.status_len = 0;
+                    return;
+                },
                 c.GLFW_KEY_T => {
                     self.newTab() catch {};
                     return;
@@ -528,6 +556,120 @@ pub const App = struct {
         }
     }
 
+    fn handlePaletteKey(self: *App, key: c_int) void {
+        switch (key) {
+            c.GLFW_KEY_ESCAPE => {
+                self.palette.close();
+                self.ui = .normal;
+            },
+            c.GLFW_KEY_UP => self.palette.moveUp(),
+            c.GLFW_KEY_DOWN => self.palette.moveDown(),
+            c.GLFW_KEY_BACKSPACE => self.palette.backspace(),
+            c.GLFW_KEY_ENTER => {
+                if (self.palette.selectedAction()) |act| {
+                    self.palette.close();
+                    self.ui = .normal;
+                    self.runAction(act);
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn handleSshKey(self: *App, key: c_int) void {
+        switch (key) {
+            c.GLFW_KEY_ESCAPE => self.ui = .normal,
+            c.GLFW_KEY_BACKSPACE => {
+                if (self.ssh_host_len > 0) self.ssh_host_len -= 1;
+            },
+            c.GLFW_KEY_ENTER => {
+                if (self.ssh_host_len == 0) return;
+                self.connectSsh(self.ssh_host[0..self.ssh_host_len]) catch {
+                    self.setStatus("ssh failed");
+                };
+                self.ui = .normal;
+            },
+            else => {},
+        }
+    }
+
+    fn runAction(self: *App, action: palette_mod.Action) void {
+        switch (action) {
+            .new_tab => self.newTab() catch {},
+            .close_tab => self.tabs.closeActive(),
+            .split_right => self.splitPane(.horizontal) catch {},
+            .split_down => self.splitPane(.vertical) catch {},
+            .next_tab => self.tabs.next(),
+            .prev_tab => self.tabs.prev(),
+            .focus_next_pane => {
+                if (self.tabs.current()) |tab| tab.layout.focusNext();
+            },
+            .open_workspace => self.openPicker(),
+            .save_workspace => self.openSavePrompt(),
+            .search => {
+                self.search.open();
+                self.ui = .search;
+            },
+            .ssh => {
+                self.ssh_host_len = 0;
+                self.ui = .ssh_prompt;
+            },
+            .theme_orbit_dark => self.applyTheme("orbit-dark"),
+            .theme_orbit_light => self.applyTheme("orbit-light"),
+            .theme_nord => self.applyTheme("nord"),
+            .font_larger => {
+                self.renderer.bumpFontScale(0.125);
+                self.resizeAllSessions();
+                self.setStatus("font larger");
+            },
+            .font_smaller => {
+                self.renderer.bumpFontScale(-0.125);
+                self.resizeAllSessions();
+                self.setStatus("font smaller");
+            },
+            .font_reset => {
+                self.renderer.setFontScale(1.0);
+                self.resizeAllSessions();
+                self.setStatus("font reset");
+            },
+            .settings => self.ui = .settings,
+            .reload_config => {
+                self.config.reload(self.allocator, self.io);
+                self.renderer.opacity = self.config.opacity;
+                self.applyTheme(self.config.theme_name);
+                self.setStatus("config reloaded");
+            },
+        }
+    }
+
+    fn applyTheme(self: *App, name: []const u8) void {
+        self.config.setThemeName(self.allocator, name) catch {
+            self.setStatus("theme failed");
+            return;
+        };
+        const theme = self.config.theme();
+        self.renderer.setTheme(theme);
+        // Apply to all sessions
+        for (self.tabs.items.items) |*tab| {
+            var list: std.ArrayList(*Session) = .empty;
+            defer list.deinit(self.allocator);
+            tab.layout.collectSessions(&list) catch continue;
+            for (list.items) |s| {
+                s.setTheme(theme.foreground, theme.background);
+            }
+        }
+        self.setStatus("theme applied");
+    }
+
+    fn connectSsh(self: *App, host: []const u8) !void {
+        try self.newTab();
+        const session = self.focused() orelse return;
+        var cmd: [192]u8 = undefined;
+        const line = try std.fmt.bufPrint(&cmd, "ssh {s}\r", .{host});
+        session.write(line);
+        self.setStatus("ssh started");
+    }
+
     fn openPicker(self: *App) void {
         self.workspaces.refresh() catch {};
         self.picker_index = 0;
@@ -604,7 +746,7 @@ pub const App = struct {
         defer loaded.deinit();
 
         const bounds = contentRect(self.window.fb_width, self.window.fb_height);
-        const cols, const rows = gridSize(bounds.w, bounds.h);
+        const cols, const rows = self.gridSize(bounds.w, bounds.h);
         const theme = self.config.theme();
         try self.workspaces.applyToTabs(
             &loaded,
@@ -622,7 +764,7 @@ pub const App = struct {
 
     fn newTab(self: *App) !void {
         const bounds = contentRect(self.window.fb_width, self.window.fb_height);
-        const cols, const rows = gridSize(bounds.w, bounds.h);
+        const cols, const rows = self.gridSize(bounds.w, bounds.h);
         const theme = self.config.theme();
         var title_buf: [32]u8 = undefined;
         const title = std.fmt.bufPrint(&title_buf, "Shell {d}", .{self.tabs.items.items.len + 1}) catch "Shell";
@@ -644,7 +786,7 @@ pub const App = struct {
             Rect{ .x = 0, .y = 0, .w = @divTrunc(bounds.w, 2), .h = bounds.h }
         else
             Rect{ .x = 0, .y = 0, .w = bounds.w, .h = @divTrunc(bounds.h, 2) };
-        const cols, const rows = gridSize(half.w, half.h);
+        const cols, const rows = self.gridSize(half.w, half.h);
         const theme = self.config.theme();
         const session = try Session.createWith(self.allocator, .{
             .cols = cols,
@@ -698,8 +840,10 @@ pub const App = struct {
                     tab.layout.forEachLeaf(bounds, *Hit, &hit, Hit.cb);
                     if (hit.session) |s| {
                         tab.layout.focused = s;
-                        const col: u16 = @intCast(@max(0, @divTrunc(fb.x - hit.rect.x, @as(i32, @intCast(bitmap.glyph_width)))));
-                        const row: u16 = @intCast(@max(0, @divTrunc(fb.y - hit.rect.y, @as(i32, @intCast(bitmap.glyph_height)))));
+                        const cw: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
+                        const ch: i32 = @intFromFloat(@max(1.0, self.renderer.cell_h));
+                        const col: u16 = @intCast(@max(0, @divTrunc(fb.x - hit.rect.x, cw)));
+                        const row: u16 = @intCast(@max(0, @divTrunc(fb.y - hit.rect.y, ch)));
                         s.selection.begin(@min(col, s.screen.cols -| 1), @min(row, s.screen.rows -| 1));
                     }
                 }
@@ -736,8 +880,10 @@ pub const App = struct {
         var hit: Hit = .{ .px = fb.x, .py = fb.y, .target = session };
         tab.layout.forEachLeaf(bounds, *Hit, &hit, Hit.cb);
         if (hit.rect) |r| {
-            const col: u16 = @intCast(@max(0, @divTrunc(fb.x - r.x, @as(i32, @intCast(bitmap.glyph_width)))));
-            const row: u16 = @intCast(@max(0, @divTrunc(fb.y - r.y, @as(i32, @intCast(bitmap.glyph_height)))));
+            const cw: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
+            const ch: i32 = @intFromFloat(@max(1.0, self.renderer.cell_h));
+            const col: u16 = @intCast(@max(0, @divTrunc(fb.x - r.x, cw)));
+            const row: u16 = @intCast(@max(0, @divTrunc(fb.y - r.y, ch)));
             session.selection.update(@min(col, session.screen.cols -| 1), @min(row, session.screen.rows -| 1));
             session.screen.dirty = true;
         }

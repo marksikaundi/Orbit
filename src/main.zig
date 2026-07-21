@@ -6,7 +6,7 @@ pub fn main(init: std.process.Init) !void {
     const app = try App.create(gpa, init.io);
     defer app.destroy();
 
-    std.log.info("Orbit — Phase 4: workspaces (save/restore tabs, splits, cwd)", .{});
+    std.log.info("Orbit — Phase 5: command palette (Ctrl+Shift+P)", .{});
     try app.run();
 }
 
@@ -17,4 +17,5 @@ test {
     _ = @import("terminal/selection.zig");
     _ = @import("config/config.zig");
     _ = @import("workspace/workspace.zig");
+    _ = @import("ui/palette.zig");
 }
