@@ -94,10 +94,9 @@ padding_y = 6
 
 On home press **L** (or **5**) to open the Plugins panel:
 
-- See what plugins can do (commands, UI, tools, automation, cloud, sharing)
 - List installed plugins and **Space/Enter** to enable/disable
-- **R** reload from disk
-- **I** install the bundled pack: **hello**, **git**, **devtools**, **themes**, **workflow**
+- **R** reload from disk after you edit a `plugin.toml`
+- **I** install the bundled pack: **hello**, **git**, **devtools**, **themes**, **workflow**, **keys**
 
 | Plugin | What you get |
 | --- | --- |
@@ -106,6 +105,7 @@ On home press **L** (or **5**) to open the Plugins panel:
 | `devtools` | pwd, ls, tree, clear, disk, ports, env |
 | `themes` | ocean, forest, midnight, rose |
 | `workflow` | New tab, split, open/save workspace, search |
+| `keys` | **Starter custom shortcuts** — edit this to make Orbit yours |
 
 Or copy from the repo:
 
@@ -114,6 +114,30 @@ cp -R assets/plugins/* ~/.config/orbit/plugins/
 ```
 
 Then **R** in the Plugins panel. Commands and themes appear in **Ctrl+Shift+P**.
+
+### Make it yours (shortcuts, colors, themes)
+
+Edit `~/.config/orbit/plugins/keys/plugin.toml` (or add your own folder):
+
+```toml
+[[commands]]
+id = "mine.status"
+label = "My: Git Status"
+action = "insert"
+payload = "git status\r"
+shortcut = "ctrl+shift+g"
+
+[[themes]]
+name = "my-night"
+foreground = "#e8eef5"
+background = "#0c1018"
+cursor = "#7ec8ff"
+selection = "#243044"
+```
+
+Press **R** to reload. Example chords from the `keys` pack: `Ctrl+Shift+G` (git status), `Ctrl+Alt+L` (ls), `Ctrl+Alt+K` (clear).
+
+Full guide: [`assets/plugins/README.md`](assets/plugins/README.md). Appearance (**S**) still covers built-in themes, text color, cursor, and shell.
 
 ## Command palette (Phase 5)
 

@@ -29,3 +29,24 @@ test "themeFromColors sets name and fg slot" {
     try std.testing.expect(t.background.eql(bg));
     try std.testing.expect(t.ansi[7].eql(fg));
 }
+
+test "parseShortcut ctrl+shift+g" {
+    var b = try types.parseShortcut(std.testing.allocator, "ctrl+shift+g", "git.status");
+    defer b.deinit(std.testing.allocator);
+    try std.testing.expect(b.ctrl);
+    try std.testing.expect(b.shift);
+    try std.testing.expect(!b.super);
+    try std.testing.expect(!b.alt);
+    try std.testing.expectEqualStrings("g", b.key_name);
+    try std.testing.expectEqualStrings("git.status", b.command_id);
+    try std.testing.expect(b.matches("g", true, true, false, false));
+    try std.testing.expect(!b.matches("g", true, false, false, false));
+}
+
+test "parseShortcut cmd+alt+f1" {
+    var b = try types.parseShortcut(std.testing.allocator, "cmd+alt+f1", "x");
+    defer b.deinit(std.testing.allocator);
+    try std.testing.expect(b.super);
+    try std.testing.expect(b.alt);
+    try std.testing.expectEqualStrings("f1", b.key_name);
+}

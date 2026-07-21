@@ -48,7 +48,7 @@ pub const help_rows = [_]HelpRow{
     .{ .item = .{ .keys = "O / 2", .desc = "Open a folder as workspace" } },
     .{ .item = .{ .keys = "P / 3", .desc = "Open the command palette" } },
     .{ .item = .{ .keys = "S / 4", .desc = "Show settings / config paths" } },
-    .{ .item = .{ .keys = "L / 5", .desc = "Plugins — extend Orbit with commands & themes" } },
+    .{ .item = .{ .keys = "L / 5", .desc = "Plugins — shortcuts, themes, commands you can edit" } },
     .{ .item = .{ .keys = "H / 6", .desc = "Open this Help reference" } },
     .{ .item = .{ .keys = "Q / 7", .desc = "Quit Orbit" } },
     .{ .item = .{ .keys = "↑ ↓", .desc = "Move selection" } },
@@ -129,10 +129,11 @@ pub const help_rows = [_]HelpRow{
     .{ .spacer = {} },
 
     .{ .heading = "Config & plugins" },
-    .{ .item = .{ .keys = "L / Plugins", .desc = "Manage plugins, install demo, reload" } },
+    .{ .item = .{ .keys = "L / Plugins", .desc = "Manage plugins, install pack, reload" } },
     .{ .item = .{ .keys = "config.toml", .desc = "~/.config/orbit/config.toml" } },
+    .{ .item = .{ .keys = "shortcut=", .desc = "In plugin.toml: your own key chords" } },
     .{ .item = .{ .keys = "plugins/", .desc = "~/.config/orbit/plugins/<name>/" } },
-    .{ .note = "Plugins add commands, themes, UI hooks, and workflow automation" },
+    .{ .note = "Plugins add shortcuts, themes, commands — see assets/plugins/README.md" },
     .{ .spacer = {} },
 
     .{ .heading = "This Help panel" },

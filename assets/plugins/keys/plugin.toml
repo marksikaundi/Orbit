@@ -1,0 +1,52 @@
+name = "keys"
+version = "0.1.0"
+description = "Custom shortcuts starter — edit keys to make Orbit yours"
+
+# Tip: use modifiers (ctrl/cmd/alt/shift) so normal typing still reaches the shell.
+# Built-in chords (Ctrl+Shift+P/H/T/F/O/S, Cmd+Q/W, …) stay reserved.
+
+[[commands]]
+id = "keys.git_status"
+label = "Keys: Git Status"
+hint = "ctrl+shift+g"
+action = "insert"
+payload = "git status\r"
+shortcut = "ctrl+shift+g"
+
+[[commands]]
+id = "keys.ls"
+label = "Keys: List files"
+hint = "ctrl+alt+l"
+action = "insert"
+payload = "ls -la\r"
+shortcut = "ctrl+alt+l"
+
+[[commands]]
+id = "keys.clear"
+label = "Keys: Clear"
+hint = "ctrl+alt+k"
+action = "insert"
+payload = "clear\r"
+shortcut = "ctrl+alt+k"
+
+[[commands]]
+id = "keys.tip"
+label = "Keys: Tip"
+hint = "status"
+action = "status"
+payload = "Edit ~/.config/orbit/plugins/keys/plugin.toml — then press R in Plugins"
+
+# Extra binding form (same as shortcut = on a command):
+[[bindings]]
+keys = "ctrl+alt+t"
+command = "keys.tip"
+
+[[themes]]
+name = "keys-slate"
+foreground = "#e2e8f0"
+background = "#0f172a"
+cursor = "#38bdf8"
+selection = "#1e3a5f"
+
+[hooks]
+on_load = "status:keys plugin — customize shortcuts in plugin.toml"

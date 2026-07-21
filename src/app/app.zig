@@ -16,6 +16,7 @@ const CursorStyle = @import("../config/config.zig").CursorStyle;
 const theme_mod = @import("../config/theme.zig");
 const WsManager = @import("../workspace/workspace.zig").Manager;
 const PluginRegistry = @import("../plugins/registry.zig").Registry;
+const PluginCommand = @import("../plugins/types.zig").PluginCommand;
 const clipboard = @import("../clipboard/clipboard.zig");
 const folder_picker = @import("../platform/folder_picker.zig");
 const Color = @import("../terminal/cell.zig").Color;
@@ -836,9 +837,9 @@ pub const App = struct {
         var cy = y + pad_y;
         try self.renderer.drawText(x + pad_x, cy, "Plugins", fg);
         cy += title_h;
-        try self.renderer.drawText(x + pad_x, cy, "Commands, themes, tools, automation, and more", muted);
+        try self.renderer.drawText(x + pad_x, cy, "Shortcuts, themes, commands — customize in plugin.toml", muted);
         cy += ch + 4;
-        try self.renderer.drawText(x + pad_x, cy, "Pack: hello  git  devtools  themes  workflow", dim);
+        try self.renderer.drawText(x + pad_x, cy, "Pack: hello git devtools themes workflow keys", dim);
         cy += ch + gap;
 
         try self.renderer.drawRect(x + pad_x - 4, cy - 2, w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
@@ -846,7 +847,7 @@ pub const App = struct {
         var count_buf: [64]u8 = undefined;
         const count_line = std.fmt.bufPrint(&count_buf, "Installed  ({d})", .{plugin_n}) catch "Installed";
         try self.renderer.drawText(x + pad_x, cy, count_line, muted);
-        if (plugin_n < 5) {
+        if (plugin_n < 6) {
             try self.renderer.drawText(x + pad_x + cw * 18, cy, "press I for full pack", accent);
         }
         cy += ch + 4;
@@ -894,7 +895,7 @@ pub const App = struct {
         cy += ch + 4;
         try self.renderer.drawText(x + pad_x, cy, "Up/Down select    Space toggle    R reload", dim);
         cy += ch + 4;
-        try self.renderer.drawText(x + pad_x, cy, "I install/update full pack (5 plugins)    Esc close", dim);
+        try self.renderer.drawText(x + pad_x, cy, "I install/update full pack (6 plugins)    Esc close", dim);
     }
 
     fn drawWorkspacePicker(self: *App) !void {
@@ -992,6 +993,7 @@ pub const App = struct {
         const ctrl = (mods & c.GLFW_MOD_CONTROL) != 0;
         const shift = (mods & c.GLFW_MOD_SHIFT) != 0;
         const super = (mods & c.GLFW_MOD_SUPER) != 0;
+        const alt = (mods & c.GLFW_MOD_ALT) != 0;
 
         // Quit anywhere: Cmd+Q (macOS) / Ctrl+Q
         if ((super or ctrl) and !shift and key == c.GLFW_KEY_Q) {
@@ -1125,6 +1127,9 @@ pub const App = struct {
             if (self.tabs.current()) |tab| tab.layout.focusNext();
             return;
         }
+
+        // Plugin shortcuts (after built-ins so Ctrl+Shift+P etc. stay reserved)
+        if (self.tryPluginBinding(key, ctrl, shift, super, alt)) return;
 
         const session = self.focused() orelse return;
         switch (key) {
@@ -1454,7 +1459,7 @@ pub const App = struct {
         self.setStatus(msg);
     }
 
-    /// Install the bundled plugin pack (hello, git, devtools, themes, workflow).
+    /// Install the bundled plugin pack (hello, git, devtools, themes, workflow, keys).
     fn installBundledPlugins(self: *App) void {
         const Bundle = struct { name: []const u8, toml: []const u8 };
         const pack = [_]Bundle{
@@ -1710,11 +1715,65 @@ pub const App = struct {
                 \\label = "Workflow: Tip"
                 \\hint = "status"
                 \\action = "status"
-                \\payload = "Tip: Ctrl+Shift+P for palette · L for Plugins · Cmd+Shift+F for Search"
+                \\payload = "Tip: Ctrl+Shift+P for palette · L for Plugins · edit keys plugin for shortcuts"
                 \\
                 \\[hooks]
                 \\on_load = "status:workflow helpers ready"
                 \\on_workspace_save = "status:workflow: workspace saved"
+                \\
+                ,
+            },
+            .{
+                .name = "keys",
+                .toml =
+                \\name = "keys"
+                \\version = "0.1.0"
+                \\description = "Custom shortcuts starter — edit keys to make Orbit yours"
+                \\
+                \\[[commands]]
+                \\id = "keys.git_status"
+                \\label = "Keys: Git Status"
+                \\hint = "ctrl+shift+g"
+                \\action = "insert"
+                \\payload = "git status\r"
+                \\shortcut = "ctrl+shift+g"
+                \\
+                \\[[commands]]
+                \\id = "keys.ls"
+                \\label = "Keys: List files"
+                \\hint = "ctrl+alt+l"
+                \\action = "insert"
+                \\payload = "ls -la\r"
+                \\shortcut = "ctrl+alt+l"
+                \\
+                \\[[commands]]
+                \\id = "keys.clear"
+                \\label = "Keys: Clear"
+                \\hint = "ctrl+alt+k"
+                \\action = "insert"
+                \\payload = "clear\r"
+                \\shortcut = "ctrl+alt+k"
+                \\
+                \\[[commands]]
+                \\id = "keys.tip"
+                \\label = "Keys: Tip"
+                \\hint = "status"
+                \\action = "status"
+                \\payload = "Edit ~/.config/orbit/plugins/keys/plugin.toml — then press R in Plugins"
+                \\
+                \\[[bindings]]
+                \\keys = "ctrl+alt+t"
+                \\command = "keys.tip"
+                \\
+                \\[[themes]]
+                \\name = "keys-slate"
+                \\foreground = "#e2e8f0"
+                \\background = "#0f172a"
+                \\cursor = "#38bdf8"
+                \\selection = "#1e3a5f"
+                \\
+                \\[hooks]
+                \\on_load = "status:keys plugin — customize shortcuts in plugin.toml"
                 \\
                 ,
             },
@@ -1840,15 +1899,7 @@ pub const App = struct {
 
     fn runPluginCommand(self: *App, plugin_name: []const u8, command_id: []const u8) void {
         if (self.plugins.findCommand(plugin_name, command_id)) |cmd| {
-            switch (cmd.kind) {
-                .insert => {
-                    if (self.focused()) |s| s.write(cmd.payload);
-                    self.setStatus("plugin insert");
-                },
-                .status => self.setStatus(cmd.payload),
-                .theme => self.applyTheme(cmd.payload),
-                .host => self.runHostPayload(cmd.payload),
-            }
+            self.executePluginCommand(cmd);
             return;
         }
         if (self.plugins.findTheme(command_id) != null) {
@@ -1856,6 +1907,80 @@ pub const App = struct {
             return;
         }
         self.setStatus("plugin command missing");
+    }
+
+    fn executePluginCommand(self: *App, cmd: *const PluginCommand) void {
+        switch (cmd.kind) {
+            .insert => {
+                if (self.focused()) |s| s.write(cmd.payload);
+                self.setStatus("plugin insert");
+            },
+            .status => self.setStatus(cmd.payload),
+            .theme => self.applyTheme(cmd.payload),
+            .host => self.runHostPayload(cmd.payload),
+        }
+    }
+
+    /// Run a plugin keybinding if one matches. Prefer chords with modifiers.
+    fn tryPluginBinding(self: *App, key: c_int, ctrl: bool, shift: bool, super: bool, alt: bool) bool {
+        // Plain typing must reach the shell — only chords with a modifier (or F-keys).
+        const is_fn = key >= c.GLFW_KEY_F1 and key <= c.GLFW_KEY_F12;
+        if (!ctrl and !shift and !super and !alt and !is_fn) return false;
+
+        const name = glfwKeyName(key) orelse return false;
+        const command_id = self.plugins.matchBinding(name, ctrl, shift, super, alt) orelse return false;
+        if (self.plugins.findCommandById(command_id)) |cmd| {
+            self.executePluginCommand(cmd);
+            return true;
+        }
+        if (self.plugins.findTheme(command_id) != null) {
+            self.applyTheme(command_id);
+            return true;
+        }
+        return false;
+    }
+
+    fn glfwKeyName(key: c_int) ?[]const u8 {
+        if (key >= c.GLFW_KEY_A and key <= c.GLFW_KEY_Z) {
+            const names = [_][]const u8{ "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z" };
+            return names[@intCast(key - c.GLFW_KEY_A)];
+        }
+        if (key >= c.GLFW_KEY_0 and key <= c.GLFW_KEY_9) {
+            const names = [_][]const u8{ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
+            return names[@intCast(key - c.GLFW_KEY_0)];
+        }
+        if (key >= c.GLFW_KEY_F1 and key <= c.GLFW_KEY_F12) {
+            const names = [_][]const u8{ "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12" };
+            return names[@intCast(key - c.GLFW_KEY_F1)];
+        }
+        return switch (key) {
+            c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER => "enter",
+            c.GLFW_KEY_ESCAPE => "escape",
+            c.GLFW_KEY_SPACE => "space",
+            c.GLFW_KEY_TAB => "tab",
+            c.GLFW_KEY_BACKSPACE => "backspace",
+            c.GLFW_KEY_DELETE => "delete",
+            c.GLFW_KEY_UP => "up",
+            c.GLFW_KEY_DOWN => "down",
+            c.GLFW_KEY_LEFT => "left",
+            c.GLFW_KEY_RIGHT => "right",
+            c.GLFW_KEY_HOME => "home",
+            c.GLFW_KEY_END => "end",
+            c.GLFW_KEY_PAGE_UP => "pageup",
+            c.GLFW_KEY_PAGE_DOWN => "pagedown",
+            c.GLFW_KEY_MINUS, c.GLFW_KEY_KP_SUBTRACT => "minus",
+            c.GLFW_KEY_EQUAL, c.GLFW_KEY_KP_ADD => "equal",
+            c.GLFW_KEY_LEFT_BRACKET => "[",
+            c.GLFW_KEY_RIGHT_BRACKET => "]",
+            c.GLFW_KEY_SEMICOLON => ";",
+            c.GLFW_KEY_APOSTROPHE => "'",
+            c.GLFW_KEY_COMMA => ",",
+            c.GLFW_KEY_PERIOD => ".",
+            c.GLFW_KEY_SLASH => "/",
+            c.GLFW_KEY_BACKSLASH => "\\",
+            c.GLFW_KEY_GRAVE_ACCENT => "`",
+            else => null,
+        };
     }
 
     fn runHostPayload(self: *App, payload: []const u8) void {

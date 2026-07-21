@@ -83,7 +83,7 @@ Example workspaces: Backend, Frontend, Production, University.
 
 ## Status
 
-**Phases 1–6 are implemented.** Terminal foundations through the command palette, plus a manifest-based plugin system (commands, themes, hooks). Optional AI assistant is next (Phase 7). See [roamap.md](roamap.md).
+**Phases 1–6 are implemented.** Terminal foundations through the command palette, plus a manifest-based plugin system (commands, themes, **custom shortcuts**, hooks). Optional AI assistant is next (Phase 7). See [roamap.md](roamap.md).
 
 ---
 
@@ -316,11 +316,13 @@ Palette commands include New Tab, Split Right/Down, Open Workspace (folder), Loa
 Install a plugin by copying a folder with `plugin.toml` into `~/.config/orbit/plugins/<name>/`:
 
 ```bash
-mkdir -p ~/.config/orbit/plugins/hello
-cp assets/plugins/hello/plugin.toml ~/.config/orbit/plugins/hello/
+cp -R assets/plugins/* ~/.config/orbit/plugins/
+# or: home → Plugins → I
 ```
 
-Then **Ctrl+Shift+P** → “Reload Plugins” (or restart Orbit). Plugin commands and themes appear in the palette.
+Then **R** in the Plugins panel (or Restart). Plugin commands and themes appear in the palette.
+
+**Customize Orbit for you:** edit any `plugin.toml` to add preferred shortcuts (`shortcut = "ctrl+shift+g"` or `[[bindings]]`), themes, and palette commands. Start with the bundled **`keys`** plugin. Guide: [`assets/plugins/README.md`](assets/plugins/README.md).
 
 Logging levels planned: Debug, Info, Warn, Error, Trace.
 

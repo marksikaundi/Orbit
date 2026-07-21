@@ -87,6 +87,28 @@ pub const Registry = struct {
         return null;
     }
 
+    /// Find a command by id across all enabled plugins.
+    pub fn findCommandById(self: *Registry, command_id: []const u8) ?*types.PluginCommand {
+        for (self.plugins.items) |*p| {
+            if (!p.enabled) continue;
+            for (p.commands) |*c| {
+                if (std.mem.eql(u8, c.id, command_id)) return c;
+            }
+        }
+        return null;
+    }
+
+    /// Match a user key chord against enabled plugin bindings. Returns command id if any.
+    pub fn matchBinding(self: *const Registry, key_name: []const u8, ctrl: bool, shift: bool, super: bool, alt: bool) ?[]const u8 {
+        for (self.plugins.items) |p| {
+            if (!p.enabled) continue;
+            for (p.bindings) |b| {
+                if (b.matches(key_name, ctrl, shift, super, alt)) return b.command_id;
+            }
+        }
+        return null;
+    }
+
     /// First enabled plugin clear_color hook, if any.
     pub fn rendererClearColor(self: *const Registry) ?Color {
         for (self.plugins.items) |p| {
