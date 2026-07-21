@@ -94,6 +94,36 @@ pub const Tabs = struct {
         }
     }
 
+    /// Close panes/tabs whose shells have exited (`exit`, Ctrl+D).
+    /// Returns true if any tab was removed or layout changed.
+    pub fn pruneDead(self: *Tabs) bool {
+        var changed = false;
+        var i: usize = 0;
+        while (i < self.items.items.len) {
+            switch (self.items.items[i].layout.pruneDead()) {
+                .none => i += 1,
+                .changed => {
+                    changed = true;
+                    i += 1;
+                },
+                .empty => {
+                    const tab = self.items.orderedRemove(i);
+                    self.allocator.free(tab.title);
+                    // layout root already freed inside pruneDead
+                    changed = true;
+                    if (self.items.items.len == 0) {
+                        self.active = 0;
+                    } else if (self.active > i) {
+                        self.active -= 1;
+                    } else if (self.active >= self.items.items.len) {
+                        self.active = self.items.items.len - 1;
+                    }
+                },
+            }
+        }
+        return changed;
+    }
+
     /// Ghostty-like slim integrated tab strip.
     pub const bar_height: i32 = 34;
 };

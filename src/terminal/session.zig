@@ -27,6 +27,8 @@ pub const Session = struct {
     shell: []u8,
     env: [][]u8,
     read_buf: [8192]u8 = undefined,
+    /// False after the shell exits (`exit`, Ctrl+D, crash).
+    alive: bool = true,
 
     pub fn create(allocator: std.mem.Allocator, cols: u16, rows: u16, title: []const u8) !*Session {
         return createWith(allocator, .{
@@ -90,6 +92,7 @@ pub const Session = struct {
             .cwd = cwd_owned,
             .shell = shell_owned,
             .env = env_owned,
+            .alive = true,
         };
         return self;
     }
@@ -118,13 +121,23 @@ pub const Session = struct {
     }
 
     pub fn tick(self: *Session) void {
-        const n = self.pty.read(&self.read_buf);
-        if (n > 0) {
-            self.parser.feed(&self.screen, self.read_buf[0..n]);
+        if (!self.alive) return;
+        // Drain all available output; shell exit surfaces as EOF.
+        while (true) {
+            const result = self.pty.read(&self.read_buf);
+            if (result.len > 0) {
+                self.parser.feed(&self.screen, self.read_buf[0..result.len]);
+            }
+            if (result.eof) {
+                self.alive = false;
+                return;
+            }
+            if (result.len == 0) return;
         }
     }
 
     pub fn write(self: *Session, bytes: []const u8) void {
+        if (!self.alive) return;
         self.pty.write(bytes);
     }
 

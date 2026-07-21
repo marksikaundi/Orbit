@@ -28,6 +28,7 @@ Orbit opens on a welcome home (logo, version, quick actions) — no shell until 
 | `Ctrl+Shift+H` | Return to home anytime |
 | `Cmd+W` / `Ctrl+Shift+W` | Close tab (from home → quit) |
 | `Cmd+Q` / `Ctrl+Q` | Quit Orbit (anywhere) |
+| `exit` / Ctrl+D | Close the shell tab (last tab → home) |
 
 ## Font size
 

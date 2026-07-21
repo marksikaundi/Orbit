@@ -118,9 +118,23 @@ pub const App = struct {
             Window.poll();
             self.handleResize();
             self.tabs.tickAll();
+            self.reapExitedSessions();
             try self.draw();
             self.window.swap();
         }
+    }
+
+    /// When the user types `exit` (or the shell otherwise ends), close that pane/tab.
+    fn reapExitedSessions(self: *App) void {
+        if (self.ui != .normal and self.ui != .search) return;
+        if (!self.tabs.pruneDead()) return;
+
+        if (self.tabs.items.items.len == 0) {
+            self.search.close();
+            self.goHome();
+            return;
+        }
+        self.resizeAllSessions();
     }
 
     fn contentRect(self: *const App) Rect {

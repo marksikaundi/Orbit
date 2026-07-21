@@ -15,6 +15,7 @@ pub const c = @cImport({
         @cInclude("sys/ioctl.h");
         @cInclude("signal.h");
         @cInclude("errno.h");
+        @cInclude("sys/wait.h");
     } else if (builtin.os.tag == .linux) {
         @cInclude("GLES3/gl3.h");
         @cInclude("pty.h");
@@ -25,5 +26,6 @@ pub const c = @cImport({
         @cInclude("sys/ioctl.h");
         @cInclude("signal.h");
         @cInclude("errno.h");
+        @cInclude("sys/wait.h");
     }
 });

@@ -18,6 +18,8 @@ pub const Pty = struct {
     child_pid: c.pid_t,
     cols: u16,
     rows: u16,
+    /// False after the shell exits (EOF on master) or deinit.
+    alive: bool = true,
 
     pub fn create(cols: u16, rows: u16) !Pty {
         return createWith(.{ .cols = cols, .rows = rows });
@@ -86,11 +88,15 @@ pub const Pty = struct {
             .child_pid = pid,
             .cols = opts.cols,
             .rows = opts.rows,
+            .alive = true,
         };
     }
 
     pub fn deinit(self: *Pty) void {
-        _ = c.kill(self.child_pid, c.SIGTERM);
+        if (self.alive) {
+            _ = c.kill(self.child_pid, c.SIGTERM);
+            self.reapChild();
+        }
         _ = c.close(self.master_fd);
         self.* = undefined;
     }
@@ -108,6 +114,7 @@ pub const Pty = struct {
     }
 
     pub fn write(self: *Pty, bytes: []const u8) void {
+        if (!self.alive) return;
         var offset: usize = 0;
         while (offset < bytes.len) {
             const n = c.write(self.master_fd, bytes.ptr + offset, bytes.len - offset);
@@ -120,15 +127,38 @@ pub const Pty = struct {
         }
     }
 
-    /// Non-blocking read into buffer. Returns bytes read (0 if nothing available).
-    pub fn read(self: *Pty, buffer: []u8) usize {
+    pub const ReadResult = struct {
+        len: usize,
+        /// Master hit EOF — shell has exited (e.g. user typed `exit`).
+        eof: bool,
+    };
+
+    /// Non-blocking read. Distinguishes "no data yet" from shell exit (EOF).
+    pub fn read(self: *Pty, buffer: []u8) ReadResult {
+        if (!self.alive) return .{ .len = 0, .eof = true };
         const n = c.read(self.master_fd, buffer.ptr, buffer.len);
         if (n < 0) {
             const err = std.c._errno().*;
-            if (err == c.EAGAIN or err == c.EWOULDBLOCK) return 0;
-            return 0;
+            if (err == c.EAGAIN or err == c.EWOULDBLOCK) return .{ .len = 0, .eof = false };
+            self.markExited();
+            return .{ .len = 0, .eof = true };
         }
-        return @intCast(n);
+        if (n == 0) {
+            self.markExited();
+            return .{ .len = 0, .eof = true };
+        }
+        return .{ .len = @intCast(n), .eof = false };
+    }
+
+    fn markExited(self: *Pty) void {
+        if (!self.alive) return;
+        self.reapChild();
+    }
+
+    fn reapChild(self: *Pty) void {
+        var status: c_int = 0;
+        _ = c.waitpid(self.child_pid, &status, 0);
+        self.alive = false;
     }
 };
 

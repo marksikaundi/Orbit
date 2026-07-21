@@ -121,6 +121,76 @@ pub const Layout = struct {
         }
     }
 
+    pub const PruneResult = enum {
+        /// No dead shells.
+        none,
+        /// At least one pane removed; tab still has sessions.
+        changed,
+        /// All panes gone — root already freed; do not call `deinit`.
+        empty,
+    };
+
+    /// Drop panes whose shell has exited.
+    pub fn pruneDead(self: *Layout) PruneResult {
+        if (!self.anyDead(self.root)) return .none;
+        const new_root = self.pruneNode(self.root) orelse return .empty;
+        self.root = new_root;
+        var list: std.ArrayList(*Session) = .empty;
+        defer list.deinit(self.allocator);
+        self.collect(self.root, &list) catch return .empty;
+        if (list.items.len == 0) return .empty;
+        var ok = false;
+        for (list.items) |s| {
+            if (s == self.focused) {
+                ok = true;
+                break;
+            }
+        }
+        if (!ok) self.focused = list.items[0];
+        return .changed;
+    }
+
+    fn anyDead(self: *Layout, node: *Node) bool {
+        switch (node.*) {
+            .leaf => |s| return !s.alive,
+            .split => |sp| return self.anyDead(sp.first) or self.anyDead(sp.second),
+        }
+    }
+
+    fn pruneNode(self: *Layout, node: *Node) ?*Node {
+        switch (node.*) {
+            .leaf => |s| {
+                if (s.alive) return node;
+                s.destroy();
+                self.allocator.destroy(node);
+                return null;
+            },
+            .split => |sp| {
+                const first = self.pruneNode(sp.first);
+                const second = self.pruneNode(sp.second);
+                if (first == null and second == null) {
+                    self.allocator.destroy(node);
+                    return null;
+                }
+                if (first == null) {
+                    self.allocator.destroy(node);
+                    return second;
+                }
+                if (second == null) {
+                    self.allocator.destroy(node);
+                    return first;
+                }
+                node.* = .{ .split = .{
+                    .dir = sp.dir,
+                    .ratio = sp.ratio,
+                    .first = first.?,
+                    .second = second.?,
+                } };
+                return node;
+            },
+        }
+    }
+
     /// Visit each leaf with its pixel rect (for rendering / hit-test).
     pub fn forEachLeaf(self: *Layout, bounds: Rect, comptime Ctx: type, ctx: Ctx, comptime cb: *const fn (Ctx, *Session, Rect) void) void {
         self.walk(self.root, bounds, Ctx, ctx, cb);
