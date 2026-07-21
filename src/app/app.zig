@@ -12,6 +12,7 @@ const palette_mod = @import("../ui/palette.zig");
 const home_mod = @import("../ui/home.zig");
 const Home = home_mod.Home;
 const Config = @import("../config/config.zig").Config;
+const CursorStyle = @import("../config/config.zig").CursorStyle;
 const theme_mod = @import("../config/theme.zig");
 const WsManager = @import("../workspace/workspace.zig").Manager;
 const PluginRegistry = @import("../plugins/registry.zig").Registry;
@@ -42,6 +43,8 @@ pub const App = struct {
     status_len: usize = 0,
     mouse_x: f64 = 0,
     mouse_y: f64 = 0,
+    /// Settings row: 0 theme, 1 cursor, 2 blink, 3 shell
+    settings_row: usize = 0,
 
     pub fn create(allocator: std.mem.Allocator, io: std.Io) !*App {
         const self = try allocator.create(App);
@@ -60,6 +63,8 @@ pub const App = struct {
         renderer.opacity = config.opacity;
         renderer.setContentScale(window.contentScale());
         renderer.setFontSize(config.font_size);
+        renderer.cursor_style = config.cursor_style;
+        renderer.cursor_blink = config.cursor_blink;
 
         var tabs = Tabs.init(allocator);
         errdefer tabs.deinit();
@@ -395,26 +400,46 @@ pub const App = struct {
     }
 
     fn drawSettings(self: *App) !void {
-        const w: i32 = 480;
-        const h: i32 = 160;
+        const w: i32 = 520;
+        const h: i32 = 280;
         const x = @divTrunc(self.window.fb_width - w, 2);
         const y = @divTrunc(self.window.fb_height - h, 2);
-        try self.renderer.drawRect(x, y, w, h, Color.rgb(24, 28, 36), 0.97);
-        try self.renderer.drawText(x + 16, y + 14, "Settings", Color.rgb(230, 235, 240));
+        const panel = Color.rgb(24, 28, 36);
+        const fg = Color.rgb(230, 235, 240);
+        const muted = Color.rgb(160, 170, 185);
+        const accent = Color.rgb(90, 175, 220);
+        const sel = Color.rgb(40, 55, 75);
+
+        try self.renderer.drawRect(x, y, w, h, panel, 0.97);
+        try self.renderer.drawText(x + 16, y + 14, "Appearance", fg);
+        try self.renderer.drawText(x + 16, y + 36, "How your terminal looks & which shell runs", muted);
+
+        const rows = [_]struct { label: []const u8, value: []const u8 }{
+            .{ .label = "Theme", .value = self.config.theme_name },
+            .{ .label = "Cursor", .value = self.config.cursor_style.name() },
+            .{ .label = "Blink", .value = if (self.config.cursor_blink) "on" else "off" },
+            .{ .label = "Shell", .value = self.config.shellDisplay() },
+        };
+
         var line: [96]u8 = undefined;
-        const t1 = std.fmt.bufPrint(&line, "Theme: {s}", .{self.config.theme_name}) catch "Theme:";
-        try self.renderer.drawText(x + 16, y + 44, t1, Color.rgb(200, 210, 220));
-        const t2 = std.fmt.bufPrint(&line, "Opacity: {d:.2}  Font: {d:.0}pt", .{ self.config.opacity, self.renderer.font_size }) catch "";
-        try self.renderer.drawText(x + 16, y + 66, t2, Color.rgb(200, 210, 220));
-        const t3 = std.fmt.bufPrint(&line, "Scrollback: {d}  Plugins: {d}", .{ self.config.scrollback, self.plugins.count() }) catch "";
-        try self.renderer.drawText(x + 16, y + 88, t3, Color.rgb(200, 210, 220));
-        if (self.workspaces.current_name) |wn| {
-            const t4 = std.fmt.bufPrint(&line, "Workspace: {s}", .{wn}) catch "";
-            try self.renderer.drawText(x + 16, y + 110, t4, Color.rgb(200, 210, 220));
-        } else {
-            try self.renderer.drawText(x + 16, y + 110, "Workspace: (none)", Color.rgb(200, 210, 220));
+        for (rows, 0..) |row, i| {
+            const ry = y + 64 + @as(i32, @intCast(i)) * 28;
+            if (i == self.settings_row) {
+                try self.renderer.drawRect(x + 10, ry - 2, w - 20, 24, sel, 1.0);
+                try self.renderer.drawRect(x + 10, ry - 2, 3, 24, accent, 1.0);
+            }
+            const text = std.fmt.bufPrint(&line, "{s}  {s}", .{ row.label, row.value }) catch row.label;
+            try self.renderer.drawText(x + 20, ry + 2, text, if (i == self.settings_row) fg else muted);
         }
-        try self.renderer.drawText(x + 16, y + 136, "Esc close", Color.rgb(140, 150, 160));
+
+        const t_font = std.fmt.bufPrint(&line, "Font {d:.0}pt   padding {d}x{d}   Ctrl+=/-/0", .{
+            self.renderer.font_size,
+            self.config.padding_x,
+            self.config.padding_y,
+        }) catch "";
+        try self.renderer.drawText(x + 16, y + h - 72, t_font, muted);
+        try self.renderer.drawText(x + 16, y + h - 50, "↑↓ select   ←→ change   S save to config.toml", muted);
+        try self.renderer.drawText(x + 16, y + h - 28, "Esc close   (shell applies to new tabs)", muted);
     }
 
     fn drawWorkspacePicker(self: *App) !void {
@@ -537,7 +562,7 @@ pub const App = struct {
             return;
         }
         if (self.ui == .settings) {
-            if (key == c.GLFW_KEY_ESCAPE) self.leaveOverlay();
+            self.handleSettingsKey(key);
             return;
         }
         if (self.ui == .ws_picker) {
@@ -776,6 +801,7 @@ pub const App = struct {
                 self.ui = .palette;
             },
             .settings => {
+                self.settings_row = 0;
                 self.ui = .settings;
             },
             .help => self.home.openHelp(),
@@ -877,16 +903,28 @@ pub const App = struct {
             .theme_orbit_dark => self.applyTheme("orbit-dark"),
             .theme_orbit_light => self.applyTheme("orbit-light"),
             .theme_nord => self.applyTheme("nord"),
+            .theme_dracula => self.applyTheme("dracula"),
+            .theme_gruvbox => self.applyTheme("gruvbox-dark"),
+            .theme_solarized => self.applyTheme("solarized-dark"),
+            .cursor_block => self.setCursorStyle(.block),
+            .cursor_underline => self.setCursorStyle(.underline),
+            .cursor_bar => self.setCursorStyle(.bar),
+            .cursor_blink_toggle => self.toggleCursorBlink(),
             .font_larger => self.adjustFont(1.0),
             .font_smaller => self.adjustFont(-1.0),
             .font_reset => self.resetFont(),
-            .settings => self.ui = .settings,
+            .settings => {
+                self.settings_row = 0;
+                self.ui = .settings;
+            },
             .go_home => self.goHome(),
             .reload_config => {
                 self.config.reload(self.allocator, self.io);
                 self.renderer.opacity = self.config.opacity;
                 self.renderer.setContentScale(self.window.contentScale());
                 self.renderer.setFontSize(self.config.font_size);
+                self.renderer.cursor_style = self.config.cursor_style;
+                self.renderer.cursor_blink = self.config.cursor_blink;
                 self.applyTheme(self.config.theme_name);
                 self.resizeAllSessions();
                 self.setStatus("config reloaded");
@@ -904,6 +942,71 @@ pub const App = struct {
             },
             .list_plugins => self.showPluginList(),
         }
+    }
+
+    fn handleSettingsKey(self: *App, key: c_int) void {
+        switch (key) {
+            c.GLFW_KEY_ESCAPE => self.leaveOverlay(),
+            c.GLFW_KEY_UP => {
+                if (self.settings_row > 0) self.settings_row -= 1;
+            },
+            c.GLFW_KEY_DOWN => {
+                if (self.settings_row + 1 < 4) self.settings_row += 1;
+            },
+            c.GLFW_KEY_LEFT => self.nudgeSettings(-1),
+            c.GLFW_KEY_RIGHT, c.GLFW_KEY_ENTER => self.nudgeSettings(1),
+            c.GLFW_KEY_S => self.persistAppearance(),
+            else => {},
+        }
+    }
+
+    fn nudgeSettings(self: *App, delta: i32) void {
+        switch (self.settings_row) {
+            0 => {
+                const next = theme_mod.nextName(self.config.theme_name, delta);
+                self.applyTheme(next);
+            },
+            1 => {
+                self.config.cursor_style = if (delta >= 0)
+                    self.config.cursor_style.next()
+                else
+                    self.config.cursor_style.prev();
+                self.renderer.cursor_style = self.config.cursor_style;
+                self.setStatus("cursor style");
+            },
+            2 => self.toggleCursorBlink(),
+            3 => {
+                self.config.cycleShell(self.allocator, delta) catch {
+                    self.setStatus("shell change failed");
+                    return;
+                };
+                var buf: [80]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "shell {s} (new tabs)", .{self.config.shellDisplay()}) catch "shell updated";
+                self.setStatus(msg);
+            },
+            else => {},
+        }
+    }
+
+    fn setCursorStyle(self: *App, style: CursorStyle) void {
+        self.config.cursor_style = style;
+        self.renderer.cursor_style = style;
+        self.setStatus("cursor style");
+    }
+
+    fn toggleCursorBlink(self: *App) void {
+        self.config.cursor_blink = !self.config.cursor_blink;
+        self.renderer.cursor_blink = self.config.cursor_blink;
+        self.setStatus(if (self.config.cursor_blink) "cursor blink on" else "cursor blink off");
+    }
+
+    fn persistAppearance(self: *App) void {
+        self.config.font_size = self.renderer.font_size;
+        self.config.save(self.allocator, self.io) catch {
+            self.setStatus("could not save config.toml");
+            return;
+        };
+        self.setStatus("saved ~/.config/orbit/config.toml");
     }
 
     fn rebuildPalette(self: *App) void {
@@ -1145,6 +1248,7 @@ pub const App = struct {
             .rows = rows,
             .title = title,
             .cwd = self.sessionCwd(),
+            .shell = self.config.shellPath(),
         });
         session.setTheme(theme.foreground, theme.background);
         session.setScrollback(self.config.scrollback);
@@ -1165,6 +1269,7 @@ pub const App = struct {
             .rows = rows,
             .title = "Split",
             .cwd = self.sessionCwd(),
+            .shell = self.config.shellPath(),
         });
         session.setTheme(theme.foreground, theme.background);
         session.setScrollback(self.config.scrollback);

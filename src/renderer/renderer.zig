@@ -5,6 +5,7 @@ const Selection = @import("../terminal/selection.zig").Selection;
 const Color = @import("../terminal/cell.zig").Color;
 const atlas_mod = @import("../font/atlas.zig");
 const theme_mod = @import("../config/theme.zig");
+const CursorStyle = @import("../config/config.zig").CursorStyle;
 
 pub const Renderer = struct {
     program: c.GLuint = 0,
@@ -23,6 +24,10 @@ pub const Renderer = struct {
     allocator: std.mem.Allocator,
     theme: theme_mod.Theme = theme_mod.orbit_dark,
     opacity: f32 = 1.0,
+    cursor_style: CursorStyle = .block,
+    cursor_blink: bool = true,
+    /// Frame counter for cursor blink (incremented each draw).
+    frame_tick: u64 = 0,
 
     // Vertex: x y u v r g b a  (8 floats)
     const vert_src =
@@ -235,22 +240,56 @@ pub const Renderer = struct {
             }
         }
 
+        self.frame_tick +%= 1;
         if (screen.cursor_visible and screen.view_offset == 0) {
-            try self.appendSolid(
-                ox,
-                oy,
-                fw,
-                fh,
-                screen.cursor_col,
-                screen.cursor_row,
-                cell_w,
-                cell_h,
-                self.theme.cursor,
-                0.9,
-            );
+            // ~530ms at 60fps
+            const blink_on = if (self.cursor_blink)
+                ((self.frame_tick / 32) % 2) == 0
+            else
+                true;
+            if (blink_on) {
+                try self.appendCursor(
+                    ox,
+                    oy,
+                    fw,
+                    fh,
+                    screen.cursor_col,
+                    screen.cursor_row,
+                    cell_w,
+                    cell_h,
+                    self.theme.cursor,
+                );
+            }
         }
 
         try self.flush();
+    }
+
+    fn appendCursor(
+        self: *Renderer,
+        ox: f32,
+        oy: f32,
+        fw: f32,
+        fh: f32,
+        col: u16,
+        row: u16,
+        cell_w: f32,
+        cell_h: f32,
+        color: Color,
+    ) !void {
+        const x0 = ox + @as(f32, @floatFromInt(col)) * cell_w;
+        const y0 = oy + @as(f32, @floatFromInt(row)) * cell_h;
+        switch (self.cursor_style) {
+            .block => try self.appendPixelRect(fw, fh, x0, y0, cell_w, cell_h, color, 0.9),
+            .underline => {
+                const h = @max(2.0, cell_h * 0.12);
+                try self.appendPixelRect(fw, fh, x0, y0 + cell_h - h, cell_w, h, color, 1.0);
+            },
+            .bar => {
+                const w = @max(2.0, cell_w * 0.15);
+                try self.appendPixelRect(fw, fh, x0, y0, w, cell_h, color, 1.0);
+            },
+        }
     }
 
     pub fn drawRect(self: *Renderer, x: i32, y: i32, w: i32, h: i32, color: Color, alpha: f32) !void {

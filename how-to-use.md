@@ -30,6 +30,21 @@ Orbit opens on a welcome home (logo, version, quick actions) — no shell until 
 | `Cmd+Q` / `Ctrl+Q` | Quit Orbit (anywhere) |
 | `exit` / Ctrl+D | Close the shell tab (last tab → home) |
 
+## Appearance
+
+Open **Settings** (`S` on home) and use **↑↓** + **←→** to change:
+
+| Option | Choices |
+| ------ | ------- |
+| Theme | orbit-dark, orbit-light, nord, dracula, gruvbox-dark, solarized-dark |
+| Cursor | block, underline, bar |
+| Blink | on / off |
+| Shell | `$SHELL`, zsh, bash, sh, fish… (applies to **new** tabs) |
+
+Press **S** in Settings to save to `~/.config/orbit/config.toml`.
+
+Or edit the file directly (see `assets/config.example.toml`). The shell prompt text itself (`%`, `$`, starship, etc.) still comes from your shell config (`.zshrc` / `.bashrc`).
+
 ## Font size
 
 | Shortcut | Action |

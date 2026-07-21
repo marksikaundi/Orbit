@@ -1,4 +1,5 @@
 # Orbit config — copy to ~/.config/orbit/config.toml
+# Or open Appearance (S on home) and press S to save.
 
 [window]
 width = 980
@@ -6,7 +7,7 @@ height = 620
 opacity = 1.0
 
 [theme]
-# orbit-dark | orbit-light | nord
+# orbit-dark | orbit-light | nord | dracula | gruvbox-dark | solarized-dark
 name = "orbit-dark"
 
 [terminal]
@@ -16,3 +17,8 @@ font_size = 14
 # Interior padding in logical pixels
 padding_x = 10
 padding_y = 6
+# Shell for new tabs (omit to use $SHELL). Examples: /bin/zsh /bin/bash /bin/fish
+# shell = "/bin/zsh"
+# Cursor: block | underline | bar
+cursor_style = "block"
+cursor_blink = true

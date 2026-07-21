@@ -19,6 +19,19 @@ test "byName nord" {
     try std.testing.expectEqual(@as(u8, 46), t.background.r);
 }
 
+test "byName new themes" {
+    try std.testing.expectEqualStrings("dracula", theme.byName("dracula").name);
+    try std.testing.expectEqualStrings("gruvbox-dark", theme.byName("gruvbox").name);
+    try std.testing.expectEqualStrings("solarized-dark", theme.byName("solarized-dark").name);
+}
+
+test "nextName cycles builtins" {
+    const a = theme.nextName("orbit-dark", 1);
+    try std.testing.expectEqualStrings("orbit-light", a);
+    const b = theme.nextName("solarized-dark", 1);
+    try std.testing.expectEqualStrings("orbit-dark", b);
+}
+
 test "applyAnsiOverride uses palette then falls back" {
     const t = theme.orbit_dark;
     const red = t.applyAnsiOverride(1);

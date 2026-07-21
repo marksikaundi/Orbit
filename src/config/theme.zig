@@ -1,5 +1,6 @@
-//! Built-in color themes.
+//! Built-in color themes — pick via Settings or config.toml [theme] name.
 
+const std = @import("std");
 const Color = @import("../terminal/cell.zig").Color;
 
 pub const Theme = struct {
@@ -16,9 +17,18 @@ pub const Theme = struct {
     }
 };
 
+/// Names users can cycle in Settings / palette (order matters).
+pub const builtin_names = [_][]const u8{
+    "orbit-dark",
+    "orbit-light",
+    "nord",
+    "dracula",
+    "gruvbox-dark",
+    "solarized-dark",
+};
+
 pub const orbit_dark: Theme = .{
     .name = "orbit-dark",
-    // Ghostty-adjacent dark neutrals
     .foreground = Color.rgb(218, 224, 232),
     .background = Color.rgb(17, 18, 22),
     .cursor = Color.rgb(218, 224, 232),
@@ -95,10 +105,110 @@ pub const nord: Theme = .{
     },
 };
 
+pub const dracula: Theme = .{
+    .name = "dracula",
+    .foreground = Color.rgb(248, 248, 242),
+    .background = Color.rgb(40, 42, 54),
+    .cursor = Color.rgb(248, 248, 242),
+    .selection_bg = Color.rgb(68, 71, 90),
+    .ansi = .{
+        Color.rgb(33, 34, 44),
+        Color.rgb(255, 85, 85),
+        Color.rgb(80, 250, 123),
+        Color.rgb(241, 250, 140),
+        Color.rgb(139, 233, 253),
+        Color.rgb(255, 121, 198),
+        Color.rgb(139, 233, 253),
+        Color.rgb(248, 248, 242),
+        Color.rgb(98, 114, 164),
+        Color.rgb(255, 110, 110),
+        Color.rgb(105, 255, 145),
+        Color.rgb(255, 255, 165),
+        Color.rgb(160, 240, 255),
+        Color.rgb(255, 146, 208),
+        Color.rgb(160, 240, 255),
+        Color.rgb(255, 255, 255),
+    },
+};
+
+pub const gruvbox_dark: Theme = .{
+    .name = "gruvbox-dark",
+    .foreground = Color.rgb(235, 219, 178),
+    .background = Color.rgb(40, 40, 40),
+    .cursor = Color.rgb(235, 219, 178),
+    .selection_bg = Color.rgb(80, 73, 69),
+    .ansi = .{
+        Color.rgb(40, 40, 40),
+        Color.rgb(204, 36, 29),
+        Color.rgb(152, 151, 26),
+        Color.rgb(215, 153, 33),
+        Color.rgb(69, 133, 136),
+        Color.rgb(177, 98, 134),
+        Color.rgb(104, 157, 106),
+        Color.rgb(168, 153, 132),
+        Color.rgb(146, 131, 116),
+        Color.rgb(251, 73, 52),
+        Color.rgb(184, 187, 38),
+        Color.rgb(250, 189, 47),
+        Color.rgb(131, 165, 152),
+        Color.rgb(211, 134, 155),
+        Color.rgb(142, 192, 124),
+        Color.rgb(235, 219, 178),
+    },
+};
+
+pub const solarized_dark: Theme = .{
+    .name = "solarized-dark",
+    .foreground = Color.rgb(131, 148, 150),
+    .background = Color.rgb(0, 43, 54),
+    .cursor = Color.rgb(131, 148, 150),
+    .selection_bg = Color.rgb(7, 54, 66),
+    .ansi = .{
+        Color.rgb(7, 54, 66),
+        Color.rgb(220, 50, 47),
+        Color.rgb(133, 153, 0),
+        Color.rgb(181, 137, 0),
+        Color.rgb(38, 139, 210),
+        Color.rgb(211, 54, 130),
+        Color.rgb(42, 161, 152),
+        Color.rgb(238, 232, 213),
+        Color.rgb(0, 43, 54),
+        Color.rgb(203, 75, 22),
+        Color.rgb(88, 110, 117),
+        Color.rgb(101, 123, 131),
+        Color.rgb(131, 148, 150),
+        Color.rgb(108, 113, 196),
+        Color.rgb(147, 161, 161),
+        Color.rgb(253, 246, 227),
+    },
+};
+
 pub fn byName(name: []const u8) Theme {
     if (std.mem.eql(u8, name, "orbit-light") or std.mem.eql(u8, name, "light")) return orbit_light;
     if (std.mem.eql(u8, name, "nord")) return nord;
+    if (std.mem.eql(u8, name, "dracula")) return dracula;
+    if (std.mem.eql(u8, name, "gruvbox-dark") or std.mem.eql(u8, name, "gruvbox")) return gruvbox_dark;
+    if (std.mem.eql(u8, name, "solarized-dark") or std.mem.eql(u8, name, "solarized")) return solarized_dark;
+    if (std.mem.eql(u8, name, "orbit-dark") or std.mem.eql(u8, name, "dark")) return orbit_dark;
     return orbit_dark;
 }
 
-const std = @import("std");
+pub fn indexOfName(name: []const u8) usize {
+    for (builtin_names, 0..) |n, i| {
+        if (std.mem.eql(u8, n, name)) return i;
+        // aliases
+        if (std.mem.eql(u8, name, "light") and std.mem.eql(u8, n, "orbit-light")) return i;
+        if (std.mem.eql(u8, name, "gruvbox") and std.mem.eql(u8, n, "gruvbox-dark")) return i;
+        if (std.mem.eql(u8, name, "solarized") and std.mem.eql(u8, n, "solarized-dark")) return i;
+        if (std.mem.eql(u8, name, "dark") and std.mem.eql(u8, n, "orbit-dark")) return i;
+    }
+    return 0;
+}
+
+pub fn nextName(current: []const u8, delta: i32) []const u8 {
+    const n: i32 = @intCast(builtin_names.len);
+    var idx: i32 = @intCast(indexOfName(current));
+    idx = @mod(idx + delta, n);
+    if (idx < 0) idx += n;
+    return builtin_names[@intCast(idx)];
+}

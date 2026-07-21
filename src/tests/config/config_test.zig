@@ -2,6 +2,21 @@
 
 const std = @import("std");
 const Config = @import("../../config/config.zig").Config;
+const CursorStyle = @import("../../config/config.zig").CursorStyle;
+
+test "parse shell cursor and blink" {
+    var cfg: Config = .{};
+    defer cfg.deinit(std.testing.allocator);
+    Config.parseInto(&cfg, std.testing.allocator,
+        \\[terminal]
+        \\shell = "/bin/bash"
+        \\cursor_style = "underline"
+        \\cursor_blink = false
+    );
+    try std.testing.expectEqualStrings("/bin/bash", cfg.shell.?);
+    try std.testing.expectEqual(CursorStyle.underline, cfg.cursor_style);
+    try std.testing.expect(!cfg.cursor_blink);
+}
 
 test "parse window theme and terminal sections" {
     var cfg: Config = .{};

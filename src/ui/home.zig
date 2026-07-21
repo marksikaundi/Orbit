@@ -116,6 +116,12 @@ pub const help_rows = [_]HelpRow{
     .{ .note = "Includes themes, font, reload config/plugins, SSH…" },
     .{ .spacer = {} },
 
+    .{ .heading = "Appearance" },
+    .{ .item = .{ .keys = "S / Settings", .desc = "Theme, cursor, shell (←→ to change)" } },
+    .{ .item = .{ .keys = "Ctrl+Shift+P", .desc = "Palette → Theme: … / Cursor: …" } },
+    .{ .note = "Prompt text (zsh/bash) comes from your shell rc — Orbit styles colors & cursor" },
+    .{ .spacer = {} },
+
     .{ .heading = "Config & plugins" },
     .{ .item = .{ .keys = "config.toml", .desc = "~/.config/orbit/config.toml" } },
     .{ .item = .{ .keys = "plugins/", .desc = "~/.config/orbit/plugins/<name>/" } },
