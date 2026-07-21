@@ -1,4 +1,5 @@
 //! Command palette — fuzzy filterable action list (Ctrl+Shift+P).
+//! Combines built-in actions with plugin-registered commands.
 
 const std = @import("std");
 
@@ -22,15 +23,17 @@ pub const Action = enum {
     font_reset,
     settings,
     reload_config,
+    reload_plugins,
+    list_plugins,
 };
 
-pub const Entry = struct {
+pub const BuiltinEntry = struct {
     action: Action,
     label: []const u8,
     hint: []const u8 = "",
 };
 
-pub const catalog = [_]Entry{
+pub const catalog = [_]BuiltinEntry{
     .{ .action = .new_tab, .label = "New Tab", .hint = "Ctrl+Shift+T" },
     .{ .action = .close_tab, .label = "Close Tab", .hint = "Ctrl+Shift+W" },
     .{ .action = .split_right, .label = "Split Right", .hint = "Ctrl+Shift+D" },
@@ -50,15 +53,32 @@ pub const catalog = [_]Entry{
     .{ .action = .font_reset, .label = "Font: Reset Size", .hint = "" },
     .{ .action = .settings, .label = "Settings", .hint = "show config" },
     .{ .action = .reload_config, .label = "Reload Config", .hint = "" },
+    .{ .action = .reload_plugins, .label = "Reload Plugins", .hint = "" },
+    .{ .action = .list_plugins, .label = "List Plugins", .hint = "" },
 };
+
+pub const Item = struct {
+    label: []const u8,
+    hint: []const u8,
+    source: union(enum) {
+        builtin: Action,
+        plugin: struct {
+            plugin_name: []const u8,
+            command_id: []const u8,
+        },
+    },
+};
+
+pub const max_items = 128;
 
 pub const Palette = struct {
     active: bool = false,
     query: [64]u8 = undefined,
     query_len: usize = 0,
     selected: usize = 0,
-    /// Filtered indices into `catalog` (valid while active).
-    matches: [catalog.len]usize = undefined,
+    items: [max_items]Item = undefined,
+    item_count: usize = 0,
+    matches: [max_items]usize = undefined,
     match_count: usize = 0,
 
     pub fn open(self: *Palette) void {
@@ -76,6 +96,34 @@ pub const Palette = struct {
 
     pub fn querySlice(self: *const Palette) []const u8 {
         return self.query[0..self.query_len];
+    }
+
+    pub fn clearItems(self: *Palette) void {
+        self.item_count = 0;
+    }
+
+    pub fn addBuiltin(self: *Palette, entry: BuiltinEntry) void {
+        if (self.item_count >= max_items) return;
+        self.items[self.item_count] = .{
+            .label = entry.label,
+            .hint = entry.hint,
+            .source = .{ .builtin = entry.action },
+        };
+        self.item_count += 1;
+    }
+
+    pub fn addPluginCommand(self: *Palette, label: []const u8, hint: []const u8, plugin_name: []const u8, command_id: []const u8) void {
+        if (self.item_count >= max_items) return;
+        self.items[self.item_count] = .{
+            .label = label,
+            .hint = hint,
+            .source = .{ .plugin = .{ .plugin_name = plugin_name, .command_id = command_id } },
+        };
+        self.item_count += 1;
+    }
+
+    pub fn addAllBuiltins(self: *Palette) void {
+        for (catalog) |e| self.addBuiltin(e);
     }
 
     pub fn inputChar(self: *Palette, codepoint: u32) void {
@@ -108,15 +156,17 @@ pub const Palette = struct {
         }
     }
 
-    pub fn selectedAction(self: *const Palette) ?Action {
+    pub fn selectedItem(self: *const Palette) ?Item {
         if (self.match_count == 0 or self.selected >= self.match_count) return null;
-        return catalog[self.matches[self.selected]].action;
+        return self.items[self.matches[self.selected]];
     }
 
     pub fn refilter(self: *Palette) void {
         self.match_count = 0;
         const q = self.querySlice();
-        for (catalog, 0..) |entry, i| {
+        var i: usize = 0;
+        while (i < self.item_count) : (i += 1) {
+            const entry = self.items[i];
             if (matchesFilter(entry.label, q) or matchesFilter(entry.hint, q)) {
                 self.matches[self.match_count] = i;
                 self.match_count += 1;
@@ -124,7 +174,6 @@ pub const Palette = struct {
         }
     }
 
-    /// Case-insensitive subsequence match (type "nt" → "New Tab").
     fn matchesFilter(text: []const u8, query: []const u8) bool {
         if (query.len == 0) return true;
         var ti: usize = 0;
@@ -151,17 +200,16 @@ pub const Palette = struct {
 
 test "palette filters new tab" {
     var p: Palette = .{};
+    p.addAllBuiltins();
     p.open();
     p.inputChar('n');
     p.inputChar('t');
     try std.testing.expect(p.match_count >= 1);
-    try std.testing.expect(p.selectedAction() == .new_tab or blk: {
-        // "nt" may match multiple; ensure New Tab is among matches
-        var found = false;
-        var i: usize = 0;
-        while (i < p.match_count) : (i += 1) {
-            if (catalog[p.matches[i]].action == .new_tab) found = true;
-        }
-        break :blk found;
-    });
+    var found = false;
+    var i: usize = 0;
+    while (i < p.match_count) : (i += 1) {
+        const item = p.items[p.matches[i]];
+        if (item.source == .builtin and item.source.builtin == .new_tab) found = true;
+    }
+    try std.testing.expect(found);
 }

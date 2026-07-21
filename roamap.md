@@ -354,7 +354,7 @@ Settings
 
 ---
 
-## Phase 6
+## Phase 6 ✅
 
 Plugin System
 

@@ -1,0 +1,38 @@
+name = "hello"
+version = "0.1.0"
+description = "Demo Orbit plugin — commands, theme, and lifecycle hooks"
+
+[[commands]]
+id = "hello.greet"
+label = "Plugin: Hello"
+hint = "status"
+action = "status"
+payload = "Hello from the hello plugin"
+
+[[commands]]
+id = "hello.date"
+label = "Plugin: Insert date"
+hint = "insert"
+action = "insert"
+payload = "date\r"
+
+[[commands]]
+id = "hello.new_tab"
+label = "Plugin: New Tab"
+hint = "host"
+action = "host"
+payload = "new_tab"
+
+[[themes]]
+name = "amber"
+foreground = "#f5e6c8"
+background = "#2a2010"
+cursor = "#ffb000"
+selection = "#5a4020"
+
+[hooks]
+on_load = "status:hello plugin loaded"
+on_workspace_open = "status:hello: workspace opened"
+on_workspace_save = "status:hello: workspace saved"
+# Optional renderer background tint (hex). Comment out to disable.
+# clear_color = "#1a140c"

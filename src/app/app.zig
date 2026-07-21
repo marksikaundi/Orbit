@@ -10,7 +10,9 @@ const Search = @import("../ui/search.zig").Search;
 const Palette = @import("../ui/palette.zig").Palette;
 const palette_mod = @import("../ui/palette.zig");
 const Config = @import("../config/config.zig").Config;
+const theme_mod = @import("../config/theme.zig");
 const WsManager = @import("../workspace/workspace.zig").Manager;
+const PluginRegistry = @import("../plugins/registry.zig").Registry;
 const clipboard = @import("../clipboard/clipboard.zig");
 const bitmap = @import("../font/bitmap.zig");
 const Color = @import("../terminal/cell.zig").Color;
@@ -25,6 +27,7 @@ pub const App = struct {
     tabs: Tabs,
     config: Config,
     workspaces: WsManager,
+    plugins: PluginRegistry,
     search: Search = .{},
     palette: Palette = .{},
     ui: UiMode = .normal,
@@ -60,6 +63,9 @@ pub const App = struct {
         var workspaces = try WsManager.init(allocator, io);
         errdefer workspaces.deinit();
 
+        var plugins = try PluginRegistry.init(allocator, io);
+        errdefer plugins.deinit();
+
         const content = contentRect(window.fb_width, window.fb_height);
         const cols, const rows = gridSizeWithCell(content.w, content.h, @floatFromInt(bitmap.glyph_width), @floatFromInt(bitmap.glyph_height));
         const session = try Session.create(allocator, cols, rows, "Shell");
@@ -75,6 +81,7 @@ pub const App = struct {
             .tabs = tabs,
             .config = config,
             .workspaces = workspaces,
+            .plugins = plugins,
         };
 
         Window.active = self;
@@ -85,16 +92,20 @@ pub const App = struct {
         Window.on_scroll = onScroll;
 
         self.updateWindowTitle();
+        self.fireHooks(.on_load);
+        self.applyRendererHooks();
         return self;
     }
 
     pub fn destroy(self: *App) void {
+        self.fireHooks(.on_unload);
         Window.active = null;
         Window.on_char = null;
         Window.on_key = null;
         Window.on_mouse_button = null;
         Window.on_cursor_pos = null;
         Window.on_scroll = null;
+        self.plugins.deinit();
         self.workspaces.deinit();
         self.tabs.deinit();
         self.renderer.deinit();
@@ -289,7 +300,7 @@ pub const App = struct {
         } else {
             var i: usize = 0;
             while (i < visible) : (i += 1) {
-                const entry = palette_mod.catalog[self.palette.matches[i]];
+                const entry = self.palette.items[self.palette.matches[i]];
                 const ry = y + header + @as(i32, @intCast(i)) * row_h;
                 if (i == self.palette.selected) {
                     try self.renderer.drawRect(x + 8, ry, w - 16, row_h, Color.rgb(50, 80, 120), 1.0);
@@ -329,7 +340,7 @@ pub const App = struct {
         try self.renderer.drawText(x + 16, y + 44, t1, Color.rgb(200, 210, 220));
         const t2 = std.fmt.bufPrint(&line, "Opacity: {d:.2}  Font scale: {d:.2}", .{ self.config.opacity, self.renderer.font_scale }) catch "";
         try self.renderer.drawText(x + 16, y + 66, t2, Color.rgb(200, 210, 220));
-        const t3 = std.fmt.bufPrint(&line, "Scrollback: {d}  Config: ~/.config/orbit/", .{self.config.scrollback}) catch "";
+        const t3 = std.fmt.bufPrint(&line, "Scrollback: {d}  Plugins: {d}", .{ self.config.scrollback, self.plugins.count() }) catch "";
         try self.renderer.drawText(x + 16, y + 88, t3, Color.rgb(200, 210, 220));
         if (self.workspaces.current_name) |wn| {
             const t4 = std.fmt.bufPrint(&line, "Workspace: {s}", .{wn}) catch "";
@@ -472,6 +483,7 @@ pub const App = struct {
         if (ctrl and shift) {
             switch (key) {
                 c.GLFW_KEY_P => {
+                    self.rebuildPalette();
                     self.palette.open();
                     self.ui = .palette;
                     self.status_len = 0;
@@ -566,10 +578,13 @@ pub const App = struct {
             c.GLFW_KEY_DOWN => self.palette.moveDown(),
             c.GLFW_KEY_BACKSPACE => self.palette.backspace(),
             c.GLFW_KEY_ENTER => {
-                if (self.palette.selectedAction()) |act| {
+                if (self.palette.selectedItem()) |item| {
                     self.palette.close();
                     self.ui = .normal;
-                    self.runAction(act);
+                    switch (item.source) {
+                        .builtin => |act| self.runAction(act),
+                        .plugin => |p| self.runPluginCommand(p.plugin_name, p.command_id),
+                    }
                 }
             },
             else => {},
@@ -639,6 +654,124 @@ pub const App = struct {
                 self.applyTheme(self.config.theme_name);
                 self.setStatus("config reloaded");
             },
+            .reload_plugins => {
+                self.plugins.reload() catch {
+                    self.setStatus("plugin reload failed");
+                    return;
+                };
+                self.fireHooks(.on_load);
+                self.applyRendererHooks();
+                var buf: [64]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "plugins: {d} loaded", .{self.plugins.count()}) catch "plugins reloaded";
+                self.setStatus(msg);
+            },
+            .list_plugins => self.showPluginList(),
+        }
+    }
+
+    fn rebuildPalette(self: *App) void {
+        self.palette.clearItems();
+        self.palette.addAllBuiltins();
+        for (self.plugins.plugins.items) |*p| {
+            if (!p.enabled) continue;
+            for (p.commands) |cmd| {
+                self.palette.addPluginCommand(cmd.label, cmd.hint, p.name, cmd.id);
+            }
+            for (p.themes) |t| {
+                self.palette.addPluginCommand(t.name, "plugin theme", p.name, t.name);
+            }
+        }
+    }
+
+    fn runPluginCommand(self: *App, plugin_name: []const u8, command_id: []const u8) void {
+        if (self.plugins.findCommand(plugin_name, command_id)) |cmd| {
+            switch (cmd.kind) {
+                .insert => {
+                    if (self.focused()) |s| s.write(cmd.payload);
+                    self.setStatus("plugin insert");
+                },
+                .status => self.setStatus(cmd.payload),
+                .theme => self.applyTheme(cmd.payload),
+                .host => self.runHostPayload(cmd.payload),
+            }
+            return;
+        }
+        if (self.plugins.findTheme(command_id) != null) {
+            self.applyTheme(command_id);
+            return;
+        }
+        self.setStatus("plugin command missing");
+    }
+
+    fn runHostPayload(self: *App, payload: []const u8) void {
+        if (std.mem.eql(u8, payload, "new_tab")) {
+            self.runAction(.new_tab);
+        } else if (std.mem.eql(u8, payload, "open_workspace")) {
+            self.runAction(.open_workspace);
+        } else if (std.mem.eql(u8, payload, "save_workspace")) {
+            self.runAction(.save_workspace);
+        } else if (std.mem.eql(u8, payload, "split_right")) {
+            self.runAction(.split_right);
+        } else if (std.mem.eql(u8, payload, "search")) {
+            self.runAction(.search);
+        } else {
+            self.setStatus(payload);
+        }
+    }
+
+    fn showPluginList(self: *App) void {
+        if (self.plugins.count() == 0) {
+            self.setStatus("no plugins (~/.config/orbit/plugins)");
+            return;
+        }
+        var buf: [96]u8 = undefined;
+        var len: usize = 0;
+        const prefix = "plugins:";
+        @memcpy(buf[0..prefix.len], prefix);
+        len = prefix.len;
+        for (self.plugins.plugins.items) |p| {
+            if (len + 1 + p.name.len > buf.len) break;
+            buf[len] = ' ';
+            len += 1;
+            @memcpy(buf[len..][0..p.name.len], p.name);
+            len += p.name.len;
+        }
+        self.setStatus(buf[0..len]);
+    }
+
+    fn fireHooks(self: *App, which: enum { on_load, on_unload, on_workspace_open, on_workspace_save }) void {
+        const Ctx = struct {
+            app: *App,
+            fn cb(ctx: *@This(), payload: []const u8) void {
+                ctx.app.runHookPayload(payload);
+            }
+        };
+        var ctx: Ctx = .{ .app = self };
+        switch (which) {
+            .on_load => self.plugins.forEachHook(.on_load, *Ctx, &ctx, Ctx.cb),
+            .on_unload => self.plugins.forEachHook(.on_unload, *Ctx, &ctx, Ctx.cb),
+            .on_workspace_open => self.plugins.forEachHook(.on_workspace_open, *Ctx, &ctx, Ctx.cb),
+            .on_workspace_save => self.plugins.forEachHook(.on_workspace_save, *Ctx, &ctx, Ctx.cb),
+        }
+    }
+
+    fn runHookPayload(self: *App, payload: []const u8) void {
+        if (std.mem.startsWith(u8, payload, "status:")) {
+            self.setStatus(payload["status:".len..]);
+        } else if (std.mem.startsWith(u8, payload, "insert:")) {
+            if (self.focused()) |s| s.write(payload["insert:".len..]);
+        } else if (std.mem.startsWith(u8, payload, "theme:")) {
+            self.applyTheme(payload["theme:".len..]);
+        } else {
+            self.setStatus(payload);
+        }
+    }
+
+    fn applyRendererHooks(self: *App) void {
+        if (self.plugins.rendererClearColor()) |col| {
+            var theme = self.renderer.theme;
+            theme.background = col;
+            self.renderer.setTheme(theme);
         }
     }
 
@@ -647,9 +780,8 @@ pub const App = struct {
             self.setStatus("theme failed");
             return;
         };
-        const theme = self.config.theme();
+        const theme = if (self.plugins.findTheme(name)) |t| t else theme_mod.byName(name);
         self.renderer.setTheme(theme);
-        // Apply to all sessions
         for (self.tabs.items.items) |*tab| {
             var list: std.ArrayList(*Session) = .empty;
             defer list.deinit(self.allocator);
@@ -658,6 +790,7 @@ pub const App = struct {
                 s.setTheme(theme.foreground, theme.background);
             }
         }
+        self.applyRendererHooks();
         self.setStatus("theme applied");
     }
 
@@ -734,6 +867,7 @@ pub const App = struct {
                     return;
                 };
                 self.updateWindowTitle();
+                self.fireHooks(.on_workspace_save);
                 self.setStatus("workspace saved");
                 self.ui = .normal;
             },
@@ -759,6 +893,7 @@ pub const App = struct {
         );
         self.resizeAllSessions();
         self.updateWindowTitle();
+        self.fireHooks(.on_workspace_open);
         self.setStatus("workspace loaded");
     }
 

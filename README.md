@@ -72,15 +72,13 @@ Example workspaces: Backend, Frontend, Production, University.
 
 ### Later
 
-- **Command palette** (`Ctrl+Shift+P`) — new tab, split, open workspace, SSH, theme, font, settings
-- **Plugin system** — commands, themes, renderer hooks, workspace hooks, lifecycle
 - **Optional AI assistant** — offline or cloud; explain errors and suggest commands; never executes automatically
 
 ---
 
 ## Status
 
-**Phases 1–5 are implemented.** Terminal foundations through workspaces, plus a command palette (`Ctrl+Shift+P`). Plugin system is next (Phase 6). See [roamap.md](roamap.md).
+**Phases 1–6 are implemented.** Terminal foundations through the command palette, plus a manifest-based plugin system (commands, themes, hooks). Optional AI assistant is next (Phase 7). See [roamap.md](roamap.md).
 
 ---
 
@@ -302,7 +300,18 @@ Optional config: copy `assets/config.example.toml` to `~/.config/orbit/config.to
 
 Workspaces are stored in `~/.config/orbit/workspaces/<name>.toml`.
 
-Palette commands include New Tab, Split Right/Down, Open/Save Workspace, SSH, Theme, Font size, Settings, and Reload Config.
+Palette commands include New Tab, Split Right/Down, Open/Save Workspace, SSH, Theme, Font size, Settings, Reload Config/Plugins, and any commands contributed by plugins.
+
+### Plugins (Phase 6)
+
+Install a plugin by copying a folder with `plugin.toml` into `~/.config/orbit/plugins/<name>/`:
+
+```bash
+mkdir -p ~/.config/orbit/plugins/hello
+cp assets/plugins/hello/plugin.toml ~/.config/orbit/plugins/hello/
+```
+
+Then **Ctrl+Shift+P** → “Reload Plugins” (or restart Orbit). Plugin commands and themes appear in the palette.
 
 Logging levels planned: Debug, Info, Warn, Error, Trace.
 
