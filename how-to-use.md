@@ -97,16 +97,23 @@ On home press **L** (or **5**) to open the Plugins panel:
 - See what plugins can do (commands, UI, tools, automation, cloud, sharing)
 - List installed plugins and **Space/Enter** to enable/disable
 - **R** reload from disk
-- **I** install the built-in **hello** demo plugin
+- **I** install the bundled pack: **hello**, **git**, **devtools**, **themes**, **workflow**
 
-Or manually:
+| Plugin | What you get |
+| --- | --- |
+| `hello` | Demo commands + amber theme |
+| `git` | Status, diff, log, branch, pull, push, stash |
+| `devtools` | pwd, ls, tree, clear, disk, ports, env |
+| `themes` | ocean, forest, midnight, rose |
+| `workflow` | New tab, split, open/save workspace, search |
+
+Or copy from the repo:
 
 ```bash
-mkdir -p ~/.config/orbit/plugins/hello
-cp assets/plugins/hello/plugin.toml ~/.config/orbit/plugins/hello/
+cp -R assets/plugins/* ~/.config/orbit/plugins/
 ```
 
-Then **R** in the Plugins panel (or palette → Reload Plugins). Plugin commands and themes appear in the command palette.
+Then **R** in the Plugins panel. Commands and themes appear in **Ctrl+Shift+P**.
 
 ## Command palette (Phase 5)
 

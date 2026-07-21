@@ -800,28 +800,24 @@ pub const App = struct {
         try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.45);
 
         const pad_x = @max(24, cw + 10);
-        const pad_y = @max(18, @divTrunc(ch, 2) + 6);
+        const pad_y = @max(16, @divTrunc(ch, 2) + 6);
         const row_h = ch + @divTrunc(ch, 2) + 4;
         const title_h = ch + 4;
-        const gap = @max(10, @divTrunc(ch, 2));
-        const cap_lines = [_][]const u8{
-            "Add new commands and utilities",
-            "Customize the UI",
-            "Integrate with development tools",
-            "Automate repetitive workflows",
-            "Connect to cloud services",
-            "Share extensions with others",
-        };
+        const gap = @max(8, @divTrunc(ch, 3));
         const footer_lines = 3;
         const plugin_n = self.plugins.count();
-        const list_rows = @max(@as(usize, 1), plugin_n);
 
         const max_w = fb_w - cw * 4;
-        const w = @min(@max(cw * 52, 580), max_w);
-        const caps_h = @as(i32, @intCast(cap_lines.len)) * (ch + 2) + gap;
-        const list_h = @as(i32, @intCast(list_rows)) * row_h + ch + 4;
+        const w = @min(@max(cw * 52, 560), max_w);
+
+        // Keep the panel within the window; scroll the plugin list if needed.
+        const header_h = pad_y + title_h + ch * 3 + gap * 2;
         const footer_h = footer_lines * (ch + 4) + pad_y;
-        const h = pad_y + title_h + ch + gap + caps_h + gap + list_h + footer_h;
+        const avail_list = @max(row_h, fb_h - header_h - footer_h - ch * 2);
+        const max_visible: usize = @max(1, @as(usize, @intCast(@divTrunc(avail_list, row_h))));
+        const list_rows = @max(@as(usize, 1), @min(plugin_n, max_visible));
+        const list_h = @as(i32, @intCast(list_rows)) * row_h + 4;
+        const h = header_h + list_h + footer_h;
         const x = @divTrunc(fb_w - w, 2);
         const y = @max(ch, @divTrunc(fb_h - h, 2));
 
@@ -840,33 +836,38 @@ pub const App = struct {
         var cy = y + pad_y;
         try self.renderer.drawText(x + pad_x, cy, "Plugins", fg);
         cy += title_h;
-        try self.renderer.drawText(x + pad_x, cy, "Extend Orbit — commands, themes, hooks, workflows", muted);
+        try self.renderer.drawText(x + pad_x, cy, "Commands, themes, tools, automation, and more", muted);
+        cy += ch + 4;
+        try self.renderer.drawText(x + pad_x, cy, "Pack: hello  git  devtools  themes  workflow", dim);
         cy += ch + gap;
 
-        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
-        try self.renderer.drawText(x + pad_x, cy, "Plugins allow you to:", muted);
-        cy += ch + 4;
-        for (cap_lines) |line| {
-            try self.renderer.drawText(x + pad_x + 4, cy, "-", dim);
-            try self.renderer.drawText(x + pad_x + cw * 2, cy, line, fg);
-            cy += ch + 2;
-        }
-        cy += gap;
-        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
+        try self.renderer.drawRect(x + pad_x - 4, cy - 2, w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
 
-        var count_buf: [48]u8 = undefined;
+        var count_buf: [64]u8 = undefined;
         const count_line = std.fmt.bufPrint(&count_buf, "Installed  ({d})", .{plugin_n}) catch "Installed";
         try self.renderer.drawText(x + pad_x, cy, count_line, muted);
+        if (plugin_n < 5) {
+            try self.renderer.drawText(x + pad_x + cw * 18, cy, "press I for full pack", accent);
+        }
         cy += ch + 4;
 
+        const list_top = cy;
         if (plugin_n == 0) {
-            try self.renderer.drawText(x + pad_x + 6, cy + @divTrunc(row_h - ch, 2), "(none yet — press I to install the hello demo)", dim);
+            try self.renderer.drawText(x + pad_x + 6, cy + @divTrunc(row_h - ch, 2), "(none yet — press I to install bundled plugins)", dim);
         } else {
             if (self.plugin_row >= plugin_n) self.plugin_row = plugin_n - 1;
-            for (self.plugins.plugins.items, 0..) |p, i| {
-                const ry = cy + @as(i32, @intCast(i)) * row_h;
+            var start: usize = 0;
+            if (self.plugin_row >= max_visible) {
+                start = self.plugin_row + 1 - max_visible;
+            }
+            const visible = @min(plugin_n - start, max_visible);
+            var i: usize = 0;
+            while (i < visible) : (i += 1) {
+                const mi = start + i;
+                const p = self.plugins.plugins.items[mi];
+                const ry = list_top + @as(i32, @intCast(i)) * row_h;
                 const text_y = ry + @divTrunc(row_h - ch, 2);
-                const selected = i == self.plugin_row;
+                const selected = mi == self.plugin_row;
                 if (selected) {
                     try self.renderer.drawRect(x + 10, ry, w - 20, row_h - 2, sel_bg, 1.0);
                     try self.renderer.drawRect(x + 10, ry, 3, row_h - 2, accent, 1.0);
@@ -874,8 +875,13 @@ pub const App = struct {
 
                 const state = if (p.enabled) "on" else "off";
                 var line_buf: [96]u8 = undefined;
-                const line = std.fmt.bufPrint(&line_buf, "{s}  v{s}", .{ p.name, p.version }) catch p.name;
-                const shown = line[0..@min(line.len, 36)];
+                const desc = if (p.description.len > 0) p.description else "";
+                const line = if (desc.len > 0)
+                    (std.fmt.bufPrint(&line_buf, "{s}  -  {s}", .{ p.name, desc }) catch p.name)
+                else
+                    (std.fmt.bufPrint(&line_buf, "{s}  v{s}", .{ p.name, p.version }) catch p.name);
+                const max_chars = @max(8, @divTrunc(w - pad_x * 2 - cw * 6, cw));
+                const shown = line[0..@min(line.len, @as(usize, @intCast(max_chars)))];
                 try self.renderer.drawText(x + pad_x + 6, text_y, shown, if (selected) fg else muted);
 
                 const state_x = x + w - pad_x - @as(i32, @intCast(state.len)) * cw;
@@ -886,9 +892,9 @@ pub const App = struct {
         cy = y + h - footer_h;
         try self.renderer.drawText(x + pad_x, cy, "~/.config/orbit/plugins/<name>/plugin.toml", dim);
         cy += ch + 4;
-        try self.renderer.drawText(x + pad_x, cy, "Up/Down select    Space/Enter toggle    R reload", dim);
+        try self.renderer.drawText(x + pad_x, cy, "Up/Down select    Space toggle    R reload", dim);
         cy += ch + 4;
-        try self.renderer.drawText(x + pad_x, cy, "I install hello demo    Esc close", dim);
+        try self.renderer.drawText(x + pad_x, cy, "I install/update full pack (5 plugins)    Esc close", dim);
     }
 
     fn drawWorkspacePicker(self: *App) !void {
@@ -1411,7 +1417,7 @@ pub const App = struct {
             },
             c.GLFW_KEY_ENTER, c.GLFW_KEY_SPACE => self.toggleSelectedPlugin(),
             c.GLFW_KEY_R => self.reloadPluginsFromPanel(),
-            c.GLFW_KEY_I => self.installHelloPlugin(),
+            c.GLFW_KEY_I => self.installBundledPlugins(),
             else => {},
         }
     }
@@ -1448,83 +1454,299 @@ pub const App = struct {
         self.setStatus(msg);
     }
 
-    /// Write the bundled hello demo into ~/.config/orbit/plugins/hello/ and reload.
-    fn installHelloPlugin(self: *App) void {
-        const toml =
-            \\name = "hello"
-            \\version = "0.1.0"
-            \\description = "Demo Orbit plugin — commands, theme, and lifecycle hooks"
-            \\
-            \\[[commands]]
-            \\id = "hello.greet"
-            \\label = "Plugin: Hello"
-            \\hint = "status"
-            \\action = "status"
-            \\payload = "Hello from the hello plugin"
-            \\
-            \\[[commands]]
-            \\id = "hello.date"
-            \\label = "Plugin: Insert date"
-            \\hint = "insert"
-            \\action = "insert"
-            \\payload = "date\r"
-            \\
-            \\[[commands]]
-            \\id = "hello.new_tab"
-            \\label = "Plugin: New Tab"
-            \\hint = "host"
-            \\action = "host"
-            \\payload = "new_tab"
-            \\
-            \\[[themes]]
-            \\name = "amber"
-            \\foreground = "#f5e6c8"
-            \\background = "#2a2010"
-            \\cursor = "#ffb000"
-            \\selection = "#5a4020"
-            \\
-            \\[hooks]
-            \\on_load = "status:hello plugin loaded"
-            \\on_workspace_open = "status:hello: workspace opened"
-            \\on_workspace_save = "status:hello: workspace saved"
-            \\
-        ;
-
-        const dir = self.plugins.dir_path;
-        const hello_dir = std.fmt.allocPrint(self.allocator, "{s}/hello", .{dir}) catch {
-            self.setStatus("install failed");
-            return;
+    /// Install the bundled plugin pack (hello, git, devtools, themes, workflow).
+    fn installBundledPlugins(self: *App) void {
+        const Bundle = struct { name: []const u8, toml: []const u8 };
+        const pack = [_]Bundle{
+            .{
+                .name = "hello",
+                .toml =
+                \\name = "hello"
+                \\version = "0.1.0"
+                \\description = "Demo Orbit plugin — commands, theme, and lifecycle hooks"
+                \\
+                \\[[commands]]
+                \\id = "hello.greet"
+                \\label = "Plugin: Hello"
+                \\hint = "status"
+                \\action = "status"
+                \\payload = "Hello from the hello plugin"
+                \\
+                \\[[commands]]
+                \\id = "hello.date"
+                \\label = "Plugin: Insert date"
+                \\hint = "insert"
+                \\action = "insert"
+                \\payload = "date\r"
+                \\
+                \\[[commands]]
+                \\id = "hello.new_tab"
+                \\label = "Plugin: New Tab"
+                \\hint = "host"
+                \\action = "host"
+                \\payload = "new_tab"
+                \\
+                \\[[themes]]
+                \\name = "amber"
+                \\foreground = "#f5e6c8"
+                \\background = "#2a2010"
+                \\cursor = "#ffb000"
+                \\selection = "#5a4020"
+                \\
+                \\[hooks]
+                \\on_load = "status:hello plugin loaded"
+                \\on_workspace_open = "status:hello: workspace opened"
+                \\on_workspace_save = "status:hello: workspace saved"
+                \\
+                ,
+            },
+            .{
+                .name = "git",
+                .toml =
+                \\name = "git"
+                \\version = "0.1.0"
+                \\description = "Git shortcuts — status, diff, log, branch, pull, push"
+                \\
+                \\[[commands]]
+                \\id = "git.status"
+                \\label = "Git: Status"
+                \\hint = "git status"
+                \\action = "insert"
+                \\payload = "git status\r"
+                \\
+                \\[[commands]]
+                \\id = "git.diff"
+                \\label = "Git: Diff"
+                \\hint = "git diff"
+                \\action = "insert"
+                \\payload = "git diff\r"
+                \\
+                \\[[commands]]
+                \\id = "git.log"
+                \\label = "Git: Log"
+                \\hint = "oneline"
+                \\action = "insert"
+                \\payload = "git log --oneline -20\r"
+                \\
+                \\[[commands]]
+                \\id = "git.branch"
+                \\label = "Git: Branches"
+                \\hint = "git branch"
+                \\action = "insert"
+                \\payload = "git branch -vv\r"
+                \\
+                \\[[commands]]
+                \\id = "git.pull"
+                \\label = "Git: Pull"
+                \\hint = "git pull"
+                \\action = "insert"
+                \\payload = "git pull\r"
+                \\
+                \\[[commands]]
+                \\id = "git.push"
+                \\label = "Git: Push"
+                \\hint = "git push"
+                \\action = "insert"
+                \\payload = "git push\r"
+                \\
+                \\[[commands]]
+                \\id = "git.stash"
+                \\label = "Git: Stash"
+                \\hint = "git stash"
+                \\action = "insert"
+                \\payload = "git stash push -u\r"
+                \\
+                \\[hooks]
+                \\on_load = "status:git plugin ready"
+                \\on_workspace_open = "status:git: workspace opened"
+                \\
+                ,
+            },
+            .{
+                .name = "devtools",
+                .toml =
+                \\name = "devtools"
+                \\version = "0.1.0"
+                \\description = "Everyday shell utilities for navigating and inspecting projects"
+                \\
+                \\[[commands]]
+                \\id = "dev.pwd"
+                \\label = "Dev: Print cwd"
+                \\hint = "pwd"
+                \\action = "insert"
+                \\payload = "pwd\r"
+                \\
+                \\[[commands]]
+                \\id = "dev.ls"
+                \\label = "Dev: List files"
+                \\hint = "ls -la"
+                \\action = "insert"
+                \\payload = "ls -la\r"
+                \\
+                \\[[commands]]
+                \\id = "dev.tree"
+                \\label = "Dev: Tree (depth 2)"
+                \\hint = "find"
+                \\action = "insert"
+                \\payload = "find . -maxdepth 2 -not -path '*/.*' | head -80\r"
+                \\
+                \\[[commands]]
+                \\id = "dev.clear"
+                \\label = "Dev: Clear screen"
+                \\hint = "clear"
+                \\action = "insert"
+                \\payload = "clear\r"
+                \\
+                \\[[commands]]
+                \\id = "dev.disk"
+                \\label = "Dev: Disk usage here"
+                \\hint = "du"
+                \\action = "insert"
+                \\payload = "du -sh ./* 2>/dev/null | sort -h | tail -20\r"
+                \\
+                \\[[commands]]
+                \\id = "dev.ports"
+                \\label = "Dev: Listening ports"
+                \\hint = "lsof"
+                \\action = "insert"
+                \\payload = "lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | head -30\r"
+                \\
+                \\[[commands]]
+                \\id = "dev.env"
+                \\label = "Dev: Path & shell"
+                \\hint = "echo"
+                \\action = "insert"
+                \\payload = "echo \"SHELL=$SHELL\" && echo \"PATH=$PATH\" | tr ':' '\\n' | head -20\r"
+                \\
+                \\[hooks]
+                \\on_load = "status:devtools ready"
+                \\
+                ,
+            },
+            .{
+                .name = "themes",
+                .toml =
+                \\name = "themes"
+                \\version = "0.1.0"
+                \\description = "Extra color themes — ocean, forest, midnight, rose"
+                \\
+                \\[[themes]]
+                \\name = "ocean"
+                \\foreground = "#d8eef8"
+                \\background = "#0b1c28"
+                \\cursor = "#5ec8f0"
+                \\selection = "#1e4a62"
+                \\
+                \\[[themes]]
+                \\name = "forest"
+                \\foreground = "#e4efd8"
+                \\background = "#142018"
+                \\cursor = "#8fbf5a"
+                \\selection = "#2a4030"
+                \\
+                \\[[themes]]
+                \\name = "midnight"
+                \\foreground = "#e8e6f5"
+                \\background = "#12101c"
+                \\cursor = "#a090ff"
+                \\selection = "#2a2440"
+                \\
+                \\[[themes]]
+                \\name = "rose"
+                \\foreground = "#ffe8ee"
+                \\background = "#1c1014"
+                \\cursor = "#ff8aab"
+                \\selection = "#4a2030"
+                \\
+                \\[hooks]
+                \\on_load = "status:themes plugin ready"
+                \\
+                ,
+            },
+            .{
+                .name = "workflow",
+                .toml =
+                \\name = "workflow"
+                \\version = "0.1.0"
+                \\description = "Workflow helpers — tabs, splits, search, workspace shortcuts"
+                \\
+                \\[[commands]]
+                \\id = "wf.new_tab"
+                \\label = "Workflow: New Tab"
+                \\hint = "host"
+                \\action = "host"
+                \\payload = "new_tab"
+                \\
+                \\[[commands]]
+                \\id = "wf.split_right"
+                \\label = "Workflow: Split Right"
+                \\hint = "host"
+                \\action = "host"
+                \\payload = "split_right"
+                \\
+                \\[[commands]]
+                \\id = "wf.open_workspace"
+                \\label = "Workflow: Open Workspace"
+                \\hint = "host"
+                \\action = "host"
+                \\payload = "open_workspace"
+                \\
+                \\[[commands]]
+                \\id = "wf.save_workspace"
+                \\label = "Workflow: Save Workspace"
+                \\hint = "host"
+                \\action = "host"
+                \\payload = "save_workspace"
+                \\
+                \\[[commands]]
+                \\id = "wf.search"
+                \\label = "Workflow: Search"
+                \\hint = "host"
+                \\action = "host"
+                \\payload = "search"
+                \\
+                \\[[commands]]
+                \\id = "wf.tip"
+                \\label = "Workflow: Tip"
+                \\hint = "status"
+                \\action = "status"
+                \\payload = "Tip: Ctrl+Shift+P for palette · L for Plugins · Cmd+Shift+F for Search"
+                \\
+                \\[hooks]
+                \\on_load = "status:workflow helpers ready"
+                \\on_workspace_save = "status:workflow: workspace saved"
+                \\
+                ,
+            },
         };
-        defer self.allocator.free(hello_dir);
 
-        // mkdir -p
-        var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
-        if (hello_dir.len >= path_buf.len) {
-            self.setStatus("path too long");
-            return;
+        var installed: usize = 0;
+        for (pack) |item| {
+            if (self.writePluginToml(item.name, item.toml)) installed += 1;
         }
-        @memcpy(path_buf[0..hello_dir.len], hello_dir);
-        path_buf[hello_dir.len] = 0;
-        _ = std.c.mkdir(path_buf[0..hello_dir.len :0], 0o755);
+        self.reloadPluginsFromPanel();
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "installed {d} plugins", .{installed}) catch "plugins installed";
+        self.setStatus(msg);
+    }
 
-        const toml_path = std.fmt.allocPrint(self.allocator, "{s}/plugin.toml", .{hello_dir}) catch {
-            self.setStatus("install failed");
-            return;
-        };
+    fn writePluginToml(self: *App, name: []const u8, toml: []const u8) bool {
+        const plugin_dir = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.plugins.dir_path, name }) catch return false;
+        defer self.allocator.free(plugin_dir);
+
+        var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+        if (plugin_dir.len >= path_buf.len) return false;
+        @memcpy(path_buf[0..plugin_dir.len], plugin_dir);
+        path_buf[plugin_dir.len] = 0;
+        _ = std.c.mkdir(path_buf[0..plugin_dir.len :0], 0o755);
+
+        const toml_path = std.fmt.allocPrint(self.allocator, "{s}/plugin.toml", .{plugin_dir}) catch return false;
         defer self.allocator.free(toml_path);
 
-        const file = std.Io.Dir.createFileAbsolute(self.io, toml_path, .{}) catch {
-            self.setStatus("could not write plugin.toml");
-            return;
-        };
+        const file = std.Io.Dir.createFileAbsolute(self.io, toml_path, .{}) catch return false;
         defer file.close(self.io);
-        file.writeStreamingAll(self.io, toml) catch {
-            self.setStatus("could not write plugin.toml");
-            return;
-        };
-
-        self.reloadPluginsFromPanel();
-        self.setStatus("installed hello plugin");
+        file.writeStreamingAll(self.io, toml) catch return false;
+        return true;
     }
 
     fn handleSettingsKey(self: *App, key: c_int) void {

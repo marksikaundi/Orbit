@@ -1,0 +1,49 @@
+name = "workflow"
+version = "0.1.0"
+description = "Workflow helpers — tabs, splits, search, workspace shortcuts"
+
+[[commands]]
+id = "wf.new_tab"
+label = "Workflow: New Tab"
+hint = "host"
+action = "host"
+payload = "new_tab"
+
+[[commands]]
+id = "wf.split_right"
+label = "Workflow: Split Right"
+hint = "host"
+action = "host"
+payload = "split_right"
+
+[[commands]]
+id = "wf.open_workspace"
+label = "Workflow: Open Workspace"
+hint = "host"
+action = "host"
+payload = "open_workspace"
+
+[[commands]]
+id = "wf.save_workspace"
+label = "Workflow: Save Workspace"
+hint = "host"
+action = "host"
+payload = "save_workspace"
+
+[[commands]]
+id = "wf.search"
+label = "Workflow: Search"
+hint = "host"
+action = "host"
+payload = "search"
+
+[[commands]]
+id = "wf.tip"
+label = "Workflow: Tip"
+hint = "status"
+action = "status"
+payload = "Tip: Ctrl+Shift+P for palette · L for Plugins · Cmd+Shift+F for Search"
+
+[hooks]
+on_load = "status:workflow helpers ready"
+on_workspace_save = "status:workflow: workspace saved"

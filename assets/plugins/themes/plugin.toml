@@ -1,0 +1,34 @@
+name = "themes"
+version = "0.1.0"
+description = "Extra color themes — ocean, forest, midnight, rose"
+
+[[themes]]
+name = "ocean"
+foreground = "#d8eef8"
+background = "#0b1c28"
+cursor = "#5ec8f0"
+selection = "#1e4a62"
+
+[[themes]]
+name = "forest"
+foreground = "#e4efd8"
+background = "#142018"
+cursor = "#8fbf5a"
+selection = "#2a4030"
+
+[[themes]]
+name = "midnight"
+foreground = "#e8e6f5"
+background = "#12101c"
+cursor = "#a090ff"
+selection = "#2a2440"
+
+[[themes]]
+name = "rose"
+foreground = "#ffe8ee"
+background = "#1c1014"
+cursor = "#ff8aab"
+selection = "#4a2030"
+
+[hooks]
+on_load = "status:themes plugin — try ocean / forest / midnight / rose"
