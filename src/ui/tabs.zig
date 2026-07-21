@@ -88,3 +88,12 @@ pub const Tabs = struct {
         self.active = @min(index, self.items.items.len - 1);
     }
 
+    pub fn tickAll(self: *Tabs) void {
+        for (self.items.items) |*tab| {
+            tab.layout.tickAll();
+        }
+    }
+
+    pub const bar_height: i32 = 28;
+};
+

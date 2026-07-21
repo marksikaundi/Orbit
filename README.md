@@ -80,7 +80,7 @@ Example workspaces: Backend, Frontend, Production, University.
 
 ## Status
 
-**Phases 1–3 are implemented.** Window, PTY, shell I/O, GPU text, ANSI/colors, resize, scrollback, selection/clipboard, tabs, splits, search, themes, TOML config, and window opacity. Workspaces and the command palette come next (Phases 4–5). See [roamap.md](roamap.md).
+**Phases 1–4 are implemented.** Terminal foundations, ANSI/colors/selection, tabs/splits/search/config, and Orbit Workspaces (save/restore cwd, tabs, splits, shell, layout). Command palette is next (Phase 5). See [roamap.md](roamap.md).
 
 ---
 
@@ -280,7 +280,7 @@ zig build test     # unit tests (screen + parser)
 
 Optional config: copy `assets/config.example.toml` to `~/.config/orbit/config.toml`.
 
-### Shortcuts (Phases 2–3)
+### Shortcuts (Phases 2–4)
 
 | Shortcut | Action |
 | -------- | ------ |
@@ -294,8 +294,12 @@ Optional config: copy `assets/config.example.toml` to `~/.config/orbit/config.to
 | `Ctrl+Shift+F` | Search |
 | `Ctrl/Cmd+Shift+C` | Copy selection |
 | `Ctrl/Cmd+Shift+V` | Paste |
+| `Ctrl+Shift+O` | Open workspace picker |
+| `Ctrl+Shift+S` | Save current layout as workspace |
 | Drag + release | Select text (copies on release) |
 | Scroll / PageUp/Down | Scrollback |
+
+Workspaces are stored in `~/.config/orbit/workspaces/<name>.toml`.
 
 Logging levels planned: Debug, Info, Warn, Error, Trace.
 

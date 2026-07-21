@@ -494,8 +494,7 @@ pub const App = struct {
             c.GLFW_KEY_ENTER => {
                 if (self.save_name_len == 0) return;
                 const name = self.save_name[0..self.save_name_len];
-                self.workspaces.saveTabs(name, &self.tabs) catch |err| {
-                    _ = err;
+                self.workspaces.saveTabs(name, &self.tabs) catch {
                     self.setStatus("save failed");
                     self.ui = .normal;
                     return;

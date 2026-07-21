@@ -139,11 +139,11 @@ pub const Manager = struct {
     pub fn deleteWorkspace(self: *Manager, name: []const u8) !void {
         const path = try self.pathFor(name);
         defer self.allocator.free(path);
-        var path_z: [std.fs.max_path_bytes]u8 = undefined;
-        if (path.len + 1 > path_z.len) return error.PathTooLong;
+        var path_z: [std.fs.max_path_bytes:0]u8 = undefined;
+        if (path.len >= path_z.len) return error.PathTooLong;
         @memcpy(path_z[0..path.len], path);
         path_z[path.len] = 0;
-        _ = std.c.unlink(&path_z);
+        _ = std.c.unlink(path_z[0..path.len :0]);
         if (self.current_name) |cur| {
             if (std.mem.eql(u8, cur, name)) {
                 self.allocator.free(cur);
@@ -288,14 +288,14 @@ fn appendEscaped(out: *std.ArrayList(u8), allocator: std.mem.Allocator, s: []con
 }
 
 fn ensureDir(path: []const u8) void {
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (path.len + 1 > buf.len) return;
+    var buf: [std.fs.max_path_bytes:0]u8 = undefined;
+    if (path.len >= buf.len) return;
     var i: usize = 1;
     while (i <= path.len) : (i += 1) {
         if (i < path.len and path[i] != '/') continue;
         @memcpy(buf[0..i], path[0..i]);
         buf[i] = 0;
-        _ = std.c.mkdir(&buf, 0o755);
+        _ = std.c.mkdir(buf[0..i :0], 0o755);
     }
 }
 
@@ -497,7 +497,7 @@ test "parse workspace toml" {
         \\cwd = "/tmp"
         \\shell = "/bin/zsh"
     ;
-    var loaded = try parseWorkspace(std.testing.allocator, data);
+    const loaded = try parseWorkspace(std.testing.allocator, data);
     defer {
         // file_data empty — only free name/tabs
         for (loaded.tabs) |*t| t.deinit(std.testing.allocator);

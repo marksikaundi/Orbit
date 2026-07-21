@@ -58,11 +58,11 @@ pub const Pty = struct {
             if (slave > c.STDERR_FILENO) _ = c.close(slave);
 
             if (opts.cwd) |cwd| {
-                var cwd_z: [std.fs.max_path_bytes]u8 = undefined;
-                if (cwd.len + 1 > cwd_z.len) c._exit(1);
+                var cwd_z: [std.fs.max_path_bytes:0]u8 = undefined;
+                if (cwd.len >= cwd_z.len) c._exit(1);
                 @memcpy(cwd_z[0..cwd.len], cwd);
                 cwd_z[cwd.len] = 0;
-                if (c.chdir(&cwd_z) != 0) {
+                if (c.chdir(cwd_z[0..cwd.len :0]) != 0) {
                     // Non-fatal: continue in inherited cwd
                 }
             }
@@ -152,16 +152,16 @@ fn resolveShell(shell: ?[]const u8) [*:0]const u8 {
 
 fn setEnvEntry(entry: []const u8) void {
     const eq = std.mem.indexOfScalar(u8, entry, '=') orelse return;
-    var key_buf: [256]u8 = undefined;
-    var val_buf: [1024]u8 = undefined;
+    var key_buf: [256:0]u8 = undefined;
+    var val_buf: [1024:0]u8 = undefined;
     const key = entry[0..eq];
     const val = entry[eq + 1 ..];
-    if (key.len + 1 > key_buf.len or val.len + 1 > val_buf.len) return;
+    if (key.len >= key_buf.len or val.len >= val_buf.len) return;
     @memcpy(key_buf[0..key.len], key);
     key_buf[key.len] = 0;
     @memcpy(val_buf[0..val.len], val);
     val_buf[val.len] = 0;
-    _ = c.setenv(&key_buf, &val_buf, 1);
+    _ = c.setenv(key_buf[0..key.len :0], val_buf[0..val.len :0], 1);
 }
 
 fn setNonBlocking(fd: c_int) !void {

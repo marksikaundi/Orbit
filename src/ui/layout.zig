@@ -292,3 +292,20 @@ pub const Layout = struct {
         allocator.destroy(node);
     }
 
+    pub fn sessionAt(self: *Layout, bounds: Rect, px: i32, py: i32) ?*Session {
+        const Hit = struct {
+            px: i32,
+            py: i32,
+            found: ?*Session = null,
+            fn cb(ctx: *@This(), s: *Session, r: Rect) void {
+                if (ctx.px >= r.x and ctx.px < r.x + r.w and ctx.py >= r.y and ctx.py < r.y + r.h) {
+                    ctx.found = s;
+                }
+            }
+        };
+        var hit: Hit = .{ .px = px, .py = py };
+        self.forEachLeaf(bounds, *Hit, &hit, Hit.cb);
+        return hit.found;
+    }
+};
+
