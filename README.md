@@ -80,7 +80,7 @@ Example workspaces: Backend, Frontend, Production, University.
 
 ## Status
 
-**Phase 1 MVP is in progress** — window, PTY, shell I/O, GPU text render, and keyboard input. No tabs, plugins, or settings yet. Detailed phase planning lives in [roamap.md](roamap.md).
+**Phases 1–3 are implemented.** Window, PTY, shell I/O, GPU text, ANSI/colors, resize, scrollback, selection/clipboard, tabs, splits, search, themes, TOML config, and window opacity. Workspaces and the command palette come next (Phases 4–5). See [roamap.md](roamap.md).
 
 ---
 
@@ -277,6 +277,25 @@ zig build          # produces zig-out/bin/orbit
 zig build run      # build and launch
 zig build test     # unit tests (screen + parser)
 ```
+
+Optional config: copy `assets/config.example.toml` to `~/.config/orbit/config.toml`.
+
+### Shortcuts (Phases 2–3)
+
+| Shortcut | Action |
+| -------- | ------ |
+| `Ctrl+Shift+T` | New tab |
+| `Ctrl+Shift+W` | Close tab |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
+| `Ctrl+Shift+]` / `[` | Next / previous tab |
+| `Ctrl+Shift+D` | Split horizontal |
+| `Ctrl+Shift+E` | Split vertical |
+| `Ctrl+PageDown` | Focus next pane |
+| `Ctrl+Shift+F` | Search |
+| `Ctrl/Cmd+Shift+C` | Copy selection |
+| `Ctrl/Cmd+Shift+V` | Paste |
+| Drag + release | Select text (copies on release) |
+| Scroll / PageUp/Down | Scrollback |
 
 Logging levels planned: Debug, Info, Warn, Error, Trace.
 

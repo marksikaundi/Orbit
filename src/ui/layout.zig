@@ -55,7 +55,7 @@ pub const Layout = struct {
     }
 
     pub fn splitFocused(self: *Layout, dir: Dir, new_session: *Session) !void {
-        const leaf_node = try self.findLeafNode(self.root, self.focused) orelse return error.FocusNotFound;
+        const leaf_node = self.findLeafNode(self.root, self.focused) orelse return error.FocusNotFound;
         const old_session = leaf_node.leaf;
 
         const first = try self.allocator.create(Node);
@@ -72,13 +72,12 @@ pub const Layout = struct {
         self.focused = new_session;
     }
 
-    fn findLeafNode(self: *Layout, node: *Node, target: *Session) !?*Node {
-        _ = self;
+    fn findLeafNode(self: *Layout, node: *Node, target: *Session) ?*Node {
         switch (node.*) {
             .leaf => |s| return if (s == target) node else null,
             .split => |sp| {
-                if (try self.findLeafNode(sp.first, target)) |n| return n;
-                return try self.findLeafNode(sp.second, target);
+                if (self.findLeafNode(sp.first, target)) |n| return n;
+                return self.findLeafNode(sp.second, target);
             },
         }
     }

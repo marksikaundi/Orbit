@@ -1,0 +1,13 @@
+# Orbit config — copy to ~/.config/orbit/config.toml
+
+[window]
+width = 900
+height = 560
+opacity = 1.0
+
+[theme]
+# orbit-dark | orbit-light | nord
+name = "orbit-dark"
+
+[terminal]
+scrollback = 2000

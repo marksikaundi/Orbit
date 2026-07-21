@@ -27,7 +27,7 @@ pub const Tabs = struct {
     }
 
     pub fn add(self: *Tabs, title: []const u8, session: *Session) !void {
-        var layout = try Layout.init(self.allocator, session);
+        const layout = try Layout.init(self.allocator, session);
         const title_owned = try self.allocator.dupe(u8, title);
         try self.items.append(self.allocator, .{
             .title = title_owned,

@@ -359,7 +359,6 @@ pub const Parser = struct {
     }
 
     fn osc(self: *Parser, screen: *Screen, byte: u8) void {
-        _ = screen;
         switch (byte) {
             0x07 => {
                 self.finishOsc(screen);

@@ -143,6 +143,7 @@ pub const Screen = struct {
 
         switch (codepoint) {
             '\n' => {
+                self.cursor_col = 0;
                 self.lineFeed();
                 return;
             },

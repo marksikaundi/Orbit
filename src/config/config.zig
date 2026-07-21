@@ -21,16 +21,19 @@ pub const Config = struct {
         return theme_mod.byName(self.theme_name);
     }
 
-    pub fn load(allocator: std.mem.Allocator) Config {
+    pub fn load(allocator: std.mem.Allocator, io: std.Io) Config {
         var cfg: Config = .{};
-        const home = std.posix.getenv("HOME") orelse return cfg;
-        const path = std.fmt.allocPrint(allocator, "{s}/.config/orbit/config.toml", .{home}) catch return cfg;
+        const home = std.c.getenv("HOME") orelse return cfg;
+        const home_slice = std.mem.span(home);
+        const path = std.fmt.allocPrint(allocator, "{s}/.config/orbit/config.toml", .{home_slice}) catch return cfg;
         defer allocator.free(path);
 
-        const file = std.fs.cwd().openFile(path, .{}) catch return cfg;
-        defer file.close();
+        const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch return cfg;
+        defer file.close(io);
 
-        const data = file.readToEndAlloc(allocator, 64 * 1024) catch return cfg;
+        var buf: [4096]u8 = undefined;
+        var reader = file.reader(io, &buf);
+        const data = reader.interface.allocRemaining(allocator, .limited(64 * 1024)) catch return cfg;
         defer allocator.free(data);
 
         parseInto(&cfg, allocator, data);
@@ -46,10 +49,15 @@ pub const Config = struct {
             if (line[0] == '[') {
                 if (std.mem.indexOfScalar(u8, line, ']')) |end| {
                     const name = std.mem.trim(u8, line[1..end], " \t");
-                    if (std.mem.eql(u8, name, "window")) section = .window;
-                    else if (std.mem.eql(u8, name, "theme")) section = .theme;
-                    else if (std.mem.eql(u8, name, "terminal")) section = .terminal;
-                    else section = .none;
+                    if (std.mem.eql(u8, name, "window")) {
+                        section = .window;
+                    } else if (std.mem.eql(u8, name, "theme")) {
+                        section = .theme;
+                    } else if (std.mem.eql(u8, name, "terminal")) {
+                        section = .terminal;
+                    } else {
+                        section = .none;
+                    }
                 }
                 continue;
             }

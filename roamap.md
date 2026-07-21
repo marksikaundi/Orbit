@@ -255,7 +255,7 @@ padding=10
 
 # Development Phases
 
-## Phase 1
+## Phase 1 ✅
 
 Minimum Viable Terminal
 
@@ -276,7 +276,7 @@ No settings
 
 ---
 
-## Phase 2
+## Phase 2 ✅
 
 Terminal Features
 
@@ -290,7 +290,7 @@ Terminal Features
 
 ---
 
-## Phase 3
+## Phase 3 ✅
 
 Modern Features
 
