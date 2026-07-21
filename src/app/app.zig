@@ -721,8 +721,17 @@ pub const App = struct {
 
     fn handleHomeKey(self: *App, key: c_int, ctrl: bool, shift: bool) void {
         if (self.home.show_help) {
-            if (key == c.GLFW_KEY_ESCAPE or key == c.GLFW_KEY_H) {
-                self.home.show_help = false;
+            switch (key) {
+                c.GLFW_KEY_ESCAPE, c.GLFW_KEY_H => self.home.closeHelp(),
+                c.GLFW_KEY_UP => self.home.scrollHelp(-1),
+                c.GLFW_KEY_DOWN => self.home.scrollHelp(1),
+                c.GLFW_KEY_PAGE_UP => self.home.scrollHelp(-8),
+                c.GLFW_KEY_PAGE_DOWN => self.home.scrollHelp(8),
+                c.GLFW_KEY_HOME => self.home.help_scroll = 0,
+                c.GLFW_KEY_END => {
+                    self.home.help_scroll = if (home_mod.help_rows.len == 0) 0 else home_mod.help_rows.len - 1;
+                },
+                else => {},
             }
             return;
         }
@@ -769,9 +778,7 @@ pub const App = struct {
             .settings => {
                 self.ui = .settings;
             },
-            .help => {
-                self.home.show_help = true;
-            },
+            .help => self.home.openHelp(),
             .quit => self.requestQuit(),
         }
     }
@@ -1257,6 +1264,11 @@ pub const App = struct {
     fn onScroll(ptr: *anyopaque, xoff: f64, yoff: f64) void {
         _ = xoff;
         const self: *App = @ptrCast(@alignCast(ptr));
+        if (self.ui == .home and self.home.show_help) {
+            const lines: i32 = @intFromFloat(-yoff * 3.0);
+            self.home.scrollHelp(lines);
+            return;
+        }
         if (self.ui != .normal) return;
         const session = self.focused() orelse return;
         const lines: i32 = @intFromFloat(yoff * 3.0);

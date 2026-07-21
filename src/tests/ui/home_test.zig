@@ -27,11 +27,31 @@ test "moveDown and moveUp stay in bounds" {
     try std.testing.expectEqual(home.entries.len - 1, h.selected);
 }
 
-test "help mode blocks navigation" {
+test "help catalog covers major sections" {
+    try std.testing.expect(home.help_rows.len > 40);
+    var headings: usize = 0;
+    var items: usize = 0;
+    for (home.help_rows) |row| {
+        switch (row) {
+            .heading => headings += 1,
+            .item => items += 1,
+            else => {},
+        }
+    }
+    try std.testing.expect(headings >= 8);
+    try std.testing.expect(items >= 30);
+}
+
+test "help scroll does not move menu selection" {
     var h: home.Home = .{};
-    h.show_help = true;
+    h.openHelp();
+    try std.testing.expect(h.show_help);
+    try std.testing.expectEqual(@as(usize, 0), h.help_scroll);
     h.moveDown();
     try std.testing.expectEqual(@as(usize, 0), h.selected);
+    try std.testing.expectEqual(@as(usize, 1), h.help_scroll);
+    h.closeHelp();
+    try std.testing.expect(!h.show_help);
 }
 
 test "selectedAction follows selection" {

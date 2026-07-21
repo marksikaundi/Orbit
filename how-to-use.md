@@ -23,7 +23,7 @@ Orbit opens on a welcome home (logo, version, quick actions) — no shell until 
 | `O` / `2` | Open Workspace |
 | `P` / `3` | Command Palette |
 | `S` / `4` | Settings / Config |
-| `H` / `5` | Help & Shortcuts |
+| `H` / `5` | Help & Shortcuts (full reference; ↑↓ to scroll) |
 | `Q` / `6` | Quit Orbit |
 | `Ctrl+Shift+H` | Return to home anytime |
 | `Cmd+W` / `Ctrl+Shift+W` | Close tab (from home → quit) |
