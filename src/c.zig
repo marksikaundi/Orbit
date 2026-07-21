@@ -9,6 +9,7 @@ pub const c = @cImport({
         @cInclude("OpenGL/gl3.h");
         @cInclude("util.h");
         @cInclude("unistd.h");
+        @cInclude("stdlib.h");
         @cInclude("fcntl.h");
         @cInclude("termios.h");
         @cInclude("sys/ioctl.h");
@@ -18,6 +19,7 @@ pub const c = @cImport({
         @cInclude("GLES3/gl3.h");
         @cInclude("pty.h");
         @cInclude("unistd.h");
+        @cInclude("stdlib.h");
         @cInclude("fcntl.h");
         @cInclude("termios.h");
         @cInclude("sys/ioctl.h");

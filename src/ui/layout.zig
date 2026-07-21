@@ -143,19 +143,152 @@ pub const Layout = struct {
         }
     }
 
-    pub fn sessionAt(self: *Layout, bounds: Rect, px: i32, py: i32) ?*Session {
-        const Hit = struct {
-            px: i32,
-            py: i32,
-            found: ?*Session = null,
-            fn cb(ctx: *@This(), s: *Session, r: Rect) void {
-                if (ctx.px >= r.x and ctx.px < r.x + r.w and ctx.py >= r.y and ctx.py < r.y + r.h) {
-                    ctx.found = s;
-                }
-            }
-        };
-        var hit: Hit = .{ .px = px, .py = py };
-        self.forEachLeaf(bounds, *Hit, &hit, Hit.cb);
-        return hit.found;
+    pub fn collectSessions(self: *Layout, list: *std.ArrayList(*Session)) !void {
+        try self.collect(self.root, list);
     }
-};
+
+    /// Encode layout as expr like `h(0,v(1,2))` plus ratios in DFS split order.
+    pub fn encode(self: *Layout, allocator: std.mem.Allocator) !Encoded {
+        var sessions: std.ArrayList(*Session) = .empty;
+        errdefer sessions.deinit(allocator);
+        try self.collect(self.root, &sessions);
+
+        var ratios: std.ArrayList(f32) = .empty;
+        errdefer ratios.deinit(allocator);
+
+        var expr: std.ArrayList(u8) = .empty;
+        errdefer expr.deinit(allocator);
+
+        var next_idx: usize = 0;
+        try encodeNode(self.root, &expr, &ratios, &next_idx, allocator);
+
+        // Focus index
+        var focus: usize = 0;
+        for (sessions.items, 0..) |s, i| {
+            if (s == self.focused) {
+                focus = i;
+                break;
+            }
+        }
+
+        return .{
+            .expr = try expr.toOwnedSlice(allocator),
+            .ratios = try ratios.toOwnedSlice(allocator),
+            .sessions = try sessions.toOwnedSlice(allocator),
+            .focus = focus,
+        };
+    }
+
+    pub const Encoded = struct {
+        expr: []u8,
+        ratios: []f32,
+        sessions: []*Session,
+        focus: usize,
+
+        pub fn deinitMeta(self: *Encoded, allocator: std.mem.Allocator) void {
+            allocator.free(self.expr);
+            allocator.free(self.ratios);
+            allocator.free(self.sessions);
+        }
+    };
+
+    fn encodeNode(node: *Node, expr: *std.ArrayList(u8), ratios: *std.ArrayList(f32), next_idx: *usize, allocator: std.mem.Allocator) !void {
+        switch (node.*) {
+            .leaf => {
+                var buf: [16]u8 = undefined;
+                const s = try std.fmt.bufPrint(&buf, "{d}", .{next_idx.*});
+                try expr.appendSlice(allocator, s);
+                next_idx.* += 1;
+            },
+            .split => |sp| {
+                try expr.append(allocator, if (sp.dir == .horizontal) 'h' else 'v');
+                try expr.append(allocator, '(');
+                try encodeNode(sp.first, expr, ratios, next_idx, allocator);
+                try expr.append(allocator, ',');
+                try encodeNode(sp.second, expr, ratios, next_idx, allocator);
+                try expr.append(allocator, ')');
+                try ratios.append(allocator, sp.ratio);
+            },
+        }
+    }
+
+    /// Build layout from sessions + expr (`0`, `h(0,1)`, `v(h(0,1),2)`, …).
+    pub fn fromEncoded(
+        allocator: std.mem.Allocator,
+        sessions: []const *Session,
+        expr: []const u8,
+        ratios: []const f32,
+        focus: usize,
+    ) !Layout {
+        if (sessions.len == 0) return error.NoSessions;
+        var pos: usize = 0;
+        var ratio_idx: usize = 0;
+        const root = try parseNode(allocator, sessions, expr, &pos, ratios, &ratio_idx);
+        const focused = sessions[@min(focus, sessions.len - 1)];
+        return .{
+            .allocator = allocator,
+            .root = root,
+            .focused = focused,
+        };
+    }
+
+    fn parseNode(
+        allocator: std.mem.Allocator,
+        sessions: []const *Session,
+        expr: []const u8,
+        pos: *usize,
+        ratios: []const f32,
+        ratio_idx: *usize,
+    ) !*Node {
+        if (pos.* >= expr.len) return error.BadLayoutExpr;
+
+        if (expr[pos.*] == 'h' or expr[pos.*] == 'v') {
+            const dir: Dir = if (expr[pos.*] == 'h') .horizontal else .vertical;
+            pos.* += 1;
+            if (pos.* >= expr.len or expr[pos.*] != '(') return error.BadLayoutExpr;
+            pos.* += 1;
+            const first = try parseNode(allocator, sessions, expr, pos, ratios, ratio_idx);
+            errdefer freeNodeStatic(allocator, first);
+            if (pos.* >= expr.len or expr[pos.*] != ',') return error.BadLayoutExpr;
+            pos.* += 1;
+            const second = try parseNode(allocator, sessions, expr, pos, ratios, ratio_idx);
+            errdefer freeNodeStatic(allocator, second);
+            if (pos.* >= expr.len or expr[pos.*] != ')') return error.BadLayoutExpr;
+            pos.* += 1;
+            const ratio: f32 = if (ratio_idx.* < ratios.len) ratios[ratio_idx.*] else 0.5;
+            if (ratio_idx.* < ratios.len) ratio_idx.* += 1;
+
+            const node = try allocator.create(Node);
+            node.* = .{ .split = .{
+                .dir = dir,
+                .ratio = ratio,
+                .first = first,
+                .second = second,
+            } };
+            return node;
+        }
+
+        // leaf index
+        var num: usize = 0;
+        var any = false;
+        while (pos.* < expr.len and expr[pos.*] >= '0' and expr[pos.*] <= '9') : (pos.* += 1) {
+            any = true;
+            num = num * 10 + (expr[pos.*] - '0');
+        }
+        if (!any or num >= sessions.len) return error.BadLayoutExpr;
+        const node = try allocator.create(Node);
+        node.* = .{ .leaf = sessions[num] };
+        return node;
+    }
+
+    fn freeNodeStatic(allocator: std.mem.Allocator, node: *Node) void {
+        switch (node.*) {
+            .leaf => {}, // sessions owned by caller during build failure
+            .split => |sp| {
+                freeNodeStatic(allocator, sp.first);
+                freeNodeStatic(allocator, sp.second);
+            },
+        }
+        allocator.destroy(node);
+    }
+

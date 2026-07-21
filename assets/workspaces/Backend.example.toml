@@ -1,0 +1,15 @@
+# Example Orbit workspace — copy into ~/.config/orbit/workspaces/Backend.toml
+# Or create interactively with Ctrl+Shift+S inside Orbit.
+
+name = "Backend"
+active_tab = 0
+
+[[tabs]]
+title = "API"
+layout = "0"
+focus = 0
+
+[[tabs.panes]]
+title = "shell"
+cwd = "/tmp"
+shell = "/bin/zsh"

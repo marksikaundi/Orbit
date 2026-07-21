@@ -2,6 +2,17 @@ const std = @import("std");
 const builtin = @import("builtin");
 const c = @import("../c.zig").c;
 
+pub const CreateOptions = struct {
+    cols: u16,
+    rows: u16,
+    /// Working directory for the shell process (absolute or relative).
+    cwd: ?[]const u8 = null,
+    /// Shell executable path; defaults to $SHELL or /bin/zsh.
+    shell: ?[]const u8 = null,
+    /// Extra environment entries as "KEY=VALUE".
+    env: []const []const u8 = &.{},
+};
+
 pub const Pty = struct {
     master_fd: c_int,
     child_pid: c.pid_t,
@@ -9,11 +20,15 @@ pub const Pty = struct {
     rows: u16,
 
     pub fn create(cols: u16, rows: u16) !Pty {
+        return createWith(.{ .cols = cols, .rows = rows });
+    }
+
+    pub fn createWith(opts: CreateOptions) !Pty {
         var master: c_int = -1;
         var slave: c_int = -1;
         var ws = c.struct_winsize{
-            .ws_row = rows,
-            .ws_col = cols,
+            .ws_row = opts.rows,
+            .ws_col = opts.cols,
             .ws_xpixel = 0,
             .ws_ypixel = 0,
         };
@@ -42,11 +57,23 @@ pub const Pty = struct {
             _ = c.dup2(slave, c.STDERR_FILENO);
             if (slave > c.STDERR_FILENO) _ = c.close(slave);
 
-            // Prefer user shell, then common defaults.
-            const shell_env = std.c.getenv("SHELL");
-            const shell: [*:0]const u8 = shell_env orelse "/bin/zsh";
-            const argv = [_]?[*:0]const u8{ shell, "-l", null };
-            _ = c.execvp(shell, @ptrCast(&argv));
+            if (opts.cwd) |cwd| {
+                var cwd_z: [std.fs.max_path_bytes]u8 = undefined;
+                if (cwd.len + 1 > cwd_z.len) c._exit(1);
+                @memcpy(cwd_z[0..cwd.len], cwd);
+                cwd_z[cwd.len] = 0;
+                if (c.chdir(&cwd_z) != 0) {
+                    // Non-fatal: continue in inherited cwd
+                }
+            }
+
+            for (opts.env) |entry| {
+                setEnvEntry(entry);
+            }
+
+            const shell_path = resolveShell(opts.shell);
+            const argv = [_]?[*:0]const u8{ shell_path, "-l", null };
+            _ = c.execvp(shell_path, @ptrCast(&argv));
             c._exit(127);
         }
 
@@ -57,8 +84,8 @@ pub const Pty = struct {
         return .{
             .master_fd = master,
             .child_pid = pid,
-            .cols = cols,
-            .rows = rows,
+            .cols = opts.cols,
+            .rows = opts.rows,
         };
     }
 
@@ -104,6 +131,38 @@ pub const Pty = struct {
         return @intCast(n);
     }
 };
+
+fn resolveShell(shell: ?[]const u8) [*:0]const u8 {
+    if (shell) |s| {
+        // Shell path must remain valid for the lifetime of exec — use static buffer in child only.
+        // Child process: copy to static storage.
+        const Static = struct {
+            var buf: [512]u8 = undefined;
+        };
+        if (s.len + 1 > Static.buf.len) {
+            return "/bin/zsh";
+        }
+        @memcpy(Static.buf[0..s.len], s);
+        Static.buf[s.len] = 0;
+        return @ptrCast(&Static.buf);
+    }
+    const shell_env = std.c.getenv("SHELL");
+    return shell_env orelse "/bin/zsh";
+}
+
+fn setEnvEntry(entry: []const u8) void {
+    const eq = std.mem.indexOfScalar(u8, entry, '=') orelse return;
+    var key_buf: [256]u8 = undefined;
+    var val_buf: [1024]u8 = undefined;
+    const key = entry[0..eq];
+    const val = entry[eq + 1 ..];
+    if (key.len + 1 > key_buf.len or val.len + 1 > val_buf.len) return;
+    @memcpy(key_buf[0..key.len], key);
+    key_buf[key.len] = 0;
+    @memcpy(val_buf[0..val.len], val);
+    val_buf[val.len] = 0;
+    _ = c.setenv(&key_buf, &val_buf, 1);
+}
 
 fn setNonBlocking(fd: c_int) !void {
     const flags = c.fcntl(fd, c.F_GETFL, @as(c_int, 0));

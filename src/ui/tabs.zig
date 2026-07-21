@@ -64,11 +64,27 @@ pub const Tabs = struct {
         if (self.active >= self.items.items.len) self.active = self.items.items.len - 1;
     }
 
-    pub fn tickAll(self: *Tabs) void {
+    pub fn clear(self: *Tabs) void {
         for (self.items.items) |*tab| {
-            tab.layout.tickAll();
+            self.allocator.free(tab.title);
+            tab.layout.deinit();
         }
+        self.items.clearRetainingCapacity();
+        self.active = 0;
     }
 
-    pub const bar_height: i32 = 28;
-};
+    pub fn addLayout(self: *Tabs, title: []const u8, layout: Layout) !void {
+        const title_owned = try self.allocator.dupe(u8, title);
+        errdefer self.allocator.free(title_owned);
+        try self.items.append(self.allocator, .{
+            .title = title_owned,
+            .layout = layout,
+        });
+        self.active = self.items.items.len - 1;
+    }
+
+    pub fn setActive(self: *Tabs, index: usize) void {
+        if (self.items.items.len == 0) return;
+        self.active = @min(index, self.items.items.len - 1);
+    }
+
