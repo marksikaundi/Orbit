@@ -285,9 +285,14 @@ pub fn draw(
         .{plugin_count},
     ) catch "~/.config/orbit";
     const foot_x = cx - @divTrunc(@as(i32, @intCast(foot_line.len)) * cw, 2);
-    if (y + ch < fb_h - ch) {
+    if (y + ch < fb_h - ch * 3) {
         try renderer.drawText(foot_x, y, foot_line, dim);
     }
+
+    const credit = "Created by Mark Sikaundi - Lupleg Studios";
+    const credit_x = cx - @divTrunc(@as(i32, @intCast(credit.len)) * cw, 2);
+    const credit_y = fb_h - ch * 2;
+    try renderer.drawText(credit_x, credit_y, credit, dim);
 }
 
 fn drawHelp(
