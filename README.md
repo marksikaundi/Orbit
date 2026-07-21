@@ -80,7 +80,7 @@ Example workspaces: Backend, Frontend, Production, University.
 
 ## Status
 
-Orbit is in **early design / planning**. Application source, builds, and installs are not available yet. Detailed phase planning lives in [roamap.md](roamap.md).
+**Phase 1 MVP is in progress** — window, PTY, shell I/O, GPU text render, and keyboard input. No tabs, plugins, or settings yet. Detailed phase planning lives in [roamap.md](roamap.md).
 
 ---
 
@@ -267,11 +267,16 @@ See [roamap.md](roamap.md) for full phase detail.
 
 ## Getting started
 
-**Not buildable yet.** When the Zig tree lands:
+Requirements:
 
-1. Install a recent [Zig](https://ziglang.org/) toolchain
-2. Clone this repository
-3. Build with `zig build` (exact flags TBD)
+- [Zig](https://ziglang.org/) **0.16+**
+- [GLFW](https://www.glfw.org/) 3.x (e.g. `brew install glfw` on macOS)
+
+```bash
+zig build          # produces zig-out/bin/orbit
+zig build run      # build and launch
+zig build test     # unit tests (screen + parser)
+```
 
 Logging levels planned: Debug, Info, Warn, Error, Trace.
 
