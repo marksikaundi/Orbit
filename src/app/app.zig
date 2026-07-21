@@ -414,7 +414,7 @@ pub const App = struct {
         var qbuf: [96]u8 = undefined;
         const query = self.palette.querySlice();
         const qline = if (query.len == 0)
-            "Type to filter commands…"
+            "Type to filter commands..."
         else
             (std.fmt.bufPrint(&qbuf, "> {s}", .{query}) catch "> ");
         const qcolor = if (query.len == 0) dim else accent;
@@ -458,7 +458,7 @@ pub const App = struct {
         const foot_line = if (self.palette.query_len > 0 and self.palette.match_count > 0)
             (std.fmt.bufPrint(&foot, "{d} matches   Enter run   Esc close", .{self.palette.match_count}) catch "Enter run   Esc close")
         else
-            "↑↓ move   Enter run   Esc close";
+            "Up/Down move   Enter run   Esc close";
         try self.renderer.drawText(x + pad_x, y + h - footer_h + @divTrunc(pad_y, 2), foot_line, dim);
     }
 
@@ -476,19 +476,47 @@ pub const App = struct {
     }
 
     fn drawSettings(self: *App) !void {
-        const w: i32 = 520;
-        const h: i32 = 280;
-        const x = @divTrunc(self.window.fb_width - w, 2);
-        const y = @divTrunc(self.window.fb_height - h, 2);
-        const panel = Color.rgb(24, 28, 36);
-        const fg = Color.rgb(230, 235, 240);
-        const muted = Color.rgb(160, 170, 185);
-        const accent = Color.rgb(90, 175, 220);
-        const sel = Color.rgb(40, 55, 75);
+        const cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
 
-        try self.renderer.drawRect(x, y, w, h, panel, 0.97);
-        try self.renderer.drawText(x + 16, y + 14, "Appearance", fg);
-        try self.renderer.drawText(x + 16, y + 36, "How your terminal looks & which shell runs", muted);
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.45);
+
+        const pad_x = @max(24, cw + 10);
+        const pad_y = @max(20, @divTrunc(ch, 2) + 8);
+        const row_h = ch + @divTrunc(ch, 2) + 8;
+        const title_h = ch + 4;
+        const subtitle_h = ch + @divTrunc(ch, 2);
+        const gap = @max(12, @divTrunc(ch, 2));
+        const footer_lines = 3;
+        const footer_h = footer_lines * (ch + 4) + pad_y;
+
+        const max_w = fb_w - cw * 4;
+        const w = @min(@max(cw * 48, 540), max_w);
+        const rows_n: i32 = 4;
+        const list_h = rows_n * row_h;
+        const h = pad_y + title_h + subtitle_h + gap + list_h + gap + footer_h;
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @max(ch * 2, @divTrunc(fb_h - h, 2));
+
+        const panel = Color.rgb(22, 26, 34);
+        const fg = Color.rgb(230, 235, 240);
+        const muted = Color.rgb(150, 160, 175);
+        const dim = Color.rgb(100, 110, 125);
+        const accent = Color.rgb(90, 175, 220);
+        const sel_bg = Color.rgb(36, 48, 64);
+
+        try self.renderer.drawRect(x, y, w, h, panel, 0.98);
+        try self.renderer.drawRect(x, y, w, 2, accent, 0.55);
+
+        var cy = y + pad_y;
+        try self.renderer.drawText(x + pad_x, cy, "Appearance", fg);
+        cy += title_h;
+        try self.renderer.drawText(x + pad_x, cy, "Terminal look, cursor, and shell for new tabs", muted);
+        cy += subtitle_h + gap;
+
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
 
         const rows = [_]struct { label: []const u8, value: []const u8 }{
             .{ .label = "Theme", .value = self.config.theme_name },
@@ -497,25 +525,42 @@ pub const App = struct {
             .{ .label = "Shell", .value = self.config.shellDisplay() },
         };
 
-        var line: [96]u8 = undefined;
+        var value_buf: [96]u8 = undefined;
         for (rows, 0..) |row, i| {
-            const ry = y + 64 + @as(i32, @intCast(i)) * 28;
-            if (i == self.settings_row) {
-                try self.renderer.drawRect(x + 10, ry - 2, w - 20, 24, sel, 1.0);
-                try self.renderer.drawRect(x + 10, ry - 2, 3, 24, accent, 1.0);
+            const ry = cy + @as(i32, @intCast(i)) * row_h;
+            const text_y = ry + @divTrunc(row_h - ch, 2);
+            const selected = i == self.settings_row;
+
+            if (selected) {
+                try self.renderer.drawRect(x + 10, ry, w - 20, row_h - 2, sel_bg, 1.0);
+                try self.renderer.drawRect(x + 10, ry, 3, row_h - 2, accent, 1.0);
             }
-            const text = std.fmt.bufPrint(&line, "{s}  {s}", .{ row.label, row.value }) catch row.label;
-            try self.renderer.drawText(x + 20, ry + 2, text, if (i == self.settings_row) fg else muted);
+
+            try self.renderer.drawText(x + pad_x + 6, text_y, row.label, if (selected) fg else muted);
+
+            const value_text = if (selected)
+                (std.fmt.bufPrint(&value_buf, "< {s} >", .{row.value}) catch row.value)
+            else
+                row.value;
+            const value_len = @min(value_text.len, @as(usize, @intCast(@max(8, @divTrunc(@divTrunc(w, 2), cw)))));
+            const vx = x + w - pad_x - @as(i32, @intCast(value_len)) * cw;
+            try self.renderer.drawText(vx, text_y, value_text[0..value_len], if (selected) accent else muted);
         }
 
-        const t_font = std.fmt.bufPrint(&line, "Font {d:.0}pt   padding {d}x{d}   Ctrl+=/-/0", .{
+        cy += list_h + gap;
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
+
+        var info: [96]u8 = undefined;
+        const font_line = std.fmt.bufPrint(&info, "Font  {d:.0}pt    padding  {d}x{d}", .{
             self.renderer.font_size,
             self.config.padding_x,
             self.config.padding_y,
         }) catch "";
-        try self.renderer.drawText(x + 16, y + h - 72, t_font, muted);
-        try self.renderer.drawText(x + 16, y + h - 50, "↑↓ select   ←→ change   S save to config.toml", muted);
-        try self.renderer.drawText(x + 16, y + h - 28, "Esc close   (shell applies to new tabs)", muted);
+        try self.renderer.drawText(x + pad_x, cy, font_line, muted);
+        cy += ch + 6;
+        try self.renderer.drawText(x + pad_x, cy, "Up/Down select    Left/Right change    S save", dim);
+        cy += ch + 6;
+        try self.renderer.drawText(x + pad_x, cy, "Esc close    Ctrl+=/-/0 font size", dim);
     }
 
     fn drawWorkspacePicker(self: *App) !void {
