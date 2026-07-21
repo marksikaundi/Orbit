@@ -296,7 +296,7 @@ Optional config: copy `assets/config.example.toml` to `~/.config/orbit/config.to
 | `Ctrl+Shift+D` | Split horizontal |
 | `Ctrl+Shift+E` | Split vertical |
 | `Ctrl+PageDown` | Focus next pane |
-| `Ctrl+Shift+F` | Search |
+| `Ctrl/Cmd+Shift+F` | Search terminal or workspace files |
 | `Ctrl/Cmd+Shift+C` | Copy selection |
 | `Ctrl/Cmd+Shift+V` | Paste |
 | `Ctrl/Cmd+=` | Font larger |

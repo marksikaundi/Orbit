@@ -112,6 +112,7 @@ pub const App = struct {
         Window.on_scroll = null;
         self.plugins.deinit();
         self.workspaces.deinit();
+        self.search.close(self.allocator);
         self.tabs.deinit();
         self.renderer.deinit();
         self.window.deinit();
@@ -136,7 +137,7 @@ pub const App = struct {
         if (!self.tabs.pruneDead()) return;
 
         if (self.tabs.items.items.len == 0) {
-            self.search.close();
+            self.search.close(self.allocator);
             self.goHome();
             return;
         }
@@ -307,7 +308,7 @@ pub const App = struct {
                 .ws_picker => try self.drawWorkspacePicker(),
                 .ws_save => try self.drawSavePrompt(),
                 .ssh_prompt => try self.drawSshPrompt(),
-                .search => {},
+                .search => try self.drawSearch(),
                 .home, .normal => self.ui = .home,
             }
             if (self.status_len > 0) {
@@ -351,13 +352,8 @@ pub const App = struct {
         tab.layout.forEachLeaf(bounds, *DrawCtx, &dctx, DrawCtx.cb);
 
         if (self.ui == .search) {
-            const bar_y = self.window.fb_height - 32;
-            try self.renderer.drawRect(0, bar_y, self.window.fb_width, 32, Color.rgb(30, 40, 55), 0.95);
-            var label_buf: [160]u8 = undefined;
-            const label = std.fmt.bufPrint(&label_buf, "Search: {s}", .{self.search.querySlice()}) catch "Search:";
-            try self.renderer.drawText(8, bar_y + 8, label, Color.rgb(230, 235, 240));
+            try self.drawSearch();
         }
-
         if (self.ui == .ws_picker) {
             try self.drawWorkspacePicker();
         }
@@ -481,6 +477,210 @@ pub const App = struct {
         else
             "Up/Down move   Enter run   Esc close";
         try self.renderer.drawText(x + pad_x, y + h - footer_h + @divTrunc(pad_y, 2), foot_line, dim);
+    }
+
+    fn drawSearch(self: *App) !void {
+        const cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.45);
+
+        const pad_x = @max(20, cw + 8);
+        const pad_y = @max(16, @divTrunc(ch, 2) + 6);
+        const row_h = ch + @divTrunc(ch, 2) + 4;
+        const title_h = ch + 6;
+        const search_h = ch + @divTrunc(ch, 2) + 8;
+        const mode_h = ch + 8;
+        const footer_h = ch + pad_y;
+        const gap = @max(10, @divTrunc(ch, 2));
+
+        const max_w = fb_w - cw * 4;
+        const w = @min(@max(cw * 52, 560), max_w);
+        const max_rows_by_height = @max(1, @divTrunc(fb_h - title_h - search_h - mode_h - footer_h - gap * 4 - 80, row_h));
+        const max_visible: usize = @min(12, @as(usize, @intCast(max_rows_by_height)));
+
+        const hit_n = self.search.hitCount();
+        var start: usize = 0;
+        if (hit_n > 0 and self.search.selected >= max_visible) {
+            start = self.search.selected + 1 - max_visible;
+        }
+        const visible = if (hit_n == 0) @as(usize, 1) else @min(hit_n - start, max_visible);
+        const list_h = @as(i32, @intCast(visible)) * row_h;
+        const h = pad_y + title_h + mode_h + search_h + gap + list_h + footer_h;
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @max(ch * 2, @divTrunc(fb_h - h, 5));
+
+        const panel = Color.rgb(22, 26, 34);
+        const fg = Color.rgb(230, 235, 240);
+        const muted = Color.rgb(140, 150, 165);
+        const dim = Color.rgb(100, 110, 125);
+        const accent = Color.rgb(90, 175, 220);
+        const sel_bg = Color.rgb(36, 48, 64);
+
+        try self.renderer.drawRect(x, y, w, h, panel, 0.98);
+        try self.renderer.drawRect(x, y, w, 2, accent, 0.55);
+
+        var cy = y + pad_y;
+        try self.renderer.drawText(x + pad_x, cy, "Search", fg);
+        cy += title_h;
+
+        // Mode tabs
+        const term_label = if (self.search.mode == .terminal) "[ Terminal ]" else "  Terminal  ";
+        const files_label = if (self.search.mode == .files) "[ Files ]" else "  Files  ";
+        try self.renderer.drawText(x + pad_x, cy, term_label, if (self.search.mode == .terminal) accent else muted);
+        try self.renderer.drawText(x + pad_x + cw * 14, cy, files_label, if (self.search.mode == .files) accent else muted);
+        try self.renderer.drawText(x + w - pad_x - cw * 12, cy, "Tab switch", dim);
+        cy += mode_h;
+
+        try self.renderer.drawRect(x + pad_x - 4, cy - 4, w - pad_x * 2 + 8, search_h, Color.rgb(16, 19, 26), 1.0);
+        var qbuf: [96]u8 = undefined;
+        const query = self.search.querySlice();
+        const placeholder = if (self.search.mode == .terminal)
+            "Find in terminal..."
+        else
+            "Find files in workspace...";
+        const qline = if (query.len == 0) placeholder else (std.fmt.bufPrint(&qbuf, "> {s}", .{query}) catch "> ");
+        try self.renderer.drawText(x + pad_x + 4, cy + @divTrunc(search_h - ch, 2) - 2, qline, if (query.len == 0) dim else accent);
+        cy += search_h + gap;
+
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
+
+        if (query.len == 0) {
+            const hint = if (self.search.mode == .terminal)
+                "Type to search scrollback and the visible screen"
+            else
+                "Type to search file names in the opened folder";
+            try self.renderer.drawText(x + pad_x, cy + @divTrunc(row_h - ch, 2), hint, muted);
+        } else if (hit_n == 0) {
+            try self.renderer.drawText(x + pad_x, cy + @divTrunc(row_h - ch, 2), "No matches", muted);
+        } else {
+            const label_max = @max(12, @divTrunc(w - pad_x * 2 - cw * 4, cw));
+            var i: usize = 0;
+            while (i < visible) : (i += 1) {
+                const mi = start + i;
+                const ry = cy + @as(i32, @intCast(i)) * row_h;
+                const text_y = ry + @divTrunc(row_h - ch, 2);
+                if (mi == self.search.selected) {
+                    try self.renderer.drawRect(x + 10, ry, w - 20, row_h - 2, sel_bg, 1.0);
+                    try self.renderer.drawRect(x + 10, ry, 3, row_h - 2, accent, 1.0);
+                }
+
+                var line_buf: [128]u8 = undefined;
+                const line: []const u8 = switch (self.search.mode) {
+                    .terminal => blk: {
+                        const hit = self.search.term_hits[mi];
+                        break :blk (std.fmt.bufPrint(&line_buf, "line {d}  col {d}", .{ hit.abs_row + 1, hit.col + 1 }) catch "hit");
+                    },
+                    .files => self.search.file_hits[mi],
+                };
+                const shown = line[0..@min(line.len, @as(usize, @intCast(label_max)))];
+                try self.renderer.drawText(x + pad_x + 6, text_y, shown, fg);
+            }
+        }
+
+        var foot: [80]u8 = undefined;
+        const foot_line = if (hit_n > 0)
+            (std.fmt.bufPrint(&foot, "{d} matches   Enter open   Esc close", .{hit_n}) catch "Enter open   Esc close")
+        else
+            "Up/Down move   Tab mode   Esc close";
+        try self.renderer.drawText(x + pad_x, y + h - footer_h + @divTrunc(pad_y, 2), foot_line, dim);
+    }
+
+    fn openSearch(self: *App) void {
+        // Prefer searching in a live terminal; start one if needed.
+        self.ensureShell() catch {
+            self.setStatus("failed to start shell for search");
+            return;
+        };
+        const root = self.sessionCwd();
+        self.search.open(self.allocator, root);
+        self.ui = .search;
+        self.status_len = 0;
+        self.refreshSearchResults();
+    }
+
+    fn refreshSearchResults(self: *App) void {
+        switch (self.search.mode) {
+            .terminal => {
+                if (self.focused()) |s| {
+                    self.search.refreshTerminal(&s.screen);
+                    self.search.revealSelectedTerminal(&s.screen);
+                } else {
+                    self.search.term_count = 0;
+                }
+            },
+            .files => {
+                // Keep root in sync with the focused session cwd.
+                if (self.focused()) |s| {
+                    self.search.setRoot(self.allocator, s.cwd) catch {};
+                }
+                self.search.refreshFiles(self.allocator, self.io);
+            },
+        }
+    }
+
+    fn handleSearchKey(self: *App, key: c_int) void {
+        switch (key) {
+            c.GLFW_KEY_ESCAPE => {
+                self.search.close(self.allocator);
+                self.leaveOverlay();
+            },
+            c.GLFW_KEY_TAB => {
+                self.search.toggleMode();
+                self.refreshSearchResults();
+            },
+            c.GLFW_KEY_UP => {
+                self.search.moveUp();
+                if (self.search.mode == .terminal) {
+                    if (self.focused()) |s| self.search.revealSelectedTerminal(&s.screen);
+                }
+            },
+            c.GLFW_KEY_DOWN => {
+                self.search.moveDown();
+                if (self.search.mode == .terminal) {
+                    if (self.focused()) |s| self.search.revealSelectedTerminal(&s.screen);
+                }
+            },
+            c.GLFW_KEY_BACKSPACE => {
+                self.search.backspace();
+                self.refreshSearchResults();
+            },
+            c.GLFW_KEY_ENTER => self.activateSearchSelection(),
+            else => {},
+        }
+    }
+
+    fn activateSearchSelection(self: *App) void {
+        switch (self.search.mode) {
+            .terminal => {
+                if (self.search.term_count == 0) return;
+                if (self.focused()) |s| {
+                    self.search.revealSelectedTerminal(&s.screen);
+                }
+                // Keep search open so the user can jump between hits.
+                var buf: [48]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "match {d}/{d}", .{ self.search.selected + 1, self.search.term_count }) catch "match";
+                self.setStatus(msg);
+            },
+            .files => {
+                const rel = self.search.selectedFilePath() orelse {
+                    self.setStatus("no file selected");
+                    return;
+                };
+                // Insert relative path into the shell for cd/open/edit.
+                if (self.focused()) |s| {
+                    s.write(rel);
+                    s.write(" ");
+                }
+                self.search.close(self.allocator);
+                self.ui = .normal;
+                var buf: [96]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "inserted {s}", .{rel}) catch "file inserted";
+                self.setStatus(msg);
+            },
+        }
     }
 
     fn drawSshPrompt(self: *App) !void {
@@ -641,7 +841,7 @@ pub const App = struct {
             },
             .search => {
                 self.search.inputChar(codepoint);
-                if (self.focused()) |s| self.search.findNext(&s.screen);
+                self.refreshSearchResults();
                 return;
             },
             .palette => {
@@ -693,7 +893,7 @@ pub const App = struct {
         }
 
         if (self.ui == .home) {
-            self.handleHomeKey(key, ctrl, shift);
+            self.handleHomeKey(key, ctrl, shift, super);
             return;
         }
         if (self.ui == .palette) {
@@ -717,19 +917,13 @@ pub const App = struct {
             return;
         }
         if (self.ui == .search) {
-            if (key == c.GLFW_KEY_ESCAPE) {
-                self.search.close();
-                self.ui = .normal;
-                return;
-            }
-            if (key == c.GLFW_KEY_BACKSPACE) {
-                self.search.backspace();
-                return;
-            }
-            if (key == c.GLFW_KEY_ENTER) {
-                if (self.focused()) |s| self.search.findNext(&s.screen);
-                return;
-            }
+            self.handleSearchKey(key);
+            return;
+        }
+
+        // Search: Ctrl+Shift+F or Cmd+Shift+F
+        if ((ctrl or super) and shift and key == c.GLFW_KEY_F) {
+            self.openSearch();
             return;
         }
 
@@ -764,11 +958,6 @@ pub const App = struct {
                 },
                 c.GLFW_KEY_LEFT_BRACKET => {
                     self.tabs.prev();
-                    return;
-                },
-                c.GLFW_KEY_F => {
-                    self.search.open();
-                    self.ui = .search;
                     return;
                 },
                 c.GLFW_KEY_O => {
@@ -843,7 +1032,7 @@ pub const App = struct {
     fn goHome(self: *App) void {
         self.home = .{};
         self.ui = .home;
-        self.search.close();
+        self.search.close(self.allocator);
         self.palette.close();
     }
 
@@ -886,7 +1075,7 @@ pub const App = struct {
         }
     }
 
-    fn handleHomeKey(self: *App, key: c_int, ctrl: bool, shift: bool) void {
+    fn handleHomeKey(self: *App, key: c_int, ctrl: bool, shift: bool, super: bool) void {
         if (self.home.show_help) {
             switch (key) {
                 c.GLFW_KEY_ESCAPE, c.GLFW_KEY_H => self.home.closeHelp(),
@@ -904,6 +1093,10 @@ pub const App = struct {
         }
         if (ctrl and shift and key == c.GLFW_KEY_P) {
             self.runHomeAction(.command_palette);
+            return;
+        }
+        if ((ctrl or super) and shift and key == c.GLFW_KEY_F) {
+            self.openSearch();
             return;
         }
         switch (key) {
@@ -1036,8 +1229,7 @@ pub const App = struct {
             .load_saved_workspace => self.openPicker(),
             .save_workspace => self.openSavePrompt(),
             .search => {
-                self.search.open();
-                self.ui = .search;
+                self.openSearch();
             },
             .ssh => {
                 self.ssh_host_len = 0;

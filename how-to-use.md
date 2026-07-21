@@ -102,6 +102,21 @@ Open **Ctrl+Shift+P** → `Reload Plugins` (or restart).
 
 **Ctrl+Shift+P** — type to filter, Enter to run, Esc to close.
 
+## Search
+
+**Cmd+Shift+F** / **Ctrl+Shift+F** (or palette → Search):
+
+| Key | Action |
+| --- | ------ |
+| Type | Live filter |
+| `Tab` | Switch **Terminal** ↔ **Files** |
+| `↑` `↓` | Move between matches |
+| `Enter` | Terminal: jump to hit · Files: insert path into the shell |
+| `Esc` | Close |
+
+- **Terminal** — searches visible screen + scrollback (case-insensitive)
+- **Files** — searches file names under the opened folder / current cwd
+
 ## Workspaces (Phase 4)
 
 1. **Open Workspace** (`O` on home, or `Ctrl+Shift+O`) — pick a folder from your computer; Orbit opens a shell there.
