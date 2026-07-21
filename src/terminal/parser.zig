@@ -375,25 +375,3 @@ pub const Parser = struct {
         _ = self.osc_len;
     }
 };
-
-// Expose scroll helpers used by CSI S/T — patch screen to make them pub.
-// (Handled by renaming in screen.zig)
-
-test "parser applies sgr red" {
-    var screen = try Screen.init(std.testing.allocator, 20, 2);
-    defer screen.deinit();
-    var parser = Parser.init();
-    parser.feed(&screen, "\x1b[31mHi\x1b[0m");
-    try std.testing.expectEqual(@as(u21, 'H'), screen.cellAtConst(0, 0).codepoint);
-    try std.testing.expectEqual(@as(u21, 'i'), screen.cellAtConst(1, 0).codepoint);
-    try std.testing.expectEqual(@as(u8, 205), screen.cellAtConst(0, 0).fg.r);
-}
-
-test "parser cursor movement" {
-    var screen = try Screen.init(std.testing.allocator, 20, 5);
-    defer screen.deinit();
-    var parser = Parser.init();
-    parser.feed(&screen, "\x1b[3;5H");
-    try std.testing.expectEqual(@as(u16, 4), screen.cursor_col);
-    try std.testing.expectEqual(@as(u16, 2), screen.cursor_row);
-}

@@ -88,13 +88,3 @@ pub const Selection = struct {
         return out;
     }
 };
-
-test "selection contains range" {
-    const std = @import("std");
-    var sel: Selection = .{};
-    sel.begin(2, 1);
-    sel.update(5, 1);
-    sel.finish();
-    try std.testing.expect(sel.contains(3, 1));
-    try std.testing.expect(!sel.contains(1, 1));
-}

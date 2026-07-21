@@ -434,23 +434,3 @@ pub const Screen = struct {
         return self.cols;
     }
 };
-
-test "screen putChar and newline" {
-    var screen = try Screen.init(std.testing.allocator, 10, 3);
-    defer screen.deinit();
-    screen.putChar('H');
-    screen.putChar('i');
-    screen.putChar('\n');
-    screen.putChar('!');
-    try std.testing.expectEqual(@as(u21, 'H'), screen.cellAtConst(0, 0).codepoint);
-    try std.testing.expectEqual(@as(u21, 'i'), screen.cellAtConst(1, 0).codepoint);
-    try std.testing.expectEqual(@as(u21, '!'), screen.cellAtConst(0, 1).codepoint);
-}
-
-test "screen sgr colors persist on cell" {
-    var screen = try Screen.init(std.testing.allocator, 5, 2);
-    defer screen.deinit();
-    screen.fg = Color.rgb(255, 0, 0);
-    screen.putChar('R');
-    try std.testing.expectEqual(@as(u8, 255), screen.cellAtConst(0, 0).fg.r);
-}

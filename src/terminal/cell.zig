@@ -97,9 +97,3 @@ pub fn ansi256(index: u8) Color {
     const gray: u8 = @intCast(8 + (index - 232) * 10);
     return Color.rgb(gray, gray, gray);
 }
-
-test "ansi256 classic red" {
-    const std = @import("std");
-    const c = ansi256(1);
-    try std.testing.expectEqual(@as(u8, 205), c.r);
-}

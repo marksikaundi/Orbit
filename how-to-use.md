@@ -4,6 +4,14 @@
 zig build run
 ```
 
+## Tests
+
+Feature unit tests live under `src/tests/` (terminal, config, UI, plugins, font, workspace).
+
+```bash
+zig build test
+```
+
 ## Home screen
 
 Orbit opens on a welcome home (logo, version, quick actions) — no shell until you pick one:

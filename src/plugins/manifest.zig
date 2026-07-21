@@ -220,32 +220,3 @@ fn unquote(allocator: std.mem.Allocator, val: []const u8) ![]u8 {
     }
     return out.toOwnedSlice(allocator);
 }
-
-test "parse plugin manifest" {
-    const data =
-        \\name = "hello"
-        \\version = "0.1.0"
-        \\description = "demo"
-        \\
-        \\[[commands]]
-        \\id = "hello.greet"
-        \\label = "Plugin: Hello"
-        \\action = "status"
-        \\payload = "hi"
-        \\
-        \\[[themes]]
-        \\name = "amber"
-        \\foreground = "#f5e6c8"
-        \\background = "#2a2010"
-        \\
-        \\[hooks]
-        \\on_load = "status:loaded"
-    ;
-    var plugin = try parsePlugin(std.testing.allocator, "/tmp/hello", data);
-    defer plugin.deinit();
-    try std.testing.expectEqualStrings("hello", plugin.name);
-    try std.testing.expectEqual(@as(usize, 1), plugin.commands.len);
-    try std.testing.expectEqual(@as(usize, 1), plugin.themes.len);
-    try std.testing.expectEqualStrings("amber", plugin.themes[0].name);
-    try std.testing.expect(plugin.hooks.on_load != null);
-}

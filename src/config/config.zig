@@ -57,7 +57,7 @@ pub const Config = struct {
         return cfg;
     }
 
-    fn parseInto(cfg: *Config, allocator: std.mem.Allocator, data: []const u8) void {
+    pub fn parseInto(cfg: *Config, allocator: std.mem.Allocator, data: []const u8) void {
         var section: enum { none, window, theme, terminal } = .none;
         var lines = std.mem.splitScalar(u8, data, '\n');
         while (lines.next()) |raw| {
@@ -135,19 +135,4 @@ fn parseI32(s: []const u8) ?i32 {
 
 fn parseF32(s: []const u8) ?f32 {
     return std.fmt.parseFloat(f32, s) catch null;
-}
-
-test "parse config snippet" {
-    var cfg: Config = .{};
-    defer cfg.deinit(std.testing.allocator);
-    Config.parseInto(&cfg, std.testing.allocator,
-        \\[window]
-        \\opacity = 0.9
-        \\width = 1000
-        \\[theme]
-        \\name = "nord"
-    );
-    try std.testing.expectEqual(@as(f32, 0.9), cfg.opacity);
-    try std.testing.expectEqual(@as(i32, 1000), cfg.window_width);
-    try std.testing.expectEqualStrings("nord", cfg.theme_name);
 }

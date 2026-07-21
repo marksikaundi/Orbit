@@ -59,10 +59,47 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run Orbit");
     run_step.dependOn(&run_cmd.step);
 
-    const exe_tests = b.addTest(.{
-        .root_module = root_module,
+    // ── Unit tests (feature-organized under src/tests/) ─────────────────
+    // Separate from the app module so GLFW/OpenGL are not required.
+    const test_module = b.createModule(.{
+        .root_source_file = b.path("src/tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
     });
-    const run_exe_tests = b.addRunArtifact(exe_tests);
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_exe_tests.step);
+    test_module.addIncludePath(b.path("vendor"));
+    test_module.addCSourceFile(.{
+        .file = b.path("vendor/stb_truetype_impl.c"),
+        .flags = &.{ "-std=c99", "-fno-sanitize=undefined" },
+    });
+
+    // Some UI modules reference the renderer types (no window required at runtime).
+    if (target.result.os.tag == .macos) {
+        if (target.result.cpu.arch == .aarch64) {
+            test_module.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include" });
+            test_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/lib" });
+        } else {
+            test_module.addIncludePath(.{ .cwd_relative = "/usr/local/include" });
+            test_module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
+        }
+        test_module.linkSystemLibrary("glfw", .{});
+        test_module.linkFramework("OpenGL", .{});
+        test_module.linkFramework("Cocoa", .{});
+        test_module.linkFramework("IOKit", .{});
+        test_module.linkFramework("CoreVideo", .{});
+    } else if (target.result.os.tag == .linux) {
+        test_module.linkSystemLibrary("GL", .{});
+        test_module.linkSystemLibrary("glfw", .{});
+        test_module.linkSystemLibrary("util", .{});
+        test_module.linkSystemLibrary("X11", .{});
+        test_module.linkSystemLibrary("dl", .{});
+        test_module.linkSystemLibrary("pthread", .{});
+    }
+    const unit_tests = b.addTest(.{
+        .name = "orbit-tests",
+        .root_module = test_module,
+    });
+    const run_unit_tests = b.addRunArtifact(unit_tests);
+    const test_step = b.step("test", "Run feature unit tests");
+    test_step.dependOn(&run_unit_tests.step);
 }

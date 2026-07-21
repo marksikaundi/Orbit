@@ -199,19 +199,3 @@ pub const Palette = struct {
         return ch;
     }
 };
-
-test "palette filters new tab" {
-    var p: Palette = .{};
-    p.addAllBuiltins();
-    p.open();
-    p.inputChar('n');
-    p.inputChar('t');
-    try std.testing.expect(p.match_count >= 1);
-    var found = false;
-    var i: usize = 0;
-    while (i < p.match_count) : (i += 1) {
-        const item = p.items[p.matches[i]];
-        if (item.source == .builtin and item.source.builtin == .new_tab) found = true;
-    }
-    try std.testing.expect(found);
-}
