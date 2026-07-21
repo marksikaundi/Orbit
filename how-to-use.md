@@ -12,6 +12,7 @@ Feature unit tests live under `src/tests/` (terminal, config, UI, plugins, font,
 zig build test
 ```
 
+You’ll see live status for each test (`ok` / `FAIL` / `skip`) and a final summary.
 ## Home screen
 
 Orbit opens on a welcome home (logo, version, quick actions) — no shell until you pick one:

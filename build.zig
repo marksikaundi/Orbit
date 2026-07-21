@@ -98,8 +98,15 @@ pub fn build(b: *std.Build) void {
     const unit_tests = b.addTest(.{
         .name = "orbit-tests",
         .root_module = test_module,
+        .test_runner = .{
+            .path = b.path("src/tests/runner.zig"),
+            .mode = .simple,
+        },
     });
     const run_unit_tests = b.addRunArtifact(unit_tests);
-    const test_step = b.step("test", "Run feature unit tests");
+    run_unit_tests.expectExitCode(0);
+    // Inherit stdio so the simple runner's status lines are visible.
+    run_unit_tests.stdio = .inherit;
+    const test_step = b.step("test", "Run feature unit tests (with live status)");
     test_step.dependOn(&run_unit_tests.step);
 }
