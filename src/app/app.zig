@@ -801,24 +801,26 @@ pub const App = struct {
         try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.45);
 
         const pad_x = @max(24, cw + 10);
-        const pad_y = @max(16, @divTrunc(ch, 2) + 6);
-        const row_h = ch + @divTrunc(ch, 2) + 4;
+        const pad_y = @max(20, @divTrunc(ch, 2) + 8);
+        const row_gap = 4;
+        // Two-line rows: name/version + description.
+        const row_h = ch * 2 + @divTrunc(ch, 2) + row_gap;
         const title_h = ch + 4;
-        const gap = @max(8, @divTrunc(ch, 3));
+        const subtitle_h = ch + @divTrunc(ch, 2);
+        const gap = @max(12, @divTrunc(ch, 2));
         const footer_lines = 3;
         const plugin_n = self.plugins.count();
 
         const max_w = fb_w - cw * 4;
-        const w = @min(@max(cw * 52, 560), max_w);
+        const w = @min(@max(cw * 52, 580), max_w);
 
-        // Keep the panel within the window; scroll the plugin list if needed.
-        const header_h = pad_y + title_h + ch * 3 + gap * 2;
-        const footer_h = footer_lines * (ch + 4) + pad_y;
+        const header_h = pad_y + title_h + subtitle_h + gap + (ch + 6) + gap;
+        const footer_h = footer_lines * (ch + 6) + pad_y;
         const avail_list = @max(row_h, fb_h - header_h - footer_h - ch * 2);
         const max_visible: usize = @max(1, @as(usize, @intCast(@divTrunc(avail_list, row_h))));
-        const list_rows = @max(@as(usize, 1), @min(plugin_n, max_visible));
-        const list_h = @as(i32, @intCast(list_rows)) * row_h + 4;
-        const h = header_h + list_h + footer_h;
+        const list_rows = @max(@as(usize, 1), @min(@max(plugin_n, 1), max_visible));
+        const list_h = @as(i32, @intCast(list_rows)) * row_h;
+        const h = header_h + list_h + gap + footer_h;
         const x = @divTrunc(fb_w - w, 2);
         const y = @max(ch, @divTrunc(fb_h - h, 2));
 
@@ -828,8 +830,9 @@ pub const App = struct {
         const dim = Color.rgb(100, 110, 125);
         const accent = Color.rgb(90, 175, 220);
         const sel_bg = Color.rgb(36, 48, 64);
+        const rule = Color.rgb(40, 48, 60);
         const on_col = Color.rgb(120, 200, 140);
-        const off_col = Color.rgb(180, 120, 120);
+        const off_col = Color.rgb(160, 110, 110);
 
         try self.renderer.drawRect(x, y, w, h, panel, 0.98);
         try self.renderer.drawRect(x, y, w, 2, accent, 0.55);
@@ -837,24 +840,30 @@ pub const App = struct {
         var cy = y + pad_y;
         try self.renderer.drawText(x + pad_x, cy, "Plugins", fg);
         cy += title_h;
-        try self.renderer.drawText(x + pad_x, cy, "Shortcuts, themes, commands — customize in plugin.toml", muted);
-        cy += ch + 4;
-        try self.renderer.drawText(x + pad_x, cy, "Pack: hello git devtools themes workflow keys", dim);
-        cy += ch + gap;
+        try self.renderer.drawText(x + pad_x, cy, "Shortcuts, themes, and commands you can edit", muted);
+        cy += subtitle_h;
 
-        try self.renderer.drawRect(x + pad_x - 4, cy - 2, w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
+        try self.renderer.drawRect(x + pad_x - 4, cy, w - pad_x * 2 + 8, 1, rule, 0.9);
+        cy += gap;
 
-        var count_buf: [64]u8 = undefined;
-        const count_line = std.fmt.bufPrint(&count_buf, "Installed  ({d})", .{plugin_n}) catch "Installed";
+        var count_buf: [48]u8 = undefined;
+        const count_line = if (plugin_n == 0)
+            "No plugins installed"
+        else
+            (std.fmt.bufPrint(&count_buf, "{d} installed", .{plugin_n}) catch "installed");
         try self.renderer.drawText(x + pad_x, cy, count_line, muted);
         if (plugin_n < 6) {
-            try self.renderer.drawText(x + pad_x + cw * 18, cy, "press I for full pack", accent);
+            const tip = "I  install pack";
+            const tip_x = x + w - pad_x - @as(i32, @intCast(tip.len)) * cw;
+            try self.renderer.drawText(tip_x, cy, tip, accent);
         }
-        cy += ch + 4;
+        cy += ch + 6;
 
         const list_top = cy;
         if (plugin_n == 0) {
-            try self.renderer.drawText(x + pad_x + 6, cy + @divTrunc(row_h - ch, 2), "(none yet — press I to install bundled plugins)", dim);
+            const empty_y = list_top + @divTrunc(list_h - ch * 2, 2);
+            try self.renderer.drawText(x + pad_x + 6, empty_y, "Press I to install the bundled pack", fg);
+            try self.renderer.drawText(x + pad_x + 6, empty_y + ch + 4, "hello · git · devtools · themes · workflow · keys", dim);
         } else {
             if (self.plugin_row >= plugin_n) self.plugin_row = plugin_n - 1;
             var start: usize = 0;
@@ -867,35 +876,75 @@ pub const App = struct {
                 const mi = start + i;
                 const p = self.plugins.plugins.items[mi];
                 const ry = list_top + @as(i32, @intCast(i)) * row_h;
-                const text_y = ry + @divTrunc(row_h - ch, 2);
                 const selected = mi == self.plugin_row;
+
                 if (selected) {
-                    try self.renderer.drawRect(x + 10, ry, w - 20, row_h - 2, sel_bg, 1.0);
-                    try self.renderer.drawRect(x + 10, ry, 3, row_h - 2, accent, 1.0);
+                    try self.renderer.drawRect(x + 10, ry, w - 20, row_h - row_gap, sel_bg, 1.0);
+                    try self.renderer.drawRect(x + 10, ry, 3, row_h - row_gap, accent, 1.0);
                 }
 
-                const state = if (p.enabled) "on" else "off";
-                var line_buf: [96]u8 = undefined;
-                const desc = if (p.description.len > 0) p.description else "";
-                const line = if (desc.len > 0)
-                    (std.fmt.bufPrint(&line_buf, "{s}  -  {s}", .{ p.name, desc }) catch p.name)
-                else
-                    (std.fmt.bufPrint(&line_buf, "{s}  v{s}", .{ p.name, p.version }) catch p.name);
-                const max_chars = @max(8, @divTrunc(w - pad_x * 2 - cw * 6, cw));
-                const shown = line[0..@min(line.len, @as(usize, @intCast(max_chars)))];
-                try self.renderer.drawText(x + pad_x + 6, text_y, shown, if (selected) fg else muted);
+                const name_y = ry + @divTrunc(ch, 3);
+                const desc_y = name_y + ch + 2;
+                const text_x = x + pad_x + 6;
 
+                // Name + version on the first line.
+                try self.renderer.drawText(text_x, name_y, p.name, if (selected) fg else muted);
+
+                var ver_buf: [24]u8 = undefined;
+                const ver = std.fmt.bufPrint(&ver_buf, "v{s}", .{p.version}) catch "";
+                const name_w = @as(i32, @intCast(p.name.len)) * cw;
+                try self.renderer.drawText(text_x + name_w + cw, name_y, ver, dim);
+
+                // Compact capability counts when selected (skip zeros).
+                if (selected) {
+                    var meta_buf: [48]u8 = undefined;
+                    var meta_len: usize = 0;
+                    const append = struct {
+                        fn go(buf: []u8, len: *usize, label: []const u8, n: usize) void {
+                            if (n == 0 or len.* >= buf.len) return;
+                            if (len.* > 0 and len.* + 2 < buf.len) {
+                                buf[len.*] = ' ';
+                                buf[len.* + 1] = ' ';
+                                len.* += 2;
+                            }
+                            const piece = std.fmt.bufPrint(buf[len.*..], "{d} {s}", .{ n, label }) catch return;
+                            len.* += piece.len;
+                        }
+                    }.go;
+                    append(&meta_buf, &meta_len, "cmd", p.commands.len);
+                    append(&meta_buf, &meta_len, "theme", p.themes.len);
+                    append(&meta_buf, &meta_len, "bind", p.bindings.len);
+                    if (meta_len > 0) {
+                        const meta_x = text_x + name_w + cw * (@as(i32, @intCast(ver.len)) + 2);
+                        const state_reserve = cw * 6;
+                        const meta_max = @max(0, (x + w - pad_x - state_reserve) - meta_x);
+                        const meta_chars = @min(meta_len, @as(usize, @intCast(@divTrunc(meta_max, cw))));
+                        if (meta_chars > 0) {
+                            try self.renderer.drawText(meta_x, name_y, meta_buf[0..meta_chars], dim);
+                        }
+                    }
+                }
+
+                // Description on the second line.
+                const desc = if (p.description.len > 0) p.description else "No description";
+                const desc_max = @max(8, @divTrunc(w - pad_x * 2 - cw * 4, cw));
+                const desc_shown = desc[0..@min(desc.len, @as(usize, @intCast(desc_max)))];
+                try self.renderer.drawText(text_x, desc_y, desc_shown, if (selected) muted else dim);
+
+                // Fixed-width toggle so columns stay aligned.
+                const state = if (p.enabled) "ON " else "OFF";
                 const state_x = x + w - pad_x - @as(i32, @intCast(state.len)) * cw;
-                try self.renderer.drawText(state_x, text_y, state, if (p.enabled) on_col else off_col);
+                try self.renderer.drawText(state_x, name_y, state, if (p.enabled) on_col else off_col);
             }
         }
 
         cy = y + h - footer_h;
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
         try self.renderer.drawText(x + pad_x, cy, "~/.config/orbit/plugins/<name>/plugin.toml", dim);
-        cy += ch + 4;
+        cy += ch + 6;
         try self.renderer.drawText(x + pad_x, cy, "Up/Down select    Space toggle    R reload", dim);
-        cy += ch + 4;
-        try self.renderer.drawText(x + pad_x, cy, "I install/update full pack (6 plugins)    Esc close", dim);
+        cy += ch + 6;
+        try self.renderer.drawText(x + pad_x, cy, "I install/update pack    Esc close", dim);
     }
 
     fn drawWorkspacePicker(self: *App) !void {
