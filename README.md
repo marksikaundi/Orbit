@@ -52,6 +52,7 @@ Everything revolves around the developer’s workflow.
 
 ### Terminal foundations
 
+- Startup home screen (welcome, logo, version, quick actions)
 - GPU-rendered text with dirty-cell redraws
 - POSIX PTY (Linux/macOS) and ConPTY (Windows)
 - Full ANSI parsing (CSI, OSC, SGR, DEC, DCS, UTF-8)
@@ -282,6 +283,7 @@ Optional config: copy `assets/config.example.toml` to `~/.config/orbit/config.to
 
 | Shortcut | Action |
 | -------- | ------ |
+| `Ctrl+Shift+H` | Go to home screen |
 | `Ctrl+Shift+P` | Command palette |
 | `Ctrl+Shift+T` | New tab |
 | `Ctrl+Shift+W` | Close tab |

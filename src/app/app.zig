@@ -9,6 +9,8 @@ const Rect = layout_mod.Rect;
 const Search = @import("../ui/search.zig").Search;
 const Palette = @import("../ui/palette.zig").Palette;
 const palette_mod = @import("../ui/palette.zig");
+const home_mod = @import("../ui/home.zig");
+const Home = home_mod.Home;
 const Config = @import("../config/config.zig").Config;
 const theme_mod = @import("../config/theme.zig");
 const WsManager = @import("../workspace/workspace.zig").Manager;
@@ -17,7 +19,7 @@ const clipboard = @import("../clipboard/clipboard.zig");
 const bitmap = @import("../font/bitmap.zig");
 const Color = @import("../terminal/cell.zig").Color;
 
-const UiMode = enum { normal, search, ws_picker, ws_save, palette, ssh_prompt, settings };
+const UiMode = enum { home, normal, search, ws_picker, ws_save, palette, ssh_prompt, settings };
 
 pub const App = struct {
     allocator: std.mem.Allocator,
@@ -30,7 +32,8 @@ pub const App = struct {
     plugins: PluginRegistry,
     search: Search = .{},
     palette: Palette = .{},
-    ui: UiMode = .normal,
+    home: Home = .{},
+    ui: UiMode = .home,
     picker_index: usize = 0,
     save_name: [64]u8 = undefined,
     save_name_len: usize = 0,
@@ -67,13 +70,7 @@ pub const App = struct {
         var plugins = try PluginRegistry.init(allocator, io);
         errdefer plugins.deinit();
 
-        const content = contentRect(window.fb_width, window.fb_height);
-        const cols, const rows = gridSizeWithCell(content.w, content.h, renderer.cell_w, renderer.cell_h);
-        const session = try Session.create(allocator, cols, rows, "Shell");
-        session.setTheme(theme.foreground, theme.background);
-        session.setScrollback(config.scrollback);
-        try tabs.add("Shell", session);
-
+        // Start on home — no shell until the user chooses an action.
         self.* = .{
             .allocator = allocator,
             .io = io,
@@ -83,6 +80,7 @@ pub const App = struct {
             .config = config,
             .workspaces = workspaces,
             .plugins = plugins,
+            .ui = .home,
         };
 
         Window.active = self;
@@ -192,6 +190,19 @@ pub const App = struct {
     }
 
     fn draw(self: *App) !void {
+        if (self.ui == .home) {
+            try home_mod.draw(
+                &self.renderer,
+                self.window.fb_width,
+                self.window.fb_height,
+                &self.home,
+                self.config.theme_name,
+                self.renderer.font_scale,
+                self.plugins.count(),
+            );
+            return;
+        }
+
         self.renderer.clearBackground();
 
         // Tab bar
@@ -216,7 +227,11 @@ pub const App = struct {
             try self.renderer.drawText(bx + 8, 8, label, Color.rgb(200, 240, 210));
         }
 
-        const tab = self.tabs.current() orelse return;
+        const tab = self.tabs.current() orelse {
+            // No tabs yet — bounce to home
+            self.ui = .home;
+            return;
+        };
         const bounds = contentRect(self.window.fb_width, self.window.fb_height);
 
         const DrawCtx = struct {
@@ -402,6 +417,10 @@ pub const App = struct {
     fn onChar(ptr: *anyopaque, codepoint: u32) void {
         const self: *App = @ptrCast(@alignCast(ptr));
         switch (self.ui) {
+            .home => {
+                self.handleHomeChar(codepoint);
+                return;
+            },
             .search => {
                 self.search.inputChar(codepoint);
                 if (self.focused()) |s| self.search.findNext(&s.screen);
@@ -444,6 +463,10 @@ pub const App = struct {
         const shift = (mods & c.GLFW_MOD_SHIFT) != 0;
         const super = (mods & c.GLFW_MOD_SUPER) != 0;
 
+        if (self.ui == .home) {
+            self.handleHomeKey(key, ctrl, shift);
+            return;
+        }
         if (self.ui == .palette) {
             self.handlePaletteKey(key);
             return;
@@ -453,7 +476,7 @@ pub const App = struct {
             return;
         }
         if (self.ui == .settings) {
-            if (key == c.GLFW_KEY_ESCAPE) self.ui = .normal;
+            if (key == c.GLFW_KEY_ESCAPE) self.leaveOverlay();
             return;
         }
         if (self.ui == .ws_picker) {
@@ -483,6 +506,10 @@ pub const App = struct {
 
         if (ctrl and shift) {
             switch (key) {
+                c.GLFW_KEY_H => {
+                    self.goHome();
+                    return;
+                },
                 c.GLFW_KEY_P => {
                     self.rebuildPalette();
                     self.palette.open();
@@ -495,7 +522,12 @@ pub const App = struct {
                     return;
                 },
                 c.GLFW_KEY_W => {
-                    self.tabs.closeActive();
+                    if (self.tabs.items.items.len <= 1) {
+                        self.tabs.clear();
+                        self.goHome();
+                    } else {
+                        self.tabs.closeActive();
+                    }
                     return;
                 },
                 c.GLFW_KEY_D => {
@@ -588,11 +620,102 @@ pub const App = struct {
         }
     }
 
+    fn goHome(self: *App) void {
+        self.home = .{};
+        self.ui = .home;
+        self.status_len = 0;
+        self.search.close();
+        self.palette.close();
+    }
+
+    fn handleHomeChar(self: *App, codepoint: u32) void {
+        if (self.home.show_help) return;
+        if (codepoint >= 'a' and codepoint <= 'z') {
+            const ch: u8 = @intCast(codepoint - 32); // upper
+            self.handleHomeLetter(ch);
+        } else if (codepoint >= 'A' and codepoint <= 'Z') {
+            self.handleHomeLetter(@intCast(codepoint));
+        }
+    }
+
+    fn handleHomeLetter(self: *App, ch: u8) void {
+        switch (ch) {
+            'O' => self.runHomeAction(.open_workspace),
+            'P' => self.runHomeAction(.command_palette),
+            'S' => self.runHomeAction(.settings),
+            'H' => self.runHomeAction(.help),
+            else => {},
+        }
+    }
+
+    fn handleHomeKey(self: *App, key: c_int, ctrl: bool, shift: bool) void {
+        if (self.home.show_help) {
+            if (key == c.GLFW_KEY_ESCAPE or key == c.GLFW_KEY_H) {
+                self.home.show_help = false;
+            }
+            return;
+        }
+        if (ctrl and shift and key == c.GLFW_KEY_P) {
+            self.runHomeAction(.command_palette);
+            return;
+        }
+        switch (key) {
+            c.GLFW_KEY_UP => self.home.moveUp(),
+            c.GLFW_KEY_DOWN => self.home.moveDown(),
+            c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER => self.runHomeAction(self.home.selectedAction()),
+            c.GLFW_KEY_1 => self.runHomeAction(.new_terminal),
+            c.GLFW_KEY_2 => self.runHomeAction(.open_workspace),
+            c.GLFW_KEY_3 => self.runHomeAction(.command_palette),
+            c.GLFW_KEY_4 => self.runHomeAction(.settings),
+            c.GLFW_KEY_5 => self.runHomeAction(.help),
+            c.GLFW_KEY_O => self.runHomeAction(.open_workspace),
+            c.GLFW_KEY_P => self.runHomeAction(.command_palette),
+            c.GLFW_KEY_S => self.runHomeAction(.settings),
+            c.GLFW_KEY_H => self.runHomeAction(.help),
+            else => {},
+        }
+    }
+
+    fn runHomeAction(self: *App, action: home_mod.Action) void {
+        switch (action) {
+            .new_terminal => {
+                self.ensureShell() catch {
+                    self.setStatus("failed to start shell");
+                    return;
+                };
+                self.ui = .normal;
+            },
+            .open_workspace => {
+                self.openPicker();
+            },
+            .command_palette => {
+                self.rebuildPalette();
+                self.palette.open();
+                self.ui = .palette;
+            },
+            .settings => {
+                self.ui = .settings;
+            },
+            .help => {
+                self.home.show_help = true;
+            },
+        }
+    }
+
+    fn ensureShell(self: *App) !void {
+        if (self.tabs.items.items.len > 0) return;
+        try self.newTab();
+    }
+
+    fn leaveOverlay(self: *App) void {
+        self.ui = if (self.tabs.items.items.len == 0) .home else .normal;
+    }
+
     fn handlePaletteKey(self: *App, key: c_int) void {
         switch (key) {
             c.GLFW_KEY_ESCAPE => {
                 self.palette.close();
-                self.ui = .normal;
+                self.leaveOverlay();
             },
             c.GLFW_KEY_UP => self.palette.moveUp(),
             c.GLFW_KEY_DOWN => self.palette.moveDown(),
@@ -600,10 +723,14 @@ pub const App = struct {
             c.GLFW_KEY_ENTER => {
                 if (self.palette.selectedItem()) |item| {
                     self.palette.close();
+                    // Provisional mode; actions may override (settings, picker, go_home, …).
                     self.ui = .normal;
                     switch (item.source) {
                         .builtin => |act| self.runAction(act),
                         .plugin => |p| self.runPluginCommand(p.plugin_name, p.command_id),
+                    }
+                    if (self.ui == .normal and self.tabs.items.items.len == 0) {
+                        self.ui = .home;
                     }
                 }
             },
@@ -613,7 +740,7 @@ pub const App = struct {
 
     fn handleSshKey(self: *App, key: c_int) void {
         switch (key) {
-            c.GLFW_KEY_ESCAPE => self.ui = .normal,
+            c.GLFW_KEY_ESCAPE => self.leaveOverlay(),
             c.GLFW_KEY_BACKSPACE => {
                 if (self.ssh_host_len > 0) self.ssh_host_len -= 1;
             },
@@ -647,7 +774,14 @@ pub const App = struct {
     fn runAction(self: *App, action: palette_mod.Action) void {
         switch (action) {
             .new_tab => self.newTab() catch {},
-            .close_tab => self.tabs.closeActive(),
+            .close_tab => {
+                if (self.tabs.items.items.len <= 1) {
+                    self.tabs.clear();
+                    self.goHome();
+                } else {
+                    self.tabs.closeActive();
+                }
+            },
             .split_right => self.splitPane(.horizontal) catch {},
             .split_down => self.splitPane(.vertical) catch {},
             .next_tab => self.tabs.next(),
@@ -672,6 +806,7 @@ pub const App = struct {
             .font_smaller => self.adjustFont(-0.25),
             .font_reset => self.resetFont(),
             .settings => self.ui = .settings,
+            .go_home => self.goHome(),
             .reload_config => {
                 self.config.reload(self.allocator, self.io);
                 self.renderer.opacity = self.config.opacity;
@@ -849,7 +984,7 @@ pub const App = struct {
 
     fn handlePickerKey(self: *App, key: c_int) void {
         switch (key) {
-            c.GLFW_KEY_ESCAPE => self.ui = .normal,
+            c.GLFW_KEY_ESCAPE => self.leaveOverlay(),
             c.GLFW_KEY_UP => {
                 if (self.picker_index > 0) self.picker_index -= 1;
             },
@@ -880,7 +1015,7 @@ pub const App = struct {
 
     fn handleSaveKey(self: *App, key: c_int) void {
         switch (key) {
-            c.GLFW_KEY_ESCAPE => self.ui = .normal,
+            c.GLFW_KEY_ESCAPE => self.leaveOverlay(),
             c.GLFW_KEY_BACKSPACE => {
                 if (self.save_name_len > 0) self.save_name_len -= 1;
             },

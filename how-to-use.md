@@ -4,6 +4,19 @@
 zig build run
 ```
 
+## Home screen
+
+Orbit opens on a welcome home (logo, version, quick actions) — no shell until you pick one:
+
+| Key | Action |
+| --- | ------ |
+| `Enter` / `1` | New Terminal |
+| `O` / `2` | Open Workspace |
+| `P` / `3` | Command Palette |
+| `S` / `4` | Settings / Config |
+| `H` / `5` | Help & Shortcuts |
+| `Ctrl+Shift+H` | Return to home anytime |
+
 ## Font size
 
 | Shortcut | Action |
