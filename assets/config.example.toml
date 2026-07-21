@@ -11,3 +11,5 @@ name = "orbit-dark"
 
 [terminal]
 scrollback = 2000
+# Glyph scale (1.0 = tiny 8×16). 2.0 is the default; use Ctrl+= / Ctrl+- in the app.
+font_scale = 2.0

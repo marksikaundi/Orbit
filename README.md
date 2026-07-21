@@ -293,6 +293,9 @@ Optional config: copy `assets/config.example.toml` to `~/.config/orbit/config.to
 | `Ctrl+Shift+F` | Search |
 | `Ctrl/Cmd+Shift+C` | Copy selection |
 | `Ctrl/Cmd+Shift+V` | Paste |
+| `Ctrl/Cmd+=` | Font larger |
+| `Ctrl/Cmd+-` | Font smaller |
+| `Ctrl/Cmd+0` | Font reset (2.0) |
 | `Ctrl+Shift+O` | Open workspace picker |
 | `Ctrl+Shift+S` | Save current layout as workspace |
 | Drag + release | Select text (copies on release) |

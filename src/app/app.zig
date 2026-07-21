@@ -56,6 +56,7 @@ pub const App = struct {
         renderer.setFramebufferSize(window.fb_width, window.fb_height);
         renderer.setTheme(theme);
         renderer.opacity = config.opacity;
+        renderer.setFontScale(config.font_scale);
 
         var tabs = Tabs.init(allocator);
         errdefer tabs.deinit();
@@ -67,7 +68,7 @@ pub const App = struct {
         errdefer plugins.deinit();
 
         const content = contentRect(window.fb_width, window.fb_height);
-        const cols, const rows = gridSizeWithCell(content.w, content.h, @floatFromInt(bitmap.glyph_width), @floatFromInt(bitmap.glyph_height));
+        const cols, const rows = gridSizeWithCell(content.w, content.h, renderer.cell_w, renderer.cell_h);
         const session = try Session.create(allocator, cols, rows, "Shell");
         session.setTheme(theme.foreground, theme.background);
         session.setScrollback(config.scrollback);
@@ -535,6 +536,25 @@ pub const App = struct {
             return;
         }
 
+        // Font size: Ctrl/Cmd + = / - / 0  (also keypad +/-)
+        if ((ctrl or super) and !shift) {
+            switch (key) {
+                c.GLFW_KEY_EQUAL, c.GLFW_KEY_KP_ADD => {
+                    self.adjustFont(0.25);
+                    return;
+                },
+                c.GLFW_KEY_MINUS, c.GLFW_KEY_KP_SUBTRACT => {
+                    self.adjustFont(-0.25);
+                    return;
+                },
+                c.GLFW_KEY_0, c.GLFW_KEY_KP_0 => {
+                    self.resetFont();
+                    return;
+                },
+                else => {},
+            }
+        }
+
         if ((ctrl or super) and key == c.GLFW_KEY_C and shift) {
             self.copySelection();
             return;
@@ -608,6 +628,22 @@ pub const App = struct {
         }
     }
 
+    fn adjustFont(self: *App, delta: f32) void {
+        self.renderer.bumpFontScale(delta);
+        self.config.font_scale = self.renderer.font_scale;
+        self.resizeAllSessions();
+        var buf: [48]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "font scale {d:.2}", .{self.renderer.font_scale}) catch "font changed";
+        self.setStatus(msg);
+    }
+
+    fn resetFont(self: *App) void {
+        self.renderer.setFontScale(2.0);
+        self.config.font_scale = 2.0;
+        self.resizeAllSessions();
+        self.setStatus("font scale 2.00");
+    }
+
     fn runAction(self: *App, action: palette_mod.Action) void {
         switch (action) {
             .new_tab => self.newTab() catch {},
@@ -632,26 +668,16 @@ pub const App = struct {
             .theme_orbit_dark => self.applyTheme("orbit-dark"),
             .theme_orbit_light => self.applyTheme("orbit-light"),
             .theme_nord => self.applyTheme("nord"),
-            .font_larger => {
-                self.renderer.bumpFontScale(0.125);
-                self.resizeAllSessions();
-                self.setStatus("font larger");
-            },
-            .font_smaller => {
-                self.renderer.bumpFontScale(-0.125);
-                self.resizeAllSessions();
-                self.setStatus("font smaller");
-            },
-            .font_reset => {
-                self.renderer.setFontScale(1.0);
-                self.resizeAllSessions();
-                self.setStatus("font reset");
-            },
+            .font_larger => self.adjustFont(0.25),
+            .font_smaller => self.adjustFont(-0.25),
+            .font_reset => self.resetFont(),
             .settings => self.ui = .settings,
             .reload_config => {
                 self.config.reload(self.allocator, self.io);
                 self.renderer.opacity = self.config.opacity;
+                self.renderer.setFontScale(self.config.font_scale);
                 self.applyTheme(self.config.theme_name);
+                self.resizeAllSessions();
                 self.setStatus("config reloaded");
             },
             .reload_plugins => {

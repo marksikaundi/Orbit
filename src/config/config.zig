@@ -9,6 +9,8 @@ pub const Config = struct {
     opacity: f32 = 1.0,
     theme_name: []const u8 = "orbit-dark",
     scrollback: usize = 2000,
+    /// Glyph scale (1.0 = 8×16 px). Default 2.0 reads better on Retina.
+    font_scale: f32 = 2.0,
     /// Owned theme name buffer when loaded from file.
     theme_name_owned: ?[]u8 = null,
 
@@ -98,6 +100,10 @@ pub const Config = struct {
                 .terminal => {
                     if (std.mem.eql(u8, key, "scrollback")) {
                         cfg.scrollback = @intCast(parseI32(val) orelse @as(i32, @intCast(cfg.scrollback)));
+                    }
+                    if (std.mem.eql(u8, key, "font_scale")) {
+                        cfg.font_scale = parseF32(val) orelse cfg.font_scale;
+                        cfg.font_scale = @min(3.0, @max(0.75, cfg.font_scale));
                     }
                 },
                 .none => {},

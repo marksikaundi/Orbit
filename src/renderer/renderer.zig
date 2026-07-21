@@ -15,7 +15,7 @@ pub const Renderer = struct {
     atlas_h: f32 = 0,
     cell_w: f32 = @floatFromInt(bitmap.glyph_width),
     cell_h: f32 = @floatFromInt(bitmap.glyph_height),
-    font_scale: f32 = 1.0,
+    font_scale: f32 = 2.0,
     fb_w: i32 = 0,
     fb_h: i32 = 0,
     vertices: std.ArrayList(f32) = .empty,
@@ -59,6 +59,7 @@ pub const Renderer = struct {
     pub fn init(allocator: std.mem.Allocator) !Renderer {
         var self: Renderer = .{ .allocator = allocator };
         try self.initGl();
+        self.setFontScale(self.font_scale);
         return self;
     }
 
