@@ -7,13 +7,15 @@ const Tabs = @import("../ui/tabs.zig").Tabs;
 const layout_mod = @import("../ui/layout.zig");
 const Rect = layout_mod.Rect;
 const Search = @import("../ui/search.zig").Search;
+const Palette = @import("../ui/palette.zig").Palette;
+const palette_mod = @import("../ui/palette.zig");
 const Config = @import("../config/config.zig").Config;
 const WsManager = @import("../workspace/workspace.zig").Manager;
 const clipboard = @import("../clipboard/clipboard.zig");
 const bitmap = @import("../font/bitmap.zig");
 const Color = @import("../terminal/cell.zig").Color;
 
-const UiMode = enum { normal, search, ws_picker, ws_save };
+const UiMode = enum { normal, search, ws_picker, ws_save, palette, ssh_prompt, settings };
 
 pub const App = struct {
     allocator: std.mem.Allocator,
@@ -24,10 +26,13 @@ pub const App = struct {
     config: Config,
     workspaces: WsManager,
     search: Search = .{},
+    palette: Palette = .{},
     ui: UiMode = .normal,
     picker_index: usize = 0,
     save_name: [64]u8 = undefined,
     save_name_len: usize = 0,
+    ssh_host: [128]u8 = undefined,
+    ssh_host_len: usize = 0,
     status_msg: [96]u8 = undefined,
     status_len: usize = 0,
     mouse_x: f64 = 0,
@@ -56,7 +61,7 @@ pub const App = struct {
         errdefer workspaces.deinit();
 
         const content = contentRect(window.fb_width, window.fb_height);
-        const cols, const rows = gridSize(content.w, content.h);
+        const cols, const rows = gridSizeWithCell(content.w, content.h, @floatFromInt(bitmap.glyph_width), @floatFromInt(bitmap.glyph_height));
         const session = try Session.create(allocator, cols, rows, "Shell");
         session.setTheme(theme.foreground, theme.background);
         session.setScrollback(config.scrollback);
@@ -117,9 +122,15 @@ pub const App = struct {
         };
     }
 
-    fn gridSize(w: i32, h: i32) struct { u16, u16 } {
-        const cols: u16 = @intCast(@max(1, @divTrunc(w, @as(i32, @intCast(bitmap.glyph_width)))));
-        const rows: u16 = @intCast(@max(1, @divTrunc(h, @as(i32, @intCast(bitmap.glyph_height)))));
+    fn gridSize(self: *const App, w: i32, h: i32) struct { u16, u16 } {
+        return gridSizeWithCell(w, h, self.renderer.cell_w, self.renderer.cell_h);
+    }
+
+    fn gridSizeWithCell(w: i32, h: i32, cell_w: f32, cell_h: f32) struct { u16, u16 } {
+        const cw: i32 = @intFromFloat(@max(1.0, cell_w));
+        const ch: i32 = @intFromFloat(@max(1.0, cell_h));
+        const cols: u16 = @intCast(@max(1, @divTrunc(w, cw)));
+        const rows: u16 = @intCast(@max(1, @divTrunc(h, ch)));
         return .{ cols, rows };
     }
 
@@ -137,14 +148,16 @@ pub const App = struct {
         const tab = self.tabs.current() orelse return;
         const bounds = contentRect(self.window.fb_width, self.window.fb_height);
         const Ctx = struct {
-            fn cb(_: void, session: *Session, r: Rect) void {
-                const cols, const rows = gridSize(r.w, r.h);
+            app: *App,
+            fn cb(ctx: *@This(), session: *Session, r: Rect) void {
+                const cols, const rows = ctx.app.gridSize(r.w, r.h);
                 if (cols != session.screen.cols or rows != session.screen.rows) {
                     session.resize(cols, rows);
                 }
             }
         };
-        tab.layout.forEachLeaf(bounds, void, {}, Ctx.cb);
+        var ctx: Ctx = .{ .app = self };
+        tab.layout.forEachLeaf(bounds, *Ctx, &ctx, Ctx.cb);
     }
 
     fn setStatus(self: *App, msg: []const u8) void {
@@ -197,7 +210,7 @@ pub const App = struct {
         const DrawCtx = struct {
             app: *App,
             fn cb(ctx: *@This(), session: *Session, r: Rect) void {
-                const cols, const rows = gridSize(r.w, r.h);
+                const cols, const rows = ctx.app.gridSize(r.w, r.h);
                 if (cols != session.screen.cols or rows != session.screen.rows) {
                     session.resize(cols, rows);
                 }
@@ -241,11 +254,90 @@ pub const App = struct {
         if (self.ui == .ws_save) {
             try self.drawSavePrompt();
         }
+        if (self.ui == .palette) {
+            try self.drawPalette();
+        }
+        if (self.ui == .ssh_prompt) {
+            try self.drawSshPrompt();
+        }
+        if (self.ui == .settings) {
+            try self.drawSettings();
+        }
         if (self.status_len > 0 and self.ui == .normal) {
             const bar_y = self.window.fb_height - 24;
             try self.renderer.drawRect(0, bar_y, self.window.fb_width, 24, Color.rgb(25, 35, 30), 0.9);
             try self.renderer.drawText(8, bar_y + 4, self.status_msg[0..self.status_len], Color.rgb(180, 220, 180));
         }
+    }
+
+    fn drawPalette(self: *App) !void {
+        const w: i32 = 520;
+        const row_h: i32 = 22;
+        const header: i32 = 56;
+        const visible = @min(self.palette.match_count, 12);
+        const h: i32 = header + @as(i32, @intCast(@max(1, visible))) * row_h + 36;
+        const x = @divTrunc(self.window.fb_width - w, 2);
+        const y = @max(40, @divTrunc(self.window.fb_height - h, 4));
+        try self.renderer.drawRect(x, y, w, h, Color.rgb(22, 26, 34), 0.98);
+        try self.renderer.drawText(x + 16, y + 12, "Command Palette", Color.rgb(230, 235, 240));
+        var qbuf: [80]u8 = undefined;
+        const qline = std.fmt.bufPrint(&qbuf, "> {s}", .{self.palette.querySlice()}) catch "> ";
+        try self.renderer.drawText(x + 16, y + 32, qline, Color.rgb(160, 200, 255));
+
+        if (self.palette.match_count == 0) {
+            try self.renderer.drawText(x + 16, y + header, "No matching commands", Color.rgb(140, 150, 160));
+        } else {
+            var i: usize = 0;
+            while (i < visible) : (i += 1) {
+                const entry = palette_mod.catalog[self.palette.matches[i]];
+                const ry = y + header + @as(i32, @intCast(i)) * row_h;
+                if (i == self.palette.selected) {
+                    try self.renderer.drawRect(x + 8, ry, w - 16, row_h, Color.rgb(50, 80, 120), 1.0);
+                }
+                try self.renderer.drawText(x + 20, ry + 4, entry.label[0..@min(entry.label.len, 36)], Color.rgb(220, 225, 230));
+                if (entry.hint.len > 0) {
+                    const hx = x + w - 8 - @as(i32, @intCast(@min(entry.hint.len, 18) * bitmap.glyph_width));
+                    try self.renderer.drawText(hx, ry + 4, entry.hint[0..@min(entry.hint.len, 18)], Color.rgb(120, 130, 145));
+                }
+            }
+        }
+        try self.renderer.drawText(x + 16, y + h - 24, "Enter run  |  Esc close", Color.rgb(130, 140, 155));
+    }
+
+    fn drawSshPrompt(self: *App) !void {
+        const w: i32 = 440;
+        const h: i32 = 90;
+        const x = @divTrunc(self.window.fb_width - w, 2);
+        const y = @divTrunc(self.window.fb_height - h, 2);
+        try self.renderer.drawRect(x, y, w, h, Color.rgb(24, 28, 36), 0.97);
+        try self.renderer.drawText(x + 16, y + 14, "SSH", Color.rgb(230, 235, 240));
+        var buf: [160]u8 = undefined;
+        const label = std.fmt.bufPrint(&buf, "Host: {s}", .{self.ssh_host[0..self.ssh_host_len]}) catch "Host:";
+        try self.renderer.drawText(x + 16, y + 42, label, Color.rgb(200, 210, 220));
+        try self.renderer.drawText(x + 16, y + 66, "Enter connect  |  Esc cancel", Color.rgb(140, 150, 160));
+    }
+
+    fn drawSettings(self: *App) !void {
+        const w: i32 = 480;
+        const h: i32 = 160;
+        const x = @divTrunc(self.window.fb_width - w, 2);
+        const y = @divTrunc(self.window.fb_height - h, 2);
+        try self.renderer.drawRect(x, y, w, h, Color.rgb(24, 28, 36), 0.97);
+        try self.renderer.drawText(x + 16, y + 14, "Settings", Color.rgb(230, 235, 240));
+        var line: [96]u8 = undefined;
+        const t1 = std.fmt.bufPrint(&line, "Theme: {s}", .{self.config.theme_name}) catch "Theme:";
+        try self.renderer.drawText(x + 16, y + 44, t1, Color.rgb(200, 210, 220));
+        const t2 = std.fmt.bufPrint(&line, "Opacity: {d:.2}  Font scale: {d:.2}", .{ self.config.opacity, self.renderer.font_scale }) catch "";
+        try self.renderer.drawText(x + 16, y + 66, t2, Color.rgb(200, 210, 220));
+        const t3 = std.fmt.bufPrint(&line, "Scrollback: {d}  Config: ~/.config/orbit/", .{self.config.scrollback}) catch "";
+        try self.renderer.drawText(x + 16, y + 88, t3, Color.rgb(200, 210, 220));
+        if (self.workspaces.current_name) |wn| {
+            const t4 = std.fmt.bufPrint(&line, "Workspace: {s}", .{wn}) catch "";
+            try self.renderer.drawText(x + 16, y + 110, t4, Color.rgb(200, 210, 220));
+        } else {
+            try self.renderer.drawText(x + 16, y + 110, "Workspace: (none)", Color.rgb(200, 210, 220));
+        }
+        try self.renderer.drawText(x + 16, y + 136, "Esc close", Color.rgb(140, 150, 160));
     }
 
     fn drawWorkspacePicker(self: *App) !void {

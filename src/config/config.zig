@@ -21,6 +21,18 @@ pub const Config = struct {
         return theme_mod.byName(self.theme_name);
     }
 
+    pub fn setThemeName(self: *Config, allocator: std.mem.Allocator, name: []const u8) !void {
+        if (self.theme_name_owned) |old| allocator.free(old);
+        const owned = try allocator.dupe(u8, name);
+        self.theme_name_owned = owned;
+        self.theme_name = owned;
+    }
+
+    pub fn reload(self: *Config, allocator: std.mem.Allocator, io: std.Io) void {
+        self.deinit(allocator);
+        self.* = Config.load(allocator, io);
+    }
+
     pub fn load(allocator: std.mem.Allocator, io: std.Io) Config {
         var cfg: Config = .{};
         const home = std.c.getenv("HOME") orelse return cfg;

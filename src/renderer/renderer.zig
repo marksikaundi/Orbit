@@ -15,6 +15,7 @@ pub const Renderer = struct {
     atlas_h: f32 = 0,
     cell_w: f32 = @floatFromInt(bitmap.glyph_width),
     cell_h: f32 = @floatFromInt(bitmap.glyph_height),
+    font_scale: f32 = 1.0,
     fb_w: i32 = 0,
     fb_h: i32 = 0,
     vertices: std.ArrayList(f32) = .empty,
@@ -126,6 +127,16 @@ pub const Renderer = struct {
 
     pub fn setTheme(self: *Renderer, theme: theme_mod.Theme) void {
         self.theme = theme;
+    }
+
+    pub fn setFontScale(self: *Renderer, scale: f32) void {
+        self.font_scale = @min(3.0, @max(0.75, scale));
+        self.cell_w = @as(f32, @floatFromInt(bitmap.glyph_width)) * self.font_scale;
+        self.cell_h = @as(f32, @floatFromInt(bitmap.glyph_height)) * self.font_scale;
+    }
+
+    pub fn bumpFontScale(self: *Renderer, delta: f32) void {
+        self.setFontScale(self.font_scale + delta);
     }
 
     pub fn clearBackground(self: *Renderer) void {
