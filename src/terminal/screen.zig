@@ -1,5 +1,8 @@
 const std = @import("std");
-const Cell = @import("cell.zig").Cell;
+const cell_mod = @import("cell.zig");
+const Cell = cell_mod.Cell;
+const Color = cell_mod.Color;
+const Attrs = cell_mod.Attrs;
 
 pub const Screen = struct {
     allocator: std.mem.Allocator,
@@ -8,27 +11,64 @@ pub const Screen = struct {
     cells: []Cell,
     cursor_col: u16 = 0,
     cursor_row: u16 = 0,
+    cursor_visible: bool = true,
+    saved_col: u16 = 0,
+    saved_row: u16 = 0,
     dirty: bool = true,
+
+    // Current pen (SGR) state
+    fg: Color = Color.rgb(230, 235, 240),
+    bg: Color = Color.rgb(18, 20, 26),
+    attrs: Attrs = .{},
+    default_fg: Color = Color.rgb(230, 235, 240),
+    default_bg: Color = Color.rgb(18, 20, 26),
+
+    // Scrollback: ring of rows (each row = cols cells), oldest at head.
+    scrollback: std.ArrayList([]Cell) = .empty,
+    scrollback_max: usize = 2000,
+    /// View offset from bottom (0 = live screen, >0 = scrolled up).
+    view_offset: u16 = 0,
+
+    // Origin / wrap
+    auto_wrap: bool = true,
+    origin_mode: bool = false,
+    scroll_top: u16 = 0,
+    scroll_bottom: u16 = 0, // inclusive; set to rows-1 on init
 
     pub fn init(allocator: std.mem.Allocator, cols: u16, rows: u16) !Screen {
         const cells = try allocator.alloc(Cell, @as(usize, cols) * @as(usize, rows));
-        @memset(cells, Cell.blank());
+        const blank = Cell.blankWith(Color.rgb(230, 235, 240), Color.rgb(18, 20, 26));
+        @memset(cells, blank);
         return .{
             .allocator = allocator,
             .cols = cols,
             .rows = rows,
             .cells = cells,
+            .scroll_bottom = rows -| 1,
         };
     }
 
     pub fn deinit(self: *Screen) void {
+        for (self.scrollback.items) |row| {
+            self.allocator.free(row);
+        }
+        self.scrollback.deinit(self.allocator);
         self.allocator.free(self.cells);
         self.* = undefined;
     }
 
+    pub fn setThemeColors(self: *Screen, fg: Color, bg: Color) void {
+        self.default_fg = fg;
+        self.default_bg = bg;
+        self.fg = fg;
+        self.bg = bg;
+        self.dirty = true;
+    }
+
     pub fn resize(self: *Screen, cols: u16, rows: u16) !void {
         const new_cells = try self.allocator.alloc(Cell, @as(usize, cols) * @as(usize, rows));
-        @memset(new_cells, Cell.blank());
+        const blank = Cell.blankWith(self.default_fg, self.default_bg);
+        @memset(new_cells, blank);
 
         const copy_rows = @min(self.rows, rows);
         const copy_cols = @min(self.cols, cols);
@@ -41,12 +81,26 @@ pub const Screen = struct {
             }
         }
 
+        // Free / rebuild scrollback rows to new width (truncate or pad).
+        for (self.scrollback.items) |*row_ptr| {
+            const old = row_ptr.*;
+            const fresh = try self.allocator.alloc(Cell, cols);
+            @memset(fresh, blank);
+            const n = @min(old.len, cols);
+            @memcpy(fresh[0..n], old[0..n]);
+            self.allocator.free(old);
+            row_ptr.* = fresh;
+        }
+
         self.allocator.free(self.cells);
         self.cells = new_cells;
         self.cols = cols;
         self.rows = rows;
         self.cursor_col = @min(self.cursor_col, cols -| 1);
         self.cursor_row = @min(self.cursor_row, rows -| 1);
+        self.scroll_top = 0;
+        self.scroll_bottom = rows -| 1;
+        self.view_offset = 0;
         self.dirty = true;
     }
 
@@ -58,12 +112,37 @@ pub const Screen = struct {
         return self.cells[@as(usize, row) * self.cols + col];
     }
 
+    /// Visible cell accounting for scrollback view offset.
+    pub fn visibleCell(self: *const Screen, col: u16, row: u16) Cell {
+        if (self.view_offset == 0) {
+            return self.cellAtConst(col, row);
+        }
+        const total_back: usize = self.scrollback.items.len;
+        const offset: usize = self.view_offset;
+        // row 0 of view is (total_back - offset) into scrollback + screen
+        const abs_row: isize = @as(isize, @intCast(total_back)) - @as(isize, @intCast(offset)) + @as(isize, @intCast(row));
+        if (abs_row < 0) {
+            return Cell.blankWith(self.default_fg, self.default_bg);
+        }
+        const a: usize = @intCast(abs_row);
+        if (a < total_back) {
+            const sb_row = self.scrollback.items[a];
+            if (col < sb_row.len) return sb_row[col];
+            return Cell.blankWith(self.default_fg, self.default_bg);
+        }
+        const screen_row: usize = a - total_back;
+        if (screen_row < self.rows) {
+            return self.cellAtConst(col, @intCast(screen_row));
+        }
+        return Cell.blankWith(self.default_fg, self.default_bg);
+    }
+
     pub fn putChar(self: *Screen, codepoint: u21) void {
         if (codepoint == 0) return;
+        self.view_offset = 0;
 
         switch (codepoint) {
             '\n' => {
-                self.cursor_col = 0;
                 self.lineFeed();
                 return;
             },
@@ -75,63 +154,283 @@ pub const Screen = struct {
             '\t' => {
                 const next = ((self.cursor_col / 8) + 1) * 8;
                 while (self.cursor_col < next and self.cursor_col < self.cols) {
-                    self.cellAt(self.cursor_col, self.cursor_row).set(' ');
+                    self.writeAtCursor(' ');
                     self.cursor_col += 1;
                 }
                 self.dirty = true;
                 return;
             },
-            0x08, 0x7F => { // backspace / delete
+            0x08 => { // BS
                 if (self.cursor_col > 0) {
                     self.cursor_col -= 1;
-                    self.cellAt(self.cursor_col, self.cursor_row).set(' ');
                     self.dirty = true;
                 }
                 return;
             },
+            0x07 => return, // BEL
             else => {},
         }
 
-        if (codepoint < 0x20) return; // ignore other controls
+        if (codepoint < 0x20) return;
 
         if (self.cursor_col >= self.cols) {
-            self.cursor_col = 0;
-            self.lineFeed();
+            if (self.auto_wrap) {
+                self.cursor_col = 0;
+                self.lineFeed();
+            } else {
+                self.cursor_col = self.cols -| 1;
+            }
         }
 
-        self.cellAt(self.cursor_col, self.cursor_row).set(codepoint);
+        self.writeAtCursor(codepoint);
         self.cursor_col += 1;
         self.dirty = true;
     }
 
-    fn lineFeed(self: *Screen) void {
-        if (self.cursor_row + 1 < self.rows) {
+    fn writeAtCursor(self: *Screen, codepoint: u21) void {
+        var fg = self.fg;
+        var bg = self.bg;
+        if (self.attrs.reverse) {
+            const t = fg;
+            fg = bg;
+            bg = t;
+        }
+        self.cellAt(self.cursor_col, self.cursor_row).set(codepoint, fg, bg, self.attrs);
+    }
+
+    pub fn lineFeed(self: *Screen) void {
+        if (self.cursor_row < self.scroll_bottom) {
             self.cursor_row += 1;
         } else {
-            self.scrollUp();
+            self.scrollUpRegion();
         }
         self.dirty = true;
     }
 
-    fn scrollUp(self: *Screen) void {
-        const row_bytes = self.cols;
-        // Move rows 1..end to 0..end-1
-        var r: u16 = 0;
-        while (r + 1 < self.rows) : (r += 1) {
-            const dst = self.cells[@as(usize, r) * row_bytes ..][0..row_bytes];
-            const src = self.cells[@as(usize, r + 1) * row_bytes ..][0..row_bytes];
+    pub fn index(self: *Screen) void {
+        self.lineFeed();
+    }
+
+    pub fn reverseIndex(self: *Screen) void {
+        if (self.cursor_row > self.scroll_top) {
+            self.cursor_row -= 1;
+        } else {
+            self.scrollDownRegion();
+        }
+        self.dirty = true;
+    }
+
+    fn pushScrollbackRow(self: *Screen, row_cells: []const Cell) void {
+        const copy = self.allocator.alloc(Cell, self.cols) catch return;
+        const n = @min(row_cells.len, self.cols);
+        @memcpy(copy[0..n], row_cells[0..n]);
+        if (n < self.cols) {
+            @memset(copy[n..], Cell.blankWith(self.default_fg, self.default_bg));
+        }
+        self.scrollback.append(self.allocator, copy) catch {
+            self.allocator.free(copy);
+            return;
+        };
+        while (self.scrollback.items.len > self.scrollback_max) {
+            const old = self.scrollback.orderedRemove(0);
+            self.allocator.free(old);
+        }
+    }
+
+    pub fn scrollUpRegion(self: *Screen) void {
+        const top = self.scroll_top;
+        const bottom = self.scroll_bottom;
+        if (top == 0 and bottom + 1 == self.rows) {
+            // Full screen: save top row to scrollback
+            const top_row = self.cells[0..self.cols];
+            self.pushScrollbackRow(top_row);
+        }
+        var r: u16 = top;
+        while (r < bottom) : (r += 1) {
+            const dst = self.cells[@as(usize, r) * self.cols ..][0..self.cols];
+            const src = self.cells[@as(usize, r + 1) * self.cols ..][0..self.cols];
             @memcpy(dst, src);
             for (dst) |*cell| cell.dirty = true;
         }
-        // Clear last row
-        const last = self.cells[@as(usize, self.rows - 1) * row_bytes ..][0..row_bytes];
-        @memset(last, Cell.blank());
+        const last = self.cells[@as(usize, bottom) * self.cols ..][0..self.cols];
+        @memset(last, Cell.blankWith(self.default_fg, self.default_bg));
         for (last) |*cell| cell.dirty = true;
     }
 
+    pub fn scrollDownRegion(self: *Screen) void {
+        const top = self.scroll_top;
+        const bottom = self.scroll_bottom;
+        var r: u16 = bottom;
+        while (r > top) : (r -= 1) {
+            const dst = self.cells[@as(usize, r) * self.cols ..][0..self.cols];
+            const src = self.cells[@as(usize, r - 1) * self.cols ..][0..self.cols];
+            @memcpy(dst, src);
+            for (dst) |*cell| cell.dirty = true;
+        }
+        const first = self.cells[@as(usize, top) * self.cols ..][0..self.cols];
+        @memset(first, Cell.blankWith(self.default_fg, self.default_bg));
+        for (first) |*cell| cell.dirty = true;
+    }
+
+    pub fn scrollView(self: *Screen, delta: i32) void {
+        const max_off: u16 = @intCast(@min(self.scrollback.items.len, 65535));
+        if (delta < 0) {
+            const d: u16 = @intCast(@min(@as(u16, @intCast(-delta)), self.view_offset));
+            self.view_offset -= d;
+        } else {
+            const d: u16 = @intCast(@min(@as(u16, @intCast(delta)), max_off -| self.view_offset));
+            self.view_offset += d;
+        }
+        self.dirty = true;
+    }
+
+    // --- Cursor ---
+
+    pub fn moveCursor(self: *Screen, col: u16, row: u16) void {
+        self.cursor_col = @min(col, self.cols -| 1);
+        var r = row;
+        if (self.origin_mode) {
+            r = self.scroll_top +| row;
+            r = @min(r, self.scroll_bottom);
+        } else {
+            r = @min(r, self.rows -| 1);
+        }
+        self.cursor_row = r;
+        self.dirty = true;
+    }
+
+    pub fn moveCursorRel(self: *Screen, dcol: i32, drow: i32) void {
+        const nc: i32 = @as(i32, @intCast(self.cursor_col)) + dcol;
+        const nr: i32 = @as(i32, @intCast(self.cursor_row)) + drow;
+        self.cursor_col = @intCast(@max(0, @min(nc, @as(i32, @intCast(self.cols -| 1)))));
+        self.cursor_row = @intCast(@max(0, @min(nr, @as(i32, @intCast(self.rows -| 1)))));
+        self.dirty = true;
+    }
+
+    pub fn saveCursor(self: *Screen) void {
+        self.saved_col = self.cursor_col;
+        self.saved_row = self.cursor_row;
+    }
+
+    pub fn restoreCursor(self: *Screen) void {
+        self.cursor_col = self.saved_col;
+        self.cursor_row = self.saved_row;
+        self.dirty = true;
+    }
+
+    // --- Erase ---
+
+    pub fn eraseInDisplay(self: *Screen, mode: u16) void {
+        const blank = Cell.blankWith(self.default_fg, self.default_bg);
+        switch (mode) {
+            0 => { // cursor to end
+                self.eraseInLine(0);
+                var r = self.cursor_row +| 1;
+                while (r < self.rows) : (r += 1) {
+                    @memset(self.cells[@as(usize, r) * self.cols ..][0..self.cols], blank);
+                }
+            },
+            1 => { // start to cursor
+                var r: u16 = 0;
+                while (r < self.cursor_row) : (r += 1) {
+                    @memset(self.cells[@as(usize, r) * self.cols ..][0..self.cols], blank);
+                }
+                self.eraseInLine(1);
+            },
+            2, 3 => { // entire screen (+scrollback for 3)
+                @memset(self.cells, blank);
+                if (mode == 3) {
+                    for (self.scrollback.items) |row| self.allocator.free(row);
+                    self.scrollback.clearRetainingCapacity();
+                }
+            },
+            else => {},
+        }
+        for (self.cells) |*c| c.dirty = true;
+        self.dirty = true;
+    }
+
+    pub fn eraseInLine(self: *Screen, mode: u16) void {
+        const blank = Cell.blankWith(self.default_fg, self.default_bg);
+        const row_start = @as(usize, self.cursor_row) * self.cols;
+        switch (mode) {
+            0 => { // cursor to end of line
+                @memset(self.cells[row_start + self.cursor_col ..][0 .. self.cols - self.cursor_col], blank);
+            },
+            1 => { // start to cursor
+                @memset(self.cells[row_start..][0 .. self.cursor_col + 1], blank);
+            },
+            2 => {
+                @memset(self.cells[row_start..][0..self.cols], blank);
+            },
+            else => {},
+        }
+        for (self.cells[row_start..][0..self.cols]) |*c| c.dirty = true;
+        self.dirty = true;
+    }
+
+    pub fn deleteChars(self: *Screen, n: u16) void {
+        const count = @min(n, self.cols -| self.cursor_col);
+        if (count == 0) return;
+        const row_start = @as(usize, self.cursor_row) * self.cols;
+        const from = row_start + self.cursor_col;
+        const move_n = self.cols - self.cursor_col - count;
+        if (move_n > 0) {
+            std.mem.copyForwards(Cell, self.cells[from .. from + move_n], self.cells[from + count .. from + count + move_n]);
+        }
+        const blank = Cell.blankWith(self.default_fg, self.default_bg);
+        @memset(self.cells[row_start + self.cols - count ..][0..count], blank);
+        self.dirty = true;
+    }
+
+    pub fn insertChars(self: *Screen, n: u16) void {
+        const count = @min(n, self.cols -| self.cursor_col);
+        if (count == 0) return;
+        const row_start = @as(usize, self.cursor_row) * self.cols;
+        const from = row_start + self.cursor_col;
+        const move_n = self.cols - self.cursor_col - count;
+        if (move_n > 0) {
+            std.mem.copyBackwards(Cell, self.cells[from + count .. from + count + move_n], self.cells[from .. from + move_n]);
+        }
+        const blank = Cell.blankWith(self.default_fg, self.default_bg);
+        @memset(self.cells[from..][0..count], blank);
+        self.dirty = true;
+    }
+
+    pub fn setScrollRegion(self: *Screen, top: u16, bottom: u16) void {
+        const t = @min(top, self.rows -| 1);
+        const b = @min(bottom, self.rows -| 1);
+        if (t < b) {
+            self.scroll_top = t;
+            self.scroll_bottom = b;
+        } else {
+            self.scroll_top = 0;
+            self.scroll_bottom = self.rows -| 1;
+        }
+        self.cursor_col = 0;
+        self.cursor_row = if (self.origin_mode) self.scroll_top else 0;
+    }
+
+    pub fn resetAttrs(self: *Screen) void {
+        self.fg = self.default_fg;
+        self.bg = self.default_bg;
+        self.attrs = .{};
+    }
+
     pub fn clearDirty(self: *Screen) void {
-        for (self.cells) |*cell| cell.dirty = false;
+        for (self.cells) |*c| c.dirty = false;
         self.dirty = false;
+    }
+
+    /// Collect plain text of the visible screen (for search / copy).
+    pub fn lineText(self: *const Screen, row: u16, buf: []u8) usize {
+        if (row >= self.rows or buf.len < self.cols) return 0;
+        var i: usize = 0;
+        while (i < self.cols) : (i += 1) {
+            const cp = self.visibleCell(@intCast(i), row).codepoint;
+            buf[i] = if (cp < 128) @intCast(cp) else '?';
+        }
+        return self.cols;
     }
 };
 
@@ -145,4 +444,12 @@ test "screen putChar and newline" {
     try std.testing.expectEqual(@as(u21, 'H'), screen.cellAtConst(0, 0).codepoint);
     try std.testing.expectEqual(@as(u21, 'i'), screen.cellAtConst(1, 0).codepoint);
     try std.testing.expectEqual(@as(u21, '!'), screen.cellAtConst(0, 1).codepoint);
+}
+
+test "screen sgr colors persist on cell" {
+    var screen = try Screen.init(std.testing.allocator, 5, 2);
+    defer screen.deinit();
+    screen.fg = Color.rgb(255, 0, 0);
+    screen.putChar('R');
+    try std.testing.expectEqual(@as(u8, 255), screen.cellAtConst(0, 0).fg.r);
 }

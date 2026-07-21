@@ -1,0 +1,111 @@
+//! Minimal TOML subset loader for Orbit config (~/.config/orbit/config.toml).
+
+const std = @import("std");
+const theme_mod = @import("theme.zig");
+
+pub const Config = struct {
+    window_width: i32 = 900,
+    window_height: i32 = 560,
+    opacity: f32 = 1.0,
+    theme_name: []const u8 = "orbit-dark",
+    scrollback: usize = 2000,
+    /// Owned theme name buffer when loaded from file.
+    theme_name_owned: ?[]u8 = null,
+
+    pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
+        if (self.theme_name_owned) |t| allocator.free(t);
+        self.theme_name_owned = null;
+    }
+
+    pub fn theme(self: *const Config) theme_mod.Theme {
+        return theme_mod.byName(self.theme_name);
+    }
+
+    pub fn load(allocator: std.mem.Allocator) Config {
+        var cfg: Config = .{};
+        const home = std.posix.getenv("HOME") orelse return cfg;
+        const path = std.fmt.allocPrint(allocator, "{s}/.config/orbit/config.toml", .{home}) catch return cfg;
+        defer allocator.free(path);
+
+        const file = std.fs.cwd().openFile(path, .{}) catch return cfg;
+        defer file.close();
+
+        const data = file.readToEndAlloc(allocator, 64 * 1024) catch return cfg;
+        defer allocator.free(data);
+
+        parseInto(&cfg, allocator, data);
+        return cfg;
+    }
+
+    fn parseInto(cfg: *Config, allocator: std.mem.Allocator, data: []const u8) void {
+        var section: enum { none, window, theme, terminal } = .none;
+        var lines = std.mem.splitScalar(u8, data, '\n');
+        while (lines.next()) |raw| {
+            var line = std.mem.trim(u8, raw, " \t\r");
+            if (line.len == 0 or line[0] == '#') continue;
+            if (line[0] == '[') {
+                if (std.mem.indexOfScalar(u8, line, ']')) |end| {
+                    const name = std.mem.trim(u8, line[1..end], " \t");
+                    if (std.mem.eql(u8, name, "window")) section = .window;
+                    else if (std.mem.eql(u8, name, "theme")) section = .theme;
+                    else if (std.mem.eql(u8, name, "terminal")) section = .terminal;
+                    else section = .none;
+                }
+                continue;
+            }
+            const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+            const key = std.mem.trim(u8, line[0..eq], " \t");
+            var val = std.mem.trim(u8, line[eq + 1 ..], " \t");
+            // Strip quotes
+            if (val.len >= 2 and ((val[0] == '"' and val[val.len - 1] == '"') or (val[0] == '\'' and val[val.len - 1] == '\''))) {
+                val = val[1 .. val.len - 1];
+            }
+
+            switch (section) {
+                .window => {
+                    if (std.mem.eql(u8, key, "width")) cfg.window_width = parseI32(val) orelse cfg.window_width;
+                    if (std.mem.eql(u8, key, "height")) cfg.window_height = parseI32(val) orelse cfg.window_height;
+                    if (std.mem.eql(u8, key, "opacity")) cfg.opacity = parseF32(val) orelse cfg.opacity;
+                },
+                .theme => {
+                    if (std.mem.eql(u8, key, "name")) {
+                        if (cfg.theme_name_owned) |old| allocator.free(old);
+                        const owned = allocator.dupe(u8, val) catch continue;
+                        cfg.theme_name_owned = owned;
+                        cfg.theme_name = owned;
+                    }
+                },
+                .terminal => {
+                    if (std.mem.eql(u8, key, "scrollback")) {
+                        cfg.scrollback = @intCast(parseI32(val) orelse @as(i32, @intCast(cfg.scrollback)));
+                    }
+                },
+                .none => {},
+            }
+        }
+        cfg.opacity = @min(1.0, @max(0.15, cfg.opacity));
+    }
+};
+
+fn parseI32(s: []const u8) ?i32 {
+    return std.fmt.parseInt(i32, s, 10) catch null;
+}
+
+fn parseF32(s: []const u8) ?f32 {
+    return std.fmt.parseFloat(f32, s) catch null;
+}
+
+test "parse config snippet" {
+    var cfg: Config = .{};
+    defer cfg.deinit(std.testing.allocator);
+    Config.parseInto(&cfg, std.testing.allocator,
+        \\[window]
+        \\opacity = 0.9
+        \\width = 1000
+        \\[theme]
+        \\name = "nord"
+    );
+    try std.testing.expectEqual(@as(f32, 0.9), cfg.opacity);
+    try std.testing.expectEqual(@as(i32, 1000), cfg.window_width);
+    try std.testing.expectEqualStrings("nord", cfg.theme_name);
+}
