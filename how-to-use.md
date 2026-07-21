@@ -49,8 +49,9 @@ Orbit opens on a welcome home (logo, version, quick actions) — no shell until 
 | `O` / `2` | Open Workspace (pick a folder) |
 | `P` / `3` | Command Palette |
 | `S` / `4` | Settings / Config |
-| `H` / `5` | Help & Shortcuts (full reference; ↑↓ to scroll) |
-| `Q` / `6` | Quit Orbit |
+| `L` / `5` | Plugins |
+| `H` / `6` | Help & Shortcuts (full reference; ↑↓ to scroll) |
+| `Q` / `7` | Quit Orbit |
 | `Ctrl+Shift+H` | Return to home anytime |
 | `Cmd+W` / `Ctrl+Shift+W` | Close tab (from home → quit) |
 | `Cmd+Q` / `Ctrl+Q` | Quit Orbit (anywhere) |
@@ -91,12 +92,21 @@ padding_y = 6
 
 ## Plugins (Phase 6)
 
+On home press **L** (or **5**) to open the Plugins panel:
+
+- See what plugins can do (commands, UI, tools, automation, cloud, sharing)
+- List installed plugins and **Space/Enter** to enable/disable
+- **R** reload from disk
+- **I** install the built-in **hello** demo plugin
+
+Or manually:
+
 ```bash
 mkdir -p ~/.config/orbit/plugins/hello
 cp assets/plugins/hello/plugin.toml ~/.config/orbit/plugins/hello/
 ```
 
-Open **Ctrl+Shift+P** → `Reload Plugins` (or restart).
+Then **R** in the Plugins panel (or palette → Reload Plugins). Plugin commands and themes appear in the command palette.
 
 ## Command palette (Phase 5)
 

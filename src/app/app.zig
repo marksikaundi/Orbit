@@ -20,7 +20,7 @@ const clipboard = @import("../clipboard/clipboard.zig");
 const folder_picker = @import("../platform/folder_picker.zig");
 const Color = @import("../terminal/cell.zig").Color;
 
-const UiMode = enum { home, normal, search, ws_picker, ws_save, palette, ssh_prompt, settings };
+const UiMode = enum { home, normal, search, ws_picker, ws_save, palette, ssh_prompt, settings, plugins };
 
 pub const App = struct {
     allocator: std.mem.Allocator,
@@ -44,8 +44,10 @@ pub const App = struct {
     status_len: usize = 0,
     mouse_x: f64 = 0,
     mouse_y: f64 = 0,
-    /// Settings row: 0 theme, 1 cursor, 2 blink, 3 shell
+    /// Settings row: 0 theme, 1 text, 2 cursor, 3 blink, 4 shell
     settings_row: usize = 0,
+    /// Selected plugin index in the Plugins panel.
+    plugin_row: usize = 0,
 
     pub fn create(allocator: std.mem.Allocator, io: std.Io) !*App {
         const self = try allocator.create(App);
@@ -304,6 +306,7 @@ pub const App = struct {
             // Only bounce to home when nothing is open.
             switch (self.ui) {
                 .settings => try self.drawSettings(),
+                .plugins => try self.drawPlugins(),
                 .palette => try self.drawPalette(),
                 .ws_picker => try self.drawWorkspacePicker(),
                 .ws_save => try self.drawSavePrompt(),
@@ -368,6 +371,9 @@ pub const App = struct {
         }
         if (self.ui == .settings) {
             try self.drawSettings();
+        }
+        if (self.ui == .plugins) {
+            try self.drawPlugins();
         }
         // Always on top of overlays so "saved" / theme notes stay readable.
         if (self.status_len > 0) {
@@ -785,6 +791,106 @@ pub const App = struct {
         try self.renderer.drawText(x + pad_x, cy, "Esc close    Ctrl+=/-/0 font size", dim);
     }
 
+    fn drawPlugins(self: *App) !void {
+        const cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.45);
+
+        const pad_x = @max(24, cw + 10);
+        const pad_y = @max(18, @divTrunc(ch, 2) + 6);
+        const row_h = ch + @divTrunc(ch, 2) + 4;
+        const title_h = ch + 4;
+        const gap = @max(10, @divTrunc(ch, 2));
+        const cap_lines = [_][]const u8{
+            "Add new commands and utilities",
+            "Customize the UI",
+            "Integrate with development tools",
+            "Automate repetitive workflows",
+            "Connect to cloud services",
+            "Share extensions with others",
+        };
+        const footer_lines = 3;
+        const plugin_n = self.plugins.count();
+        const list_rows = @max(@as(usize, 1), plugin_n);
+
+        const max_w = fb_w - cw * 4;
+        const w = @min(@max(cw * 52, 580), max_w);
+        const caps_h = @as(i32, @intCast(cap_lines.len)) * (ch + 2) + gap;
+        const list_h = @as(i32, @intCast(list_rows)) * row_h + ch + 4;
+        const footer_h = footer_lines * (ch + 4) + pad_y;
+        const h = pad_y + title_h + ch + gap + caps_h + gap + list_h + footer_h;
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @max(ch, @divTrunc(fb_h - h, 2));
+
+        const panel = Color.rgb(22, 26, 34);
+        const fg = Color.rgb(230, 235, 240);
+        const muted = Color.rgb(150, 160, 175);
+        const dim = Color.rgb(100, 110, 125);
+        const accent = Color.rgb(90, 175, 220);
+        const sel_bg = Color.rgb(36, 48, 64);
+        const on_col = Color.rgb(120, 200, 140);
+        const off_col = Color.rgb(180, 120, 120);
+
+        try self.renderer.drawRect(x, y, w, h, panel, 0.98);
+        try self.renderer.drawRect(x, y, w, 2, accent, 0.55);
+
+        var cy = y + pad_y;
+        try self.renderer.drawText(x + pad_x, cy, "Plugins", fg);
+        cy += title_h;
+        try self.renderer.drawText(x + pad_x, cy, "Extend Orbit — commands, themes, hooks, workflows", muted);
+        cy += ch + gap;
+
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
+        try self.renderer.drawText(x + pad_x, cy, "Plugins allow you to:", muted);
+        cy += ch + 4;
+        for (cap_lines) |line| {
+            try self.renderer.drawText(x + pad_x + 4, cy, "-", dim);
+            try self.renderer.drawText(x + pad_x + cw * 2, cy, line, fg);
+            cy += ch + 2;
+        }
+        cy += gap;
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
+
+        var count_buf: [48]u8 = undefined;
+        const count_line = std.fmt.bufPrint(&count_buf, "Installed  ({d})", .{plugin_n}) catch "Installed";
+        try self.renderer.drawText(x + pad_x, cy, count_line, muted);
+        cy += ch + 4;
+
+        if (plugin_n == 0) {
+            try self.renderer.drawText(x + pad_x + 6, cy + @divTrunc(row_h - ch, 2), "(none yet — press I to install the hello demo)", dim);
+        } else {
+            if (self.plugin_row >= plugin_n) self.plugin_row = plugin_n - 1;
+            for (self.plugins.plugins.items, 0..) |p, i| {
+                const ry = cy + @as(i32, @intCast(i)) * row_h;
+                const text_y = ry + @divTrunc(row_h - ch, 2);
+                const selected = i == self.plugin_row;
+                if (selected) {
+                    try self.renderer.drawRect(x + 10, ry, w - 20, row_h - 2, sel_bg, 1.0);
+                    try self.renderer.drawRect(x + 10, ry, 3, row_h - 2, accent, 1.0);
+                }
+
+                const state = if (p.enabled) "on" else "off";
+                var line_buf: [96]u8 = undefined;
+                const line = std.fmt.bufPrint(&line_buf, "{s}  v{s}", .{ p.name, p.version }) catch p.name;
+                const shown = line[0..@min(line.len, 36)];
+                try self.renderer.drawText(x + pad_x + 6, text_y, shown, if (selected) fg else muted);
+
+                const state_x = x + w - pad_x - @as(i32, @intCast(state.len)) * cw;
+                try self.renderer.drawText(state_x, text_y, state, if (p.enabled) on_col else off_col);
+            }
+        }
+
+        cy = y + h - footer_h;
+        try self.renderer.drawText(x + pad_x, cy, "~/.config/orbit/plugins/<name>/plugin.toml", dim);
+        cy += ch + 4;
+        try self.renderer.drawText(x + pad_x, cy, "Up/Down select    Space/Enter toggle    R reload", dim);
+        cy += ch + 4;
+        try self.renderer.drawText(x + pad_x, cy, "I install hello demo    Esc close", dim);
+    }
+
     fn drawWorkspacePicker(self: *App) !void {
         const w: i32 = 420;
         const row_h: i32 = 22;
@@ -864,7 +970,7 @@ pub const App = struct {
                 self.save_name_len += 1;
                 return;
             },
-            .ws_picker, .settings => return,
+            .ws_picker, .settings, .plugins => return,
             .normal => {},
         }
         const session = self.focused() orelse return;
@@ -906,6 +1012,10 @@ pub const App = struct {
         }
         if (self.ui == .settings) {
             self.handleSettingsKey(key);
+            return;
+        }
+        if (self.ui == .plugins) {
+            self.handlePluginsKey(key);
             return;
         }
         if (self.ui == .ws_picker) {
@@ -1069,6 +1179,7 @@ pub const App = struct {
             'O' => self.runHomeAction(.open_workspace),
             'P' => self.runHomeAction(.command_palette),
             'S' => self.runHomeAction(.settings),
+            'L' => self.runHomeAction(.plugins),
             'H' => self.runHomeAction(.help),
             'Q' => self.runHomeAction(.quit),
             else => {},
@@ -1107,11 +1218,13 @@ pub const App = struct {
             c.GLFW_KEY_2 => self.runHomeAction(.open_workspace),
             c.GLFW_KEY_3 => self.runHomeAction(.command_palette),
             c.GLFW_KEY_4 => self.runHomeAction(.settings),
-            c.GLFW_KEY_5 => self.runHomeAction(.help),
-            c.GLFW_KEY_6 => self.runHomeAction(.quit),
+            c.GLFW_KEY_5 => self.runHomeAction(.plugins),
+            c.GLFW_KEY_6 => self.runHomeAction(.help),
+            c.GLFW_KEY_7 => self.runHomeAction(.quit),
             c.GLFW_KEY_O => self.runHomeAction(.open_workspace),
             c.GLFW_KEY_P => self.runHomeAction(.command_palette),
             c.GLFW_KEY_S => self.runHomeAction(.settings),
+            c.GLFW_KEY_L => self.runHomeAction(.plugins),
             c.GLFW_KEY_H => self.runHomeAction(.help),
             c.GLFW_KEY_Q => self.runHomeAction(.quit),
             else => {},
@@ -1138,6 +1251,10 @@ pub const App = struct {
             .settings => {
                 self.settings_row = 0;
                 self.ui = .settings;
+            },
+            .plugins => {
+                self.plugin_row = 0;
+                self.ui = .plugins;
             },
             .help => self.home.openHelp(),
             .quit => self.requestQuit(),
@@ -1275,8 +1392,139 @@ pub const App = struct {
                 const msg = std.fmt.bufPrint(&buf, "plugins: {d} loaded", .{self.plugins.count()}) catch "plugins reloaded";
                 self.setStatus(msg);
             },
-            .list_plugins => self.showPluginList(),
+            .list_plugins => {
+                self.plugin_row = 0;
+                self.ui = .plugins;
+            },
         }
+    }
+
+    fn handlePluginsKey(self: *App, key: c_int) void {
+        switch (key) {
+            c.GLFW_KEY_ESCAPE => self.leaveOverlay(),
+            c.GLFW_KEY_UP => {
+                if (self.plugin_row > 0) self.plugin_row -= 1;
+            },
+            c.GLFW_KEY_DOWN => {
+                const n = self.plugins.count();
+                if (n > 0 and self.plugin_row + 1 < n) self.plugin_row += 1;
+            },
+            c.GLFW_KEY_ENTER, c.GLFW_KEY_SPACE => self.toggleSelectedPlugin(),
+            c.GLFW_KEY_R => self.reloadPluginsFromPanel(),
+            c.GLFW_KEY_I => self.installHelloPlugin(),
+            else => {},
+        }
+    }
+
+    fn toggleSelectedPlugin(self: *App) void {
+        if (self.plugin_row >= self.plugins.plugins.items.len) {
+            self.setStatus("no plugin selected");
+            return;
+        }
+        const p = &self.plugins.plugins.items[self.plugin_row];
+        p.enabled = !p.enabled;
+        self.rebuildPalette();
+        self.applyRendererHooks();
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "{s} {s}", .{ p.name, if (p.enabled) "enabled" else "disabled" }) catch "plugin toggled";
+        self.setStatus(msg);
+    }
+
+    fn reloadPluginsFromPanel(self: *App) void {
+        self.plugins.reload() catch {
+            self.setStatus("plugin reload failed");
+            return;
+        };
+        self.fireHooks(.on_load);
+        self.applyRendererHooks();
+        self.rebuildPalette();
+        if (self.plugin_row >= self.plugins.count() and self.plugins.count() > 0) {
+            self.plugin_row = self.plugins.count() - 1;
+        } else if (self.plugins.count() == 0) {
+            self.plugin_row = 0;
+        }
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "plugins: {d} loaded", .{self.plugins.count()}) catch "plugins reloaded";
+        self.setStatus(msg);
+    }
+
+    /// Write the bundled hello demo into ~/.config/orbit/plugins/hello/ and reload.
+    fn installHelloPlugin(self: *App) void {
+        const toml =
+            \\name = "hello"
+            \\version = "0.1.0"
+            \\description = "Demo Orbit plugin — commands, theme, and lifecycle hooks"
+            \\
+            \\[[commands]]
+            \\id = "hello.greet"
+            \\label = "Plugin: Hello"
+            \\hint = "status"
+            \\action = "status"
+            \\payload = "Hello from the hello plugin"
+            \\
+            \\[[commands]]
+            \\id = "hello.date"
+            \\label = "Plugin: Insert date"
+            \\hint = "insert"
+            \\action = "insert"
+            \\payload = "date\r"
+            \\
+            \\[[commands]]
+            \\id = "hello.new_tab"
+            \\label = "Plugin: New Tab"
+            \\hint = "host"
+            \\action = "host"
+            \\payload = "new_tab"
+            \\
+            \\[[themes]]
+            \\name = "amber"
+            \\foreground = "#f5e6c8"
+            \\background = "#2a2010"
+            \\cursor = "#ffb000"
+            \\selection = "#5a4020"
+            \\
+            \\[hooks]
+            \\on_load = "status:hello plugin loaded"
+            \\on_workspace_open = "status:hello: workspace opened"
+            \\on_workspace_save = "status:hello: workspace saved"
+            \\
+        ;
+
+        const dir = self.plugins.dir_path;
+        const hello_dir = std.fmt.allocPrint(self.allocator, "{s}/hello", .{dir}) catch {
+            self.setStatus("install failed");
+            return;
+        };
+        defer self.allocator.free(hello_dir);
+
+        // mkdir -p
+        var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+        if (hello_dir.len >= path_buf.len) {
+            self.setStatus("path too long");
+            return;
+        }
+        @memcpy(path_buf[0..hello_dir.len], hello_dir);
+        path_buf[hello_dir.len] = 0;
+        _ = std.c.mkdir(path_buf[0..hello_dir.len :0], 0o755);
+
+        const toml_path = std.fmt.allocPrint(self.allocator, "{s}/plugin.toml", .{hello_dir}) catch {
+            self.setStatus("install failed");
+            return;
+        };
+        defer self.allocator.free(toml_path);
+
+        const file = std.Io.Dir.createFileAbsolute(self.io, toml_path, .{}) catch {
+            self.setStatus("could not write plugin.toml");
+            return;
+        };
+        defer file.close(self.io);
+        file.writeStreamingAll(self.io, toml) catch {
+            self.setStatus("could not write plugin.toml");
+            return;
+        };
+
+        self.reloadPluginsFromPanel();
+        self.setStatus("installed hello plugin");
     }
 
     fn handleSettingsKey(self: *App, key: c_int) void {

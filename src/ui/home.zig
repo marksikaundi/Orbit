@@ -12,6 +12,7 @@ pub const Action = enum {
     open_workspace,
     command_palette,
     settings,
+    plugins,
     help,
     quit,
 };
@@ -27,6 +28,7 @@ pub const entries = [_]Entry{
     .{ .action = .open_workspace, .label = "Open Workspace", .key = "O" },
     .{ .action = .command_palette, .label = "Command Palette", .key = "P" },
     .{ .action = .settings, .label = "Settings", .key = "S" },
+    .{ .action = .plugins, .label = "Plugins", .key = "L" },
     .{ .action = .help, .label = "Help", .key = "H" },
     .{ .action = .quit, .label = "Quit Orbit", .key = "Q" },
 };
@@ -46,8 +48,9 @@ pub const help_rows = [_]HelpRow{
     .{ .item = .{ .keys = "O / 2", .desc = "Open a folder as workspace" } },
     .{ .item = .{ .keys = "P / 3", .desc = "Open the command palette" } },
     .{ .item = .{ .keys = "S / 4", .desc = "Show settings / config paths" } },
-    .{ .item = .{ .keys = "H / 5", .desc = "Open this Help reference" } },
-    .{ .item = .{ .keys = "Q / 6", .desc = "Quit Orbit" } },
+    .{ .item = .{ .keys = "L / 5", .desc = "Plugins — extend Orbit with commands & themes" } },
+    .{ .item = .{ .keys = "H / 6", .desc = "Open this Help reference" } },
+    .{ .item = .{ .keys = "Q / 7", .desc = "Quit Orbit" } },
     .{ .item = .{ .keys = "↑ ↓", .desc = "Move selection" } },
     .{ .spacer = {} },
 
@@ -126,9 +129,10 @@ pub const help_rows = [_]HelpRow{
     .{ .spacer = {} },
 
     .{ .heading = "Config & plugins" },
+    .{ .item = .{ .keys = "L / Plugins", .desc = "Manage plugins, install demo, reload" } },
     .{ .item = .{ .keys = "config.toml", .desc = "~/.config/orbit/config.toml" } },
     .{ .item = .{ .keys = "plugins/", .desc = "~/.config/orbit/plugins/<name>/" } },
-    .{ .note = "Palette → Reload Config / Reload Plugins after edits" },
+    .{ .note = "Plugins add commands, themes, UI hooks, and workflow automation" },
     .{ .spacer = {} },
 
     .{ .heading = "This Help panel" },

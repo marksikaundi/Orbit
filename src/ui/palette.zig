@@ -74,7 +74,7 @@ pub const catalog = [_]BuiltinEntry{
     .{ .action = .quit, .label = "Quit Orbit", .hint = "Cmd+Q" },
     .{ .action = .reload_config, .label = "Reload Config", .hint = "" },
     .{ .action = .reload_plugins, .label = "Reload Plugins", .hint = "" },
-    .{ .action = .list_plugins, .label = "List Plugins", .hint = "" },
+    .{ .action = .list_plugins, .label = "Plugins…", .hint = "L on home" },
 };
 
 pub const Item = struct {
