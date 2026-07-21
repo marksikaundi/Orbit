@@ -4,12 +4,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Absolute repo path so Orbit can refresh ~/.config/orbit/source_root on launch.
+    const source_root: []const u8 = b.build_root.path orelse ".";
+    const build_opts = b.addOptions();
+    build_opts.addOption([]const u8, "source_root", source_root);
+
     const root_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
+    root_module.addOptions("build_options", build_opts);
 
     const exe = b.addExecutable(.{
         .name = "orbit",
@@ -57,7 +63,9 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     // ── Run ──────────────────────────────────────────────────────────────
-    const run_step = b.step("run", "Run Orbit");
+    const run_step = b.step("run", "Build and launch Orbit (detached)");
+    const run_fg_step = b.step("run-fg", "Build and launch Orbit in the foreground (logs in this terminal)");
+    var bundle_step: ?*std.Build.Step = null;
     if (target.result.os.tag == .macos) {
         // Package Orbit.app so Launch Services / Dock use AppIcon.icns.
         const bundle = b.addSystemCommand(&.{
@@ -68,25 +76,62 @@ pub fn build(b: *std.Build) void {
         bundle.step.dependOn(b.getInstallStep());
         bundle.addFileArg(b.path("assets/icon/Info.plist"));
         bundle.addFileArg(b.path("assets/icon/AppIcon.icns"));
+        bundle_step = &bundle.step;
 
-        // Run the binary inside the .app (keeps console logs; Dock uses the icon).
-        const run_app = b.addSystemCommand(&.{
-            "zig-out/Orbit.app/Contents/MacOS/orbit",
+        // Detached launch — shell returns immediately with a success message.
+        const run_detached = b.addSystemCommand(&.{
+            "bash",
+            "scripts/launch-detached.sh",
         });
-        run_app.setCwd(b.path("."));
-        run_app.step.dependOn(&bundle.step);
+        run_detached.setCwd(b.path("."));
+        run_detached.step.dependOn(&bundle.step);
         if (b.args) |args| {
-            run_app.addArgs(args);
+            run_detached.addArgs(args);
         }
-        run_step.dependOn(&run_app.step);
+        run_step.dependOn(&run_detached.step);
+
+        // Foreground launch for debugging.
+        const run_fg = b.addSystemCommand(&.{
+            "bash",
+            "scripts/launch-detached.sh",
+        });
+        run_fg.setCwd(b.path("."));
+        run_fg.setEnvironmentVariable("ORBIT_FOREGROUND", "1");
+        run_fg.step.dependOn(&bundle.step);
+        if (b.args) |args| {
+            run_fg.addArgs(args);
+        }
+        run_fg_step.dependOn(&run_fg.step);
     } else {
-        const run_cmd = b.addRunArtifact(exe);
-        run_cmd.step.dependOn(b.getInstallStep());
+        const run_detached = b.addSystemCommand(&.{
+            "bash",
+            "scripts/launch-detached.sh",
+        });
+        run_detached.setCwd(b.path("."));
+        run_detached.step.dependOn(b.getInstallStep());
         if (b.args) |args| {
-            run_cmd.addArgs(args);
+            run_detached.addArgs(args);
         }
-        run_step.dependOn(&run_cmd.step);
+        run_step.dependOn(&run_detached.step);
+
+        const run_fg = b.addRunArtifact(exe);
+        run_fg.step.dependOn(b.getInstallStep());
+        if (b.args) |args| {
+            run_fg.addArgs(args);
+        }
+        run_fg_step.dependOn(&run_fg.step);
     }
+
+    // ── Global setup (PATH + zig build run from any directory) ───────────
+    const setup_cmd = b.addSystemCommand(&.{
+        "bash",
+        "scripts/setup-global.sh",
+    });
+    setup_cmd.setCwd(b.path("."));
+    setup_cmd.step.dependOn(b.getInstallStep());
+    if (bundle_step) |bs| setup_cmd.step.dependOn(bs);
+    const setup_step = b.step("setup", "Install Orbit globally (PATH + zig build run from anywhere)");
+    setup_step.dependOn(&setup_cmd.step);
 
     // ── Unit tests (feature-organized under src/tests/) ─────────────────
     const test_module = b.createModule(.{
@@ -95,6 +140,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    test_module.addOptions("build_options", build_opts);
     test_module.addIncludePath(b.path("vendor"));
     test_module.addCSourceFile(.{
         .file = b.path("vendor/stb_truetype_impl.c"),

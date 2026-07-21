@@ -277,9 +277,20 @@ Requirements:
 
 ```bash
 zig build          # produces zig-out/bin/orbit
-zig build run      # build and launch
+zig build run      # build and launch (detached — shell returns immediately)
+zig build run-fg   # build and launch in the foreground (logs in this terminal)
+zig build setup    # once: install globally so `zig build run` / `orbit` work from any directory
 zig build test     # unit tests (screen + parser)
 ```
+
+After `zig build setup`, open a new terminal tab. From any folder (as long as it isn’t another Zig project):
+
+```bash
+zig build run      # builds & launches Orbit (detached)
+orbit              # launches Orbit (detached)
+```
+
+Both print `Orbit terminal opened successfully` and return to your prompt. Use `zig build run-fg` or `ORBIT_FOREGROUND=1 orbit` when you need live logs.
 
 Optional config: copy `assets/config.example.toml` to `~/.config/orbit/config.toml`.
 

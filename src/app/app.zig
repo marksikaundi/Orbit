@@ -20,6 +20,7 @@ const PluginCommand = @import("../plugins/types.zig").PluginCommand;
 const clipboard = @import("../clipboard/clipboard.zig");
 const folder_picker = @import("../platform/folder_picker.zig");
 const Color = @import("../terminal/cell.zig").Color;
+const dev_root = @import("../dev_root.zig");
 
 const UiMode = enum { home, normal, search, ws_picker, ws_save, palette, ssh_prompt, settings, plugins };
 
@@ -102,7 +103,24 @@ pub const App = struct {
         self.updateWindowTitle();
         self.fireHooks(.on_load);
         self.applyRendererHooks();
+        self.publishSourceRoot();
         return self;
+    }
+
+    /// Keep ~/.config/orbit/source_root fresh and export ORBIT_SOURCE_ROOT to child shells.
+    fn publishSourceRoot(self: *App) void {
+        dev_root.ensureRecorded(self.allocator, self.io);
+        const root = dev_root.resolve(self.allocator, self.io) orelse return;
+        defer self.allocator.free(root);
+        var key_buf: [32:0]u8 = undefined;
+        var val_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+        const key = "ORBIT_SOURCE_ROOT";
+        if (root.len >= val_buf.len) return;
+        @memcpy(key_buf[0..key.len], key);
+        key_buf[key.len] = 0;
+        @memcpy(val_buf[0..root.len], root);
+        val_buf[root.len] = 0;
+        _ = c.setenv(key_buf[0..key.len :0], val_buf[0..root.len :0], 1);
     }
 
     pub fn destroy(self: *App) void {

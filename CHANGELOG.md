@@ -21,6 +21,8 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 - **Plugin shortcuts** — define `shortcut = "ctrl+shift+g"` or `[[bindings]]` in `plugin.toml` to run commands with your own key chords
 - Bundled **keys** plugin as a starter for custom shortcuts / colors / themes (see `assets/plugins/README.md`)
 - **macOS app icon** — `zig build run` packages `Orbit.app` with a Dock icon (no more generic "exec")
+- **Global launch** — `zig build setup` installs shell integration so `zig build run` / `orbit` work from any directory
+- **Detached launch** — `orbit` / `zig build run` open Orbit in the background and print `Orbit terminal opened successfully`
 
 ### Changed
 - Saved layout restore moved to palette command **Load Saved Workspace**

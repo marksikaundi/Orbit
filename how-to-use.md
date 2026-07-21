@@ -1,5 +1,34 @@
 # How to use Orbit
 
+## First-time setup (run once from the Orbit repo)
+
+```bash
+zig build setup
+```
+
+This records the Orbit source tree, installs the `orbit` command to `~/.local/bin`, and hooks your shell so **`zig build run` works from any directory**.
+
+Then open a new terminal tab (or `source ~/.config/orbit/shell/orbit.sh`).
+
+```bash
+zig build run   # from anywhere — builds & launches Orbit (detached)
+orbit           # launch Orbit (detached); shell returns immediately
+```
+
+Your shell prints `Orbit terminal opened successfully` and stays usable. Logs go to `~/.config/orbit/logs/orbit.log`.
+
+For foreground debugging (logs in this terminal):
+
+```bash
+zig build run-fg
+# or:
+ORBIT_FOREGROUND=1 orbit
+```
+
+If the current directory has its own `build.zig`, that project wins (Orbit is not redirected).
+
+## From the Orbit repo
+
 ```bash
 zig build run
 ```
