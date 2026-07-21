@@ -20,6 +20,7 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 - **Plugins** home panel — browse, toggle, reload, and install bundled pack (hello, git, devtools, themes, workflow, keys)
 - **Plugin shortcuts** — define `shortcut = "ctrl+shift+g"` or `[[bindings]]` in `plugin.toml` to run commands with your own key chords
 - Bundled **keys** plugin as a starter for custom shortcuts / colors / themes (see `assets/plugins/README.md`)
+- **macOS app icon** — `zig build run` packages `Orbit.app` with a Dock icon (no more generic "exec")
 
 ### Changed
 - Saved layout restore moved to palette command **Load Saved Workspace**

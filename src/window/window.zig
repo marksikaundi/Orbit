@@ -1,5 +1,6 @@
 const std = @import("std");
 const c = @import("../c.zig").c;
+const app_icon = @import("../platform/app_icon.zig");
 
 pub const Window = struct {
     handle: ?*c.GLFWwindow = null,
@@ -36,6 +37,9 @@ pub const Window = struct {
         if (opacity < 0.999) {
             c.glfwSetWindowOpacity(handle, opacity);
         }
+
+        // Replace the generic macOS "exec" Dock icon with Orbit's.
+        app_icon.apply(handle);
 
         var self: Window = .{
             .handle = handle,
