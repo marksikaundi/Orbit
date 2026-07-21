@@ -93,7 +93,7 @@ Example workspaces: Backend, Frontend, Production, University.
 | Fonts | SF Mono via stb_truetype (FreeType/HarfBuzz later) |
 | Shell I/O | POSIX PTY, Windows ConPTY |
 | Configuration | TOML |
-| Testing | Zig Test |
+| Testing | Zig Test (`zig build test`, suites in `src/tests/`) |
 | Build | Zig Build |
 
 ### Why Zig?
