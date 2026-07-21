@@ -2,7 +2,7 @@
 
 [![Version](https://img.shields.io/github/v/release/marksikaundi/Orbit?style=for-the-badge&label=VERSION&color=1a1b1e&labelColor=0b0c0f)](https://github.com/marksikaundi/Orbit/releases/latest)
 [![2026-live](https://img.shields.io/badge/branch-2026--live-3d8bfd?style=for-the-badge&labelColor=0b0c0f)](https://github.com/marksikaundi/Orbit/tree/2026-live)
-[![License](https://img.shields.io/badge/license-see%20repo-6c757d?style=for-the-badge&labelColor=0b0c0f)](https://github.com/marksikaundi/Orbit)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge&labelColor=0b0c0f)](LICENSE)
 
 **A fast, lightweight, project-centric terminal emulator built in Zig.**
 
@@ -334,7 +334,14 @@ The project is early. Feedback on architecture and the roadmap in [roamap.md](ro
 
 ## License
 
-License TBD.
+Orbit is licensed under the [Apache License, Version 2.0](LICENSE).
+
+Copyright 2026 Mark Sikaundi
+
+You may use, modify, and distribute Orbit for open source or commercial
+purposes, subject to the terms of the Apache License 2.0. Contributions
+submitted to this project are licensed under the same terms unless
+explicitly stated otherwise. See [NOTICE](NOTICE) for attribution details.
 
 ---
 
