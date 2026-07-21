@@ -4,6 +4,16 @@ const std = @import("std");
 const Config = @import("../../config/config.zig").Config;
 const CursorStyle = @import("../../config/config.zig").CursorStyle;
 
+test "resolveLaunchShell falls back when configured missing" {
+    var cfg: Config = .{};
+    defer cfg.deinit(std.testing.allocator);
+    try cfg.setShell(std.testing.allocator, "/nonexistent/orbit-fake-shell");
+    // Invalid path should still resolve to a real shell on this machine
+    const launch = cfg.resolveLaunchShell();
+    try std.testing.expect(launch.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, launch, "nonexistent") == null);
+}
+
 test "parse shell cursor and blink" {
     var cfg: Config = .{};
     defer cfg.deinit(std.testing.allocator);

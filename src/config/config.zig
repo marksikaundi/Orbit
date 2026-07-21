@@ -89,8 +89,27 @@ pub const Config = struct {
         return null;
     }
 
+    /// Shell to launch: configured path if it exists, else $SHELL, else /bin/zsh.
+    pub fn resolveLaunchShell(self: *const Config) []const u8 {
+        if (self.shellPath()) |s| {
+            if (pathExecutable(s)) return s;
+        }
+        if (std.c.getenv("SHELL")) |env| {
+            const span = std.mem.span(env);
+            if (span.len > 0 and pathExecutable(span)) return span;
+        }
+        if (pathExecutable("/bin/zsh")) return "/bin/zsh";
+        if (pathExecutable("/bin/bash")) return "/bin/bash";
+        return "/bin/sh";
+    }
+
     pub fn shellDisplay(self: *const Config) []const u8 {
         if (self.shellPath()) |s| {
+            if (!pathExecutable(s)) {
+                // Still show configured name so Settings can fix it
+                if (std.mem.lastIndexOfScalar(u8, s, '/')) |i| return s[i + 1 ..];
+                return s;
+            }
             if (std.mem.lastIndexOfScalar(u8, s, '/')) |i| return s[i + 1 ..];
             return s;
         }
@@ -115,18 +134,32 @@ pub const Config = struct {
     }
 
     pub fn cycleShell(self: *Config, allocator: std.mem.Allocator, delta: i32) !void {
+        // Build list of available choices (empty = $SHELL, plus existing binaries).
+        var available: [shell_choices.len][]const u8 = undefined;
+        var count: usize = 0;
+        for (shell_choices) |choice| {
+            if (choice.len == 0) {
+                available[count] = choice;
+                count += 1;
+            } else if (pathExecutable(choice)) {
+                available[count] = choice;
+                count += 1;
+            }
+        }
+        if (count == 0) return;
+
         const current = self.shell orelse "";
         var idx: i32 = 0;
-        for (shell_choices, 0..) |c, i| {
+        for (available[0..count], 0..) |c, i| {
             if (std.mem.eql(u8, c, current)) {
                 idx = @intCast(i);
                 break;
             }
         }
-        const n: i32 = @intCast(shell_choices.len);
+        const n: i32 = @intCast(count);
         idx = @mod(idx + delta, n);
         if (idx < 0) idx += n;
-        try self.setShell(allocator, shell_choices[@intCast(idx)]);
+        try self.setShell(allocator, available[@intCast(idx)]);
     }
 
     pub fn reload(self: *Config, allocator: std.mem.Allocator, io: std.Io) void {
@@ -279,8 +312,26 @@ pub const Config = struct {
             }
         }
         cfg.opacity = @min(1.0, @max(0.15, cfg.opacity));
+
+        // Drop configured shell if the binary is missing (e.g. fish not installed).
+        if (cfg.shell) |s| {
+            if (s.len > 0 and !pathExecutable(s)) {
+                if (cfg.shell_owned) |old| allocator.free(old);
+                cfg.shell_owned = null;
+                cfg.shell = null;
+            }
+        }
     }
 };
+
+fn pathExecutable(path: []const u8) bool {
+    if (path.len == 0) return false;
+    var buf: [std.fs.max_path_bytes:0]u8 = undefined;
+    if (path.len >= buf.len) return false;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    return std.c.access(buf[0..path.len :0], 1) == 0; // X_OK
+}
 
 fn appendFmt(list: *std.ArrayList(u8), allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
     const slice = try std.fmt.allocPrint(allocator, fmt, args);

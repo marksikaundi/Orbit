@@ -225,6 +225,11 @@ pub const App = struct {
                 self.renderer.font_size,
                 self.plugins.count(),
             );
+            if (self.status_len > 0) {
+                const bar_y = self.window.fb_height - 28;
+                try self.renderer.drawRect(0, bar_y, self.window.fb_width, 28, Color.rgb(25, 35, 30), 0.92);
+                try self.renderer.drawText(12, bar_y + 6, self.status_msg[0..self.status_len], Color.rgb(180, 220, 180));
+            }
             return;
         }
 
@@ -700,7 +705,6 @@ pub const App = struct {
     fn goHome(self: *App) void {
         self.home = .{};
         self.ui = .home;
-        self.status_len = 0;
         self.search.close();
         self.palette.close();
     }
@@ -1243,12 +1247,22 @@ pub const App = struct {
         const theme = self.config.theme();
         var title_buf: [32]u8 = undefined;
         const title = std.fmt.bufPrint(&title_buf, "Shell {d}", .{self.tabs.items.items.len + 1}) catch "Shell";
+
+        const launch = self.config.resolveLaunchShell();
+        if (self.config.shellPath()) |configured| {
+            if (!std.mem.eql(u8, configured, launch)) {
+                var warn: [96]u8 = undefined;
+                const msg = std.fmt.bufPrint(&warn, "shell missing, using {s}", .{launch}) catch "shell fallback";
+                self.setStatus(msg);
+            }
+        }
+
         const session = try Session.createWith(self.allocator, .{
             .cols = cols,
             .rows = rows,
             .title = title,
             .cwd = self.sessionCwd(),
-            .shell = self.config.shellPath(),
+            .shell = launch,
         });
         session.setTheme(theme.foreground, theme.background);
         session.setScrollback(self.config.scrollback);
@@ -1269,7 +1283,7 @@ pub const App = struct {
             .rows = rows,
             .title = "Split",
             .cwd = self.sessionCwd(),
-            .shell = self.config.shellPath(),
+            .shell = self.config.resolveLaunchShell(),
         });
         session.setTheme(theme.foreground, theme.background);
         session.setScrollback(self.config.scrollback);
