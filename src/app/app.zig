@@ -228,8 +228,22 @@ pub const App = struct {
         }
 
         const tab = self.tabs.current() orelse {
-            // No tabs yet — bounce to home
-            self.ui = .home;
+            // No shell yet — still draw overlays opened from home (settings, palette, …).
+            // Only bounce to home when nothing is open.
+            switch (self.ui) {
+                .settings => try self.drawSettings(),
+                .palette => try self.drawPalette(),
+                .ws_picker => try self.drawWorkspacePicker(),
+                .ws_save => try self.drawSavePrompt(),
+                .ssh_prompt => try self.drawSshPrompt(),
+                .search => {},
+                .home, .normal => self.ui = .home,
+            }
+            if (self.status_len > 0) {
+                const bar_y = self.window.fb_height - 24;
+                try self.renderer.drawRect(0, bar_y, self.window.fb_width, 24, Color.rgb(25, 35, 30), 0.9);
+                try self.renderer.drawText(8, bar_y + 4, self.status_msg[0..self.status_len], Color.rgb(180, 220, 180));
+            }
             return;
         };
         const bounds = contentRect(self.window.fb_width, self.window.fb_height);
