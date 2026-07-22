@@ -94,11 +94,33 @@ pub const Pty = struct {
 
     pub fn deinit(self: *Pty) void {
         if (self.alive) {
-            _ = c.kill(self.child_pid, c.SIGTERM);
-            self.reapChild();
+            self.terminateSession();
         }
         _ = c.close(self.master_fd);
         self.* = undefined;
+    }
+
+    /// Tear down the shell session without blocking the UI thread indefinitely.
+    /// Child called `setsid()`, so negative pid targets the whole process group.
+    fn terminateSession(self: *Pty) void {
+        _ = c.kill(-self.child_pid, c.SIGTERM);
+        _ = c.kill(self.child_pid, c.SIGTERM);
+
+        var status: c_int = 0;
+        var waited_ms: usize = 0;
+        while (waited_ms < 150) : (waited_ms += 5) {
+            const r = c.waitpid(self.child_pid, &status, c.WNOHANG);
+            if (r != 0) {
+                self.alive = false;
+                return;
+            }
+            sleepMs(5);
+        }
+
+        _ = c.kill(-self.child_pid, c.SIGKILL);
+        _ = c.kill(self.child_pid, c.SIGKILL);
+        _ = c.waitpid(self.child_pid, &status, 0);
+        self.alive = false;
     }
 
     pub fn resize(self: *Pty, cols: u16, rows: u16) void {
@@ -157,7 +179,19 @@ pub const Pty = struct {
 
     fn reapChild(self: *Pty) void {
         var status: c_int = 0;
-        _ = c.waitpid(self.child_pid, &status, 0);
+        // Shell already exited (EOF) — reap without hanging the frame loop.
+        const r = c.waitpid(self.child_pid, &status, c.WNOHANG);
+        if (r == 0) {
+            // Rare: EOF before the zombie is ready — brief bounded wait, then kill.
+            var i: usize = 0;
+            while (i < 20) : (i += 1) {
+                if (c.waitpid(self.child_pid, &status, c.WNOHANG) != 0) break;
+                sleepMs(5);
+            } else {
+                _ = c.kill(self.child_pid, c.SIGKILL);
+                _ = c.waitpid(self.child_pid, &status, 0);
+            }
+        }
         self.alive = false;
     }
 };
@@ -198,6 +232,14 @@ fn setNonBlocking(fd: c_int) !void {
     const flags = c.fcntl(fd, c.F_GETFL, @as(c_int, 0));
     if (flags < 0) return error.FcntlFailed;
     if (c.fcntl(fd, c.F_SETFL, flags | c.O_NONBLOCK) < 0) return error.FcntlFailed;
+}
+
+fn sleepMs(ms: u64) void {
+    var req = c.struct_timespec{
+        .tv_sec = @intCast(ms / 1000),
+        .tv_nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
+    };
+    _ = c.nanosleep(&req, null);
 }
 
 comptime {

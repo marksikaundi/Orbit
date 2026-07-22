@@ -9,6 +9,7 @@ const Rect = layout_mod.Rect;
 const Search = @import("../ui/search.zig").Search;
 const Palette = @import("../ui/palette.zig").Palette;
 const palette_mod = @import("../ui/palette.zig");
+const bindings = @import("../ui/bindings.zig");
 const home_mod = @import("../ui/home.zig");
 const Home = home_mod.Home;
 const Config = @import("../config/config.zig").Config;
@@ -1146,16 +1147,21 @@ pub const App = struct {
         const shift = (mods & c.GLFW_MOD_SHIFT) != 0;
         const super = (mods & c.GLFW_MOD_SUPER) != 0;
         const alt = (mods & c.GLFW_MOD_ALT) != 0;
+        const bmods: bindings.Mods = .{ .ctrl = ctrl, .shift = shift, .super = super, .alt = alt };
 
-        // Quit anywhere: Cmd+Q (macOS) / Ctrl+Q
-        if ((super or ctrl) and !shift and key == c.GLFW_KEY_Q) {
-            self.requestQuit();
-            return;
-        }
-        // Close tab / quit from home: Cmd+W or Ctrl+Shift+W
-        if ((super and !shift and key == c.GLFW_KEY_W) or (ctrl and shift and key == c.GLFW_KEY_W)) {
-            self.closeTabOrQuit();
-            return;
+        // Global: quit / close tab — must match the *actual* key, not only modifiers.
+        // (Matching "w" while Ctrl is held used to close on every Ctrl chord.)
+        if (glfwKeyName(key)) |name| {
+            if (bindings.match(name, bmods)) |act| {
+                if (act == .quit) {
+                    self.requestQuit();
+                    return;
+                }
+                if (act == .close_tab) {
+                    self.closeTabOrQuit();
+                    return;
+                }
+            }
         }
 
         if (self.ui == .home) {
@@ -1191,99 +1197,64 @@ pub const App = struct {
             return;
         }
 
-        // Search: Ctrl+Shift+F or Cmd+Shift+F
-        if ((ctrl or super) and shift and key == c.GLFW_KEY_F) {
-            self.openSearch();
+        // Palette open is not a palette Action enum member.
+        if (ctrl and shift and key == c.GLFW_KEY_P) {
+            self.rebuildPalette();
+            self.palette.open();
+            self.ui = .palette;
+            self.clearStatus();
             return;
         }
 
-        if (ctrl and shift) {
-            switch (key) {
-                c.GLFW_KEY_H => {
-                    self.goHome();
-                    return;
-                },
-                c.GLFW_KEY_P => {
-                    self.rebuildPalette();
-                    self.palette.open();
-                    self.ui = .palette;
-                    self.clearStatus();
-                    return;
-                },
-                c.GLFW_KEY_T => {
-                    self.newTab() catch {};
-                    return;
-                },
-                c.GLFW_KEY_D => {
-                    self.splitPane(.horizontal) catch {};
-                    return;
-                },
-                c.GLFW_KEY_E => {
-                    self.splitPane(.vertical) catch {};
-                    return;
-                },
-                c.GLFW_KEY_RIGHT_BRACKET => {
-                    self.tabs.next();
-                    return;
-                },
-                c.GLFW_KEY_LEFT_BRACKET => {
-                    self.tabs.prev();
-                    return;
-                },
-                c.GLFW_KEY_O => {
-                    self.openFolderWorkspace();
-                    return;
-                },
-                c.GLFW_KEY_S => {
-                    self.openSavePrompt();
-                    return;
-                },
-                else => {},
-            }
-        }
-
-        if (ctrl and key == c.GLFW_KEY_TAB) {
-            if (shift) self.tabs.prev() else self.tabs.next();
-            return;
-        }
-
-        // Font size: Ctrl/Cmd + = / - / 0  (also keypad +/-)
-        if ((ctrl or super) and !shift) {
-            switch (key) {
-                c.GLFW_KEY_EQUAL, c.GLFW_KEY_KP_ADD => {
-                    self.adjustFont(1.0);
-                    return;
-                },
-                c.GLFW_KEY_MINUS, c.GLFW_KEY_KP_SUBTRACT => {
-                    self.adjustFont(-1.0);
-                    return;
-                },
-                c.GLFW_KEY_0, c.GLFW_KEY_KP_0 => {
-                    self.resetFont();
-                    return;
-                },
-                else => {},
-            }
-        }
-
-        if ((ctrl or super) and key == c.GLFW_KEY_C and shift) {
+        // Clipboard (Shift required so plain Ctrl+C still interrupts the shell).
+        if ((ctrl or super) and shift and key == c.GLFW_KEY_C) {
             self.copySelection();
             return;
         }
-        if ((ctrl or super) and key == c.GLFW_KEY_V and shift) {
+        if ((ctrl or super) and shift and key == c.GLFW_KEY_V) {
             self.pasteClipboard();
             return;
         }
 
-        if (ctrl and key == c.GLFW_KEY_PAGE_DOWN) {
-            if (self.tabs.current()) |tab| tab.layout.focusNext();
-            return;
+        // Built-in chords from the shared bindings table (palette hints stay in sync).
+        if (glfwKeyName(key)) |name| {
+            if (bindings.match(name, bmods)) |act| {
+                self.runAction(act);
+                return;
+            }
+        }
+        // Keypad font shortcuts share equal/minus/0 actions.
+        if ((ctrl or super) and !shift) {
+            switch (key) {
+                c.GLFW_KEY_KP_ADD => {
+                    self.runAction(.font_larger);
+                    return;
+                },
+                c.GLFW_KEY_KP_SUBTRACT => {
+                    self.runAction(.font_smaller);
+                    return;
+                },
+                c.GLFW_KEY_KP_0 => {
+                    self.runAction(.font_reset);
+                    return;
+                },
+                else => {},
+            }
         }
 
         // Plugin shortcuts (after built-ins so Ctrl+Shift+P etc. stay reserved)
         if (self.tryPluginBinding(key, ctrl, shift, super, alt)) return;
 
         const session = self.focused() orelse return;
+
+        // Forward Ctrl+A…Z to the PTY so the shell stays responsive (interrupt, EOF, …).
+        if (glfwKeyName(key)) |name| {
+            if (bindings.ctrlLetterToPty(name, bmods)) |byte| {
+                session.write(&.{byte});
+                return;
+            }
+        }
+
         switch (key) {
             c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER => session.write("\r"),
             c.GLFW_KEY_BACKSPACE => session.write(&.{0x7F}),
@@ -2249,7 +2220,11 @@ pub const App = struct {
     }
 
     fn openFolderWorkspace(self: *App) void {
-        const path = folder_picker.pickFolder(self.allocator, self.io) catch {
+        const path = folder_picker.pickFolder(self.allocator, self.io, struct {
+            fn pump() void {
+                Window.poll();
+            }
+        }.pump) catch {
             self.setStatus("folder picker failed");
             return;
         } orelse {

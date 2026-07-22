@@ -30,6 +30,9 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 - Status toast raised above the window edge (bottom-left)
 - Status toast is ephemeral: shows only on events (save, theme, errors, terminal notices) and auto-hides after a few seconds
 - Terminal output can surface toasts for file create/edit/save/delete lines and `error:` / `failed` messages; OSC 9 / OSC 99 also drive the toast
+- Shared shortcut table so Command Palette hints match real keybindings (`Ctrl+W` closes tab, etc.)
+- Ctrl+A–Z (except app chords) are forwarded to the shell again — interrupt, EOF, and readline work
+- Closing a tab no longer blocks the UI (bounded PTY teardown); folder picker pumps events while open
 
 ## [2.1.0] — 2026-07-21
 

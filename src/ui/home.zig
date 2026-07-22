@@ -57,7 +57,7 @@ pub const help_rows = [_]HelpRow{
     .{ .heading = "App — quit & close" },
     .{ .item = .{ .keys = "Cmd+Q / Ctrl+Q", .desc = "Quit Orbit (works anywhere)" } },
     .{ .item = .{ .keys = "Cmd+W", .desc = "Close tab; on home → quit" } },
-    .{ .item = .{ .keys = "Ctrl+Shift+W", .desc = "Same as Cmd+W" } },
+    .{ .item = .{ .keys = "Ctrl+Shift+W", .desc = "Close tab (same as Cmd+W)" } },
     .{ .item = .{ .keys = "exit / Ctrl+D", .desc = "End the shell; closes that tab" } },
     .{ .item = .{ .keys = "Window ✕", .desc = "Close the Orbit window" } },
     .{ .spacer = {} },

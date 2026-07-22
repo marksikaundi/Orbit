@@ -2,50 +2,39 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const c = @import("../c.zig").c;
+
+pub const PumpFn = *const fn () void;
 
 /// Shows a native folder chooser. Returns an owned absolute path, or `null` if
 /// the user cancelled. Caller must free the returned slice.
-pub fn pickFolder(allocator: std.mem.Allocator, io: std.Io) !?[]u8 {
+///
+/// When `pump` is provided it is called while waiting so the UI event loop
+/// keeps ticking (avoids macOS "Application Not Responding" during the dialog).
+pub fn pickFolder(allocator: std.mem.Allocator, io: std.Io, pump: ?PumpFn) !?[]u8 {
     return switch (builtin.os.tag) {
-        .macos => pickMacos(allocator, io),
-        .linux => pickLinux(allocator, io),
+        .macos => pickMacos(allocator, io, pump),
+        .linux => pickLinux(allocator, io, pump),
         else => error.UnsupportedPlatform,
     };
 }
 
-fn pickMacos(allocator: std.mem.Allocator, io: std.Io) !?[]u8 {
+fn pickMacos(allocator: std.mem.Allocator, io: std.Io, pump: ?PumpFn) !?[]u8 {
     // NSOpenPanel via AppleScript — no ObjC bridge required.
     const script =
         \\POSIX path of (choose folder with prompt "Open Workspace")
     ;
-    const result = std.process.run(allocator, io, .{
-        .argv = &.{ "/usr/bin/osascript", "-e", script },
-        .stdout_limit = .limited(std.fs.max_path_bytes + 16),
-        .stderr_limit = .limited(4096),
-    }) catch return error.PickerFailed;
-    defer {
-        allocator.free(result.stdout);
-        allocator.free(result.stderr);
-    }
-
-    switch (result.term) {
-        .exited => |code| {
-            if (code != 0) return null; // cancel / user dismissed
-        },
-        else => return null,
-    }
-
-    return try normalizePath(allocator, result.stdout);
+    return runChooser(allocator, io, &.{ "/usr/bin/osascript", "-e", script }, pump);
 }
 
-fn pickLinux(allocator: std.mem.Allocator, io: std.Io) !?[]u8 {
+fn pickLinux(allocator: std.mem.Allocator, io: std.Io, pump: ?PumpFn) !?[]u8 {
     // Prefer zenity, then kdialog.
     if (try runChooser(allocator, io, &.{
         "zenity",
         "--file-selection",
         "--directory",
         "--title=Open Workspace",
-    })) |path| return path;
+    }, pump)) |path| return path;
 
     return runChooser(allocator, io, &.{
         "kdialog",
@@ -53,10 +42,17 @@ fn pickLinux(allocator: std.mem.Allocator, io: std.Io) !?[]u8 {
         ".",
         "--title",
         "Open Workspace",
-    });
+    }, pump);
 }
 
-fn runChooser(allocator: std.mem.Allocator, io: std.Io, argv: []const []const u8) !?[]u8 {
+fn runChooser(allocator: std.mem.Allocator, io: std.Io, argv: []const []const u8, pump: ?PumpFn) !?[]u8 {
+    if (pump == null) {
+        return runChooserBlocking(allocator, io, argv);
+    }
+    return runChooserPumped(allocator, io, argv, pump.?);
+}
+
+fn runChooserBlocking(allocator: std.mem.Allocator, io: std.Io, argv: []const []const u8) !?[]u8 {
     const result = std.process.run(allocator, io, .{
         .argv = argv,
         .stdout_limit = .limited(std.fs.max_path_bytes + 16),
@@ -75,6 +71,65 @@ fn runChooser(allocator: std.mem.Allocator, io: std.Io, argv: []const []const u8
     }
     if (result.stdout.len == 0) return null;
     return try normalizePath(allocator, result.stdout);
+}
+
+/// Run the chooser on a worker thread so we can pump GLFW on the main thread.
+fn runChooserPumped(allocator: std.mem.Allocator, io: std.Io, argv: []const []const u8, pump: PumpFn) !?[]u8 {
+    const Slot = struct {
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        argv: []const []const u8,
+        stdout: ?[]u8 = null,
+        stderr: ?[]u8 = null,
+        code: ?u8 = null,
+        failed: bool = false,
+        done: std.atomic.Value(bool) = .init(false),
+    };
+
+    // argv must outlive the worker — caller passes string literals / stable slices.
+    var slot: Slot = .{
+        .allocator = allocator,
+        .io = io,
+        .argv = argv,
+    };
+
+    const thr = try std.Thread.spawn(.{}, struct {
+        fn work(s: *Slot) void {
+            defer s.done.store(true, .release);
+            const result = std.process.run(s.allocator, s.io, .{
+                .argv = s.argv,
+                .stdout_limit = .limited(std.fs.max_path_bytes + 16),
+                .stderr_limit = .limited(4096),
+            }) catch {
+                s.failed = true;
+                return;
+            };
+            s.stdout = result.stdout;
+            s.stderr = result.stderr;
+            s.code = switch (result.term) {
+                .exited => |code| code,
+                else => null,
+            };
+        }
+    }.work, .{&slot});
+
+    while (!slot.done.load(.acquire)) {
+        pump();
+        var req = c.struct_timespec{
+            .tv_sec = 0,
+            .tv_nsec = 10 * std.time.ns_per_ms,
+        };
+        _ = c.nanosleep(&req, null);
+    }
+    thr.join();
+
+    if (slot.failed) return error.PickerFailed;
+    if (slot.stderr) |e| allocator.free(e);
+    const stdout = slot.stdout orelse return null;
+    defer allocator.free(stdout);
+    const code = slot.code orelse return null;
+    if (code != 0 or stdout.len == 0) return null;
+    return try normalizePath(allocator, stdout);
 }
 
 fn normalizePath(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
