@@ -98,6 +98,7 @@ Example workspaces: Backend, Frontend, Production, University.
 | Shell I/O | POSIX PTY, Windows ConPTY |
 | Configuration | TOML |
 | Testing | Zig Test (`zig build test`, suites in `src/tests/`) |
+| Security | `zig build security-scan` (secrets + injection heuristics; CI on every PR) |
 | Build | Zig Build |
 
 ### Why Zig?
@@ -281,6 +282,7 @@ zig build run      # build and launch (detached — shell returns immediately)
 zig build run-fg   # build and launch in the foreground (logs in this terminal)
 zig build setup    # once: install globally so `zig build run` / `orbit` work from any directory
 zig build test     # unit tests (screen + parser)
+zig build security-scan  # secrets + injection heuristics (also runs in CI)
 ```
 
 After `zig build setup`, open a new terminal tab. From any folder (as long as it isn’t another Zig project):

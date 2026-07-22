@@ -18,6 +18,7 @@ const theme_mod = @import("../config/theme.zig");
 const WsManager = @import("../workspace/workspace.zig").Manager;
 const PluginRegistry = @import("../plugins/registry.zig").Registry;
 const PluginCommand = @import("../plugins/types.zig").PluginCommand;
+const plugin_audit = @import("../security/plugin_audit.zig");
 const clipboard = @import("../clipboard/clipboard.zig");
 const folder_picker = @import("../platform/folder_picker.zig");
 const Color = @import("../terminal/cell.zig").Color;
@@ -2035,8 +2036,18 @@ pub const App = struct {
     fn executePluginCommand(self: *App, cmd: *const PluginCommand) void {
         switch (cmd.kind) {
             .insert => {
+                if (plugin_audit.auditInsertPayload(cmd.payload)) |hit| {
+                    var buf: [192]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "security warning [{s}]: {s}", .{
+                        hit.severity.label(),
+                        hit.message,
+                    }) catch "security warning: risky plugin insert";
+                    self.setStatus(msg);
+                    std.log.warn("security: executing risky insert `{s}`: {s}", .{ cmd.id, hit.message });
+                } else {
+                    self.setStatus("plugin insert");
+                }
                 if (self.focused()) |s| s.write(cmd.payload);
-                self.setStatus("plugin insert");
             },
             .status => self.setStatus(cmd.payload),
             .theme => self.applyTheme(cmd.payload),

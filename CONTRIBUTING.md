@@ -76,6 +76,7 @@ git clone https://github.com/marksikaundi/Orbit.git
 cd Orbit
 zig build          # produces zig-out/bin/orbit
 zig build test     # run the unit test suite
+zig build security-scan  # secrets + injection heuristics
 zig build run-fg   # launch in the foreground (logs in this terminal)
 ```
 
@@ -95,6 +96,7 @@ See [how-to-use.md](how-to-use.md) for detached launch, config paths, and day-to
 | `zig build run` | Build and launch (detached) |
 | `zig build run-fg` | Build and launch in the foreground |
 | `zig build test` | Run unit tests under `src/tests/` |
+| `zig build security-scan` | Scan for secrets and injection risks |
 | `zig build setup` | Install shell integration / global launcher |
 
 Config for local testing: copy `assets/config.example.toml` to `~/.config/orbit/config.toml`.
@@ -197,7 +199,12 @@ All non-trivial changes should include or update tests.
 
 ```bash
 zig build test
+zig build security-scan
 ```
+
+`zig build security-scan` walks `src/`, `scripts/`, and `assets/plugins/` for hardcoded secrets, shell-injection patterns, and dangerous plugin `insert` payloads. Findings are printed as warnings; the step exits non-zero on **HIGH** / **CRITICAL** (override with `--fail-on warning`).
+
+CI runs the same check on every push and pull request (`.github/workflows/security-scan.yml`).
 
 ### Where tests live
 
@@ -210,6 +217,7 @@ src/tests/
   ui/           # palette, bindings, home, search
   pty/
   plugins/
+  security/     # scanner rules + plugin payload audit
   font/
   workspace/
 ```
@@ -269,6 +277,7 @@ Guidelines:
 - [ ] Branch is up to date with the target base branch
 - [ ] `zig build` succeeds on your machine
 - [ ] `zig build test` passes
+- [ ] `zig build security-scan` passes (no HIGH/CRITICAL findings)
 - [ ] New behavior has tests (or a clear reason why not)
 - [ ] Docs updated if user-facing behavior changed (`README.md`, `how-to-use.md`, plugin README)
 - [ ] `[Unreleased]` section in `CHANGELOG.md` updated for user-visible changes
@@ -286,6 +295,7 @@ Use something like:
 
 ## Test plan
 - [ ] `zig build test`
+- [ ] `zig build security-scan`
 - [ ] Manual: steps a reviewer can follow
 
 ## Notes
@@ -363,11 +373,31 @@ Large ideas should map to a phase in [roamap.md](roamap.md) or be discussed befo
 
 ## Security
 
+### Reporting vulnerabilities
+
 If you believe you found a security vulnerability:
 
 1. **Do not** open a public issue with exploit details.
 2. Contact the maintainer privately via GitHub security advisories (if enabled) or another private channel listed on the repository.
 3. Allow reasonable time for a fix before public disclosure.
+
+### Automated scans
+
+Orbit includes a core security scanner (`src/security/`) that reviews new and existing code for:
+
+- Hardcoded secrets (private keys, cloud tokens)
+- Shell injection patterns (`curl | sh`, `eval`, `system(` / `popen(`)
+- Destructive or reverse-shell payloads
+- Dangerous plugin `insert` commands
+
+Run locally:
+
+```bash
+zig build security-scan
+# optional: zig build security-scan -- --fail-on warning
+```
+
+Risky plugin inserts also surface as load-time log warnings and a status toast when executed.
 
 ---
 

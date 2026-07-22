@@ -71,6 +71,10 @@ Pick the theme from Appearance (**S**) or the palette. For text color alone, App
 | `theme` | Apply theme named in `payload` |
 | `host` | Built-in: `new_tab`, `open_workspace`, `save_workspace`, `split_right`, `search` |
 
+**Security:** `insert` payloads are audited. Patterns like `curl … | sh`, `rm -rf /`, reverse shells, or `sudo` trigger a warning when the plugin loads and when the command runs. Keep payloads to simple, reviewable commands.
+
+Run the repo scanner anytime with `zig build security-scan`.
+
 ## Bundled pack
 
 `hello`, `git`, `devtools`, `themes`, `workflow`, **`keys`** (shortcut examples — edit this one first).

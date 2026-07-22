@@ -23,6 +23,7 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 - **macOS app icon** — `zig build run` packages `Orbit.app` with a Dock icon (no more generic "exec")
 - **Global launch** — `zig build setup` installs shell integration so `zig build run` / `orbit` work from any directory
 - **Detached launch** — `orbit` / `zig build run` open Orbit in the background and print `Orbit terminal opened successfully`
+- **Security scan** — `zig build security-scan` checks `src/`, `scripts/`, and plugins for secrets and injection risks; CI runs on every push/PR; risky plugin inserts warn at load and run time
 
 ### Changed
 - Saved layout restore moved to palette command **Load Saved Workspace**

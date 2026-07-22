@@ -3,6 +3,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const manifest = @import("manifest.zig");
+const plugin_audit = @import("../security/plugin_audit.zig");
 const Theme = @import("../config/theme.zig").Theme;
 const Color = @import("../terminal/cell.zig").Color;
 
@@ -62,6 +63,7 @@ pub const Registry = struct {
             defer self.allocator.free(data);
 
             const plugin = manifest.parsePlugin(self.allocator, plugin_dir, data) catch continue;
+            warnRiskyPlugin(&plugin);
             try self.plugins.append(self.allocator, plugin);
         }
     }
@@ -147,5 +149,17 @@ fn ensureDir(path: []const u8) void {
         @memcpy(buf[0..i], path[0..i]);
         buf[i] = 0;
         _ = std.c.mkdir(buf[0..i :0], 0o755);
+    }
+}
+
+/// Warn when a plugin insert payload can inject dangerous shell behavior.
+fn warnRiskyPlugin(plugin: *const types.Plugin) void {
+    for (plugin.commands) |cmd| {
+        if (cmd.kind != .insert) continue;
+        const hit = plugin_audit.auditInsertPayload(cmd.payload) orelse continue;
+        std.log.warn(
+            "security: plugin `{s}` command `{s}` [{s}] {s}",
+            .{ plugin.name, cmd.id, hit.severity.label(), hit.message },
+        );
     }
 }

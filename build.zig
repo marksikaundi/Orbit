@@ -186,4 +186,25 @@ pub fn build(b: *std.Build) void {
     run_unit_tests.stdio = .inherit;
     const test_step = b.step("test", "Run feature unit tests (with live status)");
     test_step.dependOn(&run_unit_tests.step);
+
+    // ── Security scan (secrets + injection heuristics) ───────────────────
+    const security_module = b.createModule(.{
+        .root_source_file = b.path("src/security/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    security_module.addOptions("build_options", build_opts);
+    const security_exe = b.addExecutable(.{
+        .name = "orbit-security-scan",
+        .root_module = security_module,
+    });
+    const run_security = b.addRunArtifact(security_exe);
+    run_security.expectExitCode(0);
+    run_security.stdio = .inherit;
+    if (b.args) |args| {
+        run_security.addArgs(args);
+    }
+    const security_step = b.step("security-scan", "Scan codebase for secrets and injection risks");
+    security_step.dependOn(&run_security.step);
 }
