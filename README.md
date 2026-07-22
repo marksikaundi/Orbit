@@ -341,7 +341,9 @@ Logging levels planned: Debug, Info, Warn, Error, Trace.
 
 ## Contributing
 
-The project is early. Feedback on architecture and the roadmap in [roamap.md](roamap.md) is welcome. Contribution guidelines will land with the first buildable release.
+Contributions are welcome — bug fixes, tests, docs, plugins, and features that fit Orbit’s design principles.
+
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full step-by-step guide (setup, coding standards, tests, commits, and pull requests). Feedback on architecture and the roadmap in [roamap.md](roamap.md) is also appreciated.
 
 ---
 
