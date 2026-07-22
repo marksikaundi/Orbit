@@ -104,20 +104,18 @@ fn readAbsolute(allocator: std.mem.Allocator, path: [:0]const u8) ![]u8 {
     if (fd < 0) return error.OpenFailed;
     defer _ = std.c.close(fd);
 
-    var st: std.c.Stat = undefined;
-    if (std.c.fstat(fd, &st) != 0) return error.StatFailed;
-    const size: usize = @intCast(st.size);
-    if (size == 0 or size > 32 * 1024 * 1024) return error.BadSize;
+    // Avoid std.c.fstat — it is void on Linux in Zig 0.16 (use chunked read instead).
+    var list: std.ArrayList(u8) = .empty;
+    errdefer list.deinit(allocator);
 
-    const buf = try allocator.alloc(u8, size);
-    errdefer allocator.free(buf);
-    var off: usize = 0;
-    while (off < buf.len) {
-        const n = std.c.read(fd, buf.ptr + off, buf.len - off);
+    var chunk: [16 * 1024]u8 = undefined;
+    while (true) {
+        const n = std.c.read(fd, &chunk, chunk.len);
         if (n < 0) return error.ReadFailed;
         if (n == 0) break;
-        off += @intCast(n);
+        try list.appendSlice(allocator, chunk[0..@intCast(n)]);
+        if (list.items.len > 32 * 1024 * 1024) return error.BadSize;
     }
-    if (off != buf.len) return error.ShortRead;
-    return buf;
+    if (list.items.len == 0) return error.BadSize;
+    return try list.toOwnedSlice(allocator);
 }
