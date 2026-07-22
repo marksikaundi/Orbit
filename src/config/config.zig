@@ -1,7 +1,9 @@
-//! Minimal TOML subset loader for Orbit config (~/.config/orbit/config.toml).
+//! Minimal TOML subset loader for Orbit config.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const theme_mod = @import("theme.zig");
+const paths = @import("../platform/paths.zig");
 
 pub const CursorStyle = enum {
     block,
@@ -40,7 +42,12 @@ pub const CursorStyle = enum {
 };
 
 /// Common shells users can cycle in Settings (next new tab uses this).
-pub const shell_choices = [_][]const u8{
+pub const shell_choices = if (builtin.os.tag == .windows) [_][]const u8{
+    "", // empty = default shell
+    "powershell.exe",
+    "pwsh.exe",
+    "cmd.exe",
+} else [_][]const u8{
     "", // empty = $SHELL
     "/bin/zsh",
     "/bin/bash",
@@ -98,31 +105,36 @@ pub const Config = struct {
         return null;
     }
 
-    /// Shell to launch: configured path if it exists, else $SHELL, else /bin/zsh.
+    /// Shell to launch: configured path if it exists, else platform default.
     pub fn resolveLaunchShell(self: *const Config) []const u8 {
         if (self.shellPath()) |s| {
-            if (pathExecutable(s)) return s;
+            if (paths.pathExecutable(s)) return s;
         }
-        if (std.c.getenv("SHELL")) |env| {
-            const span = std.mem.span(env);
-            if (span.len > 0 and pathExecutable(span)) return span;
+        if (builtin.os.tag != .windows) {
+            if (std.c.getenv("SHELL")) |env| {
+                const span = std.mem.span(env);
+                if (span.len > 0 and paths.pathExecutable(span)) return span;
+            }
+            if (paths.pathExecutable("/bin/zsh")) return "/bin/zsh";
+            if (paths.pathExecutable("/bin/bash")) return "/bin/bash";
+            return "/bin/sh";
         }
-        if (pathExecutable("/bin/zsh")) return "/bin/zsh";
-        if (pathExecutable("/bin/bash")) return "/bin/bash";
-        return "/bin/sh";
+        if (paths.pathExecutable("pwsh.exe")) return "pwsh.exe";
+        if (paths.pathExecutable("powershell.exe")) return "powershell.exe";
+        return paths.defaultShell();
     }
 
     pub fn shellDisplay(self: *const Config) []const u8 {
         if (self.shellPath()) |s| {
-            if (!pathExecutable(s)) {
+            if (!paths.pathExecutable(s)) {
                 // Still show configured name so Settings can fix it
-                if (std.mem.lastIndexOfScalar(u8, s, '/')) |i| return s[i + 1 ..];
+                if (std.mem.lastIndexOfAny(u8, s, "/\\")) |i| return s[i + 1 ..];
                 return s;
             }
-            if (std.mem.lastIndexOfScalar(u8, s, '/')) |i| return s[i + 1 ..];
+            if (std.mem.lastIndexOfAny(u8, s, "/\\")) |i| return s[i + 1 ..];
             return s;
         }
-        return "$SHELL";
+        return if (builtin.os.tag == .windows) "default" else "$SHELL";
     }
 
     pub fn setThemeName(self: *Config, allocator: std.mem.Allocator, name: []const u8) !void {
@@ -163,7 +175,7 @@ pub const Config = struct {
             if (choice.len == 0) {
                 available[count] = choice;
                 count += 1;
-            } else if (pathExecutable(choice)) {
+            } else if (paths.pathExecutable(choice)) {
                 available[count] = choice;
                 count += 1;
             }
@@ -191,9 +203,7 @@ pub const Config = struct {
 
     pub fn load(allocator: std.mem.Allocator, io: std.Io) Config {
         var cfg: Config = .{};
-        const home = std.c.getenv("HOME") orelse return cfg;
-        const home_slice = std.mem.span(home);
-        const path = std.fmt.allocPrint(allocator, "{s}/.config/orbit/config.toml", .{home_slice}) catch return cfg;
+        const path = paths.joinConfig(allocator, &.{"config.toml"}) catch return cfg;
         defer allocator.free(path);
 
         const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch return cfg;
@@ -208,15 +218,13 @@ pub const Config = struct {
         return cfg;
     }
 
-    /// Persist current settings to ~/.config/orbit/config.toml.
+    /// Persist current settings to the Orbit config file.
     pub fn save(self: *const Config, allocator: std.mem.Allocator, io: std.Io) !void {
-        const home = std.c.getenv("HOME") orelse return error.NoHome;
-        const home_slice = std.mem.span(home);
-        const dir_path = try std.fmt.allocPrint(allocator, "{s}/.config/orbit", .{home_slice});
+        const dir_path = try paths.configDir(allocator);
         defer allocator.free(dir_path);
-        ensureDir(dir_path);
+        paths.ensureDir(dir_path);
 
-        const path = try std.fmt.allocPrint(allocator, "{s}/config.toml", .{dir_path});
+        const path = try std.fmt.allocPrint(allocator, "{s}{c}config.toml", .{ dir_path, std.fs.path.sep });
         defer allocator.free(path);
 
         var body: std.ArrayList(u8) = .empty;
@@ -248,7 +256,10 @@ pub const Config = struct {
         if (self.shellPath()) |sh| {
             try appendFmt(&body, allocator, "shell = \"{s}\"\n", .{sh});
         } else {
-            try body.appendSlice(allocator, "# shell = \"$SHELL\"  # e.g. \"/bin/bash\" or \"/bin/zsh\"\n");
+            try body.appendSlice(allocator, if (builtin.os.tag == .windows)
+                "# shell = \"powershell.exe\"  # or \"pwsh.exe\" / \"cmd.exe\"\n"
+            else
+                "# shell = \"$SHELL\"  # e.g. \"/bin/bash\" or \"/bin/zsh\"\n");
         }
 
         const file = try std.Io.Dir.createFileAbsolute(io, path, .{});
@@ -345,7 +356,7 @@ pub const Config = struct {
 
         // Drop configured shell if the binary is missing (e.g. fish not installed).
         if (cfg.shell) |s| {
-            if (s.len > 0 and !pathExecutable(s)) {
+            if (s.len > 0 and !paths.pathExecutable(s)) {
                 if (cfg.shell_owned) |old| allocator.free(old);
                 cfg.shell_owned = null;
                 cfg.shell = null;
@@ -354,31 +365,10 @@ pub const Config = struct {
     }
 };
 
-fn pathExecutable(path: []const u8) bool {
-    if (path.len == 0) return false;
-    var buf: [std.fs.max_path_bytes:0]u8 = undefined;
-    if (path.len >= buf.len) return false;
-    @memcpy(buf[0..path.len], path);
-    buf[path.len] = 0;
-    return std.c.access(buf[0..path.len :0], 1) == 0; // X_OK
-}
-
 fn appendFmt(list: *std.ArrayList(u8), allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
     const slice = try std.fmt.allocPrint(allocator, fmt, args);
     defer allocator.free(slice);
     try list.appendSlice(allocator, slice);
-}
-
-fn ensureDir(path: []const u8) void {
-    var buf: [std.fs.max_path_bytes:0]u8 = undefined;
-    if (path.len >= buf.len) return;
-    var i: usize = 1;
-    while (i <= path.len) : (i += 1) {
-        if (i < path.len and path[i] != '/') continue;
-        @memcpy(buf[0..i], path[0..i]);
-        buf[i] = 0;
-        _ = std.c.mkdir(buf[0..i :0], 0o755);
-    }
 }
 
 fn parseI32(s: []const u8) ?i32 {

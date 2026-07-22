@@ -119,20 +119,12 @@ pub const App = struct {
         return self;
     }
 
-    /// Keep ~/.config/orbit/source_root fresh and export ORBIT_SOURCE_ROOT to child shells.
+    /// Keep Orbit config source_root fresh and export ORBIT_SOURCE_ROOT to child shells.
     fn publishSourceRoot(self: *App) void {
         dev_root.ensureRecorded(self.allocator, self.io);
         const root = dev_root.resolve(self.allocator, self.io) orelse return;
         defer self.allocator.free(root);
-        var key_buf: [32:0]u8 = undefined;
-        var val_buf: [std.fs.max_path_bytes:0]u8 = undefined;
-        const key = "ORBIT_SOURCE_ROOT";
-        if (root.len >= val_buf.len) return;
-        @memcpy(key_buf[0..key.len], key);
-        key_buf[key.len] = 0;
-        @memcpy(val_buf[0..root.len], root);
-        val_buf[root.len] = 0;
-        _ = c.setenv(key_buf[0..key.len :0], val_buf[0..root.len :0], 1);
+        @import("../platform/paths.zig").setEnv("ORBIT_SOURCE_ROOT", root);
     }
 
     pub fn destroy(self: *App) void {
@@ -1095,8 +1087,7 @@ pub const App = struct {
 
     fn sessionCwd(self: *App) []const u8 {
         if (self.focused()) |s| return s.cwd;
-        if (std.c.getenv("HOME")) |h| return std.mem.span(h);
-        return "/";
+        return @import("../platform/paths.zig").defaultCwd();
     }
 
     fn onChar(ptr: *anyopaque, codepoint: u32) void {
@@ -1914,16 +1905,12 @@ pub const App = struct {
     }
 
     fn writePluginToml(self: *App, name: []const u8, toml: []const u8) bool {
-        const plugin_dir = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.plugins.dir_path, name }) catch return false;
+        const plugin_dir = std.fmt.allocPrint(self.allocator, "{s}{c}{s}", .{ self.plugins.dir_path, std.fs.path.sep, name }) catch return false;
         defer self.allocator.free(plugin_dir);
 
-        var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
-        if (plugin_dir.len >= path_buf.len) return false;
-        @memcpy(path_buf[0..plugin_dir.len], plugin_dir);
-        path_buf[plugin_dir.len] = 0;
-        _ = std.c.mkdir(path_buf[0..plugin_dir.len :0], 0o755);
+        @import("../platform/paths.zig").ensureDir(plugin_dir);
 
-        const toml_path = std.fmt.allocPrint(self.allocator, "{s}/plugin.toml", .{plugin_dir}) catch return false;
+        const toml_path = std.fmt.allocPrint(self.allocator, "{s}{c}plugin.toml", .{ plugin_dir, std.fs.path.sep }) catch return false;
         defer self.allocator.free(toml_path);
 
         const file = std.Io.Dir.createFileAbsolute(self.io, toml_path, .{}) catch return false;

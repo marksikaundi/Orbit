@@ -127,8 +127,9 @@ cd Orbit
 
 # macOS:  brew install zig glfw
 # Linux:  Zig 0.16+ + GLFW / OpenGL / X11  (see INSTALL.md)
+# Windows (PowerShell): Zig 0.16+ + GLFW via vcpkg  (see INSTALL.md)
 
-zig build          # → zig-out/bin/orbit
+zig build          # → zig-out/bin/orbit  (orbit.exe on Windows)
 zig build run      # detached launch
 zig build run-fg   # foreground (logs in this terminal)
 zig build setup    # once: global `orbit` + zig build run from anywhere
@@ -146,17 +147,23 @@ zig build run      # same — builds & launches detached
 Both print `Orbit terminal opened successfully` and return to your prompt.
 
 ```bash
-ORBIT_FOREGROUND=1 orbit   # live logs in this terminal
+ORBIT_FOREGROUND=1 orbit   # live logs in this terminal (Unix)
+# Windows:  $env:ORBIT_FOREGROUND=1; orbit
 ```
 
 Optional config:
 
 ```bash
+# Unix
 mkdir -p ~/.config/orbit
 cp assets/config.example.toml ~/.config/orbit/config.toml
+
+# Windows (PowerShell)
+New-Item -ItemType Directory -Force "$env:APPDATA\orbit" | Out-Null
+Copy-Item assets\config.example.toml "$env:APPDATA\orbit\config.toml"
 ```
 
-> **Windows:** use **WSL2** today (native ConPTY is on the roadmap). See [INSTALL.md § Windows](INSTALL.md#windows).
+> **Windows:** native ConPTY build is supported — see [INSTALL.md § Windows](INSTALL.md#windows). WSL2 remains an alternative.
 
 Day-to-day usage: [how-to-use.md](how-to-use.md).
 

@@ -31,7 +31,7 @@ Orbit is currently distributed as **source**. You clone the repository, install 
 | [GLFW](https://www.glfw.org/) | 3.x | Windowing and input |
 | OpenGL / system libs | platform-specific | GPU rendering and PTY |
 
-Supported shells for day-to-day use: zsh, bash, fish, and other POSIX shells (Windows: PowerShell / cmd via ConPTY when native Windows lands; today use WSL — see [Windows](#windows)).
+Supported shells for day-to-day use: zsh, bash, fish, and other POSIX shells; on Windows: PowerShell, pwsh, and cmd via ConPTY (see [Windows](#windows)). Also supported: WSL2 for the Linux build.
 
 ---
 
@@ -243,9 +243,106 @@ source ~/.bashrc
 
 ## Windows
 
-**Status today:** Orbit’s shell I/O and build scripts are validated on **macOS and Linux**. Native Windows (ConPTY) is on the roadmap; the recommended way to run Orbit on a Windows PC right now is **WSL2** (Ubuntu).
+Native Windows is supported via **ConPTY** (Windows 10 1809+ / Windows 11). You can also run the Linux build under **WSL2** if you prefer.
 
-### Recommended: WSL2 (Ubuntu)
+### Native Windows (recommended)
+
+#### 1. Install prerequisites
+
+1. **Git for Windows** — [git-scm.com/download/win](https://git-scm.com/download/win)
+2. **Zig 0.16+** — download the Windows zip from [ziglang.org/download](https://ziglang.org/download/), extract it, and add the folder to your user `PATH`
+3. **GLFW 3.x** — pick one:
+
+**Option A — vcpkg (recommended)**
+
+```powershell
+git clone https://github.com/microsoft/vcpkg C:\vcpkg
+C:\vcpkg\bootstrap-vcpkg.bat
+C:\vcpkg\vcpkg.exe install glfw3:x64-windows
+```
+
+Orbit’s `build.zig` looks in `C:\vcpkg\installed\x64-windows` by default.
+
+**Option B — prebuilt GLFW SDK**
+
+Download GLFW Windows binaries from [glfw.org](https://www.glfw.org/download.html), then either:
+
+- Extract to `C:\glfw` with `include\` and `lib\` folders, **or**
+- Pass explicit paths when building:
+
+```powershell
+zig build "-Dglfw-path=C:\path\to\glfw"
+# or
+zig build "-Dglfw-include=C:\path\to\glfw\include" "-Dglfw-lib=C:\path\to\glfw\lib"
+```
+
+Confirm Zig:
+
+```powershell
+zig version
+# Expect 0.16.0 or higher
+```
+
+#### 2. Clone Orbit
+
+```powershell
+git clone https://github.com/marksikaundi/Orbit.git
+cd Orbit
+```
+
+#### 3. Build
+
+```powershell
+zig build
+# or optimized:
+zig build -Doptimize=ReleaseFast
+```
+
+Binary: `zig-out\bin\orbit.exe`
+
+#### 4. Run
+
+```powershell
+zig build run      # detached — new process, shell returns
+zig build run-fg   # foreground — logs in this terminal
+.\zig-out\bin\orbit.exe
+```
+
+#### 5. Install the global launcher (optional, recommended)
+
+```powershell
+zig build setup
+```
+
+This writes `%APPDATA%\orbit\source_root`, installs `orbit.cmd` under `%LOCALAPPDATA%\Orbit\bin`, and adds that folder to your user `PATH`.
+
+Open a **new** PowerShell or Command Prompt, then:
+
+```powershell
+orbit
+```
+
+#### Config & plugins on Windows
+
+| Item | Path |
+| ---- | ---- |
+| Config | `%APPDATA%\orbit\config.toml` |
+| Plugins | `%APPDATA%\orbit\plugins\` |
+| Workspaces | `%APPDATA%\orbit\workspaces\` |
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$env:APPDATA\orbit" | Out-Null
+Copy-Item assets\config.example.toml "$env:APPDATA\orbit\config.toml"
+Copy-Item -Recurse assets\plugins\* "$env:APPDATA\orbit\plugins\"
+```
+
+Default shell is **PowerShell** (`powershell.exe`). You can set `shell = "pwsh.exe"` or `shell = "cmd.exe"` in `config.toml`.
+
+---
+
+### Alternative: WSL2 (Ubuntu)
+
+Use this if you want the Linux build inside Windows.
 
 #### 1. Install WSL2
 
@@ -289,23 +386,6 @@ export DISPLAY=$(grep -m1 nameserver /etc/resolv.conf | awk '{print $2}'):0
 ```
 
 Then run `zig build run-fg` again.
-
-### Native Windows (preview / contributors)
-
-If you are developing native Windows support:
-
-1. Install [Git for Windows](https://git-scm.com/download/win).
-2. Install Zig **0.16+** from [ziglang.org/download](https://ziglang.org/download/) and add it to `PATH`.
-3. Install GLFW 3.x (vcpkg, MSYS2, or a prebuilt SDK) and ensure headers/libs are discoverable by the linker.
-4. Clone and attempt:
-
-```powershell
-git clone https://github.com/marksikaundi/Orbit.git
-cd Orbit
-zig build
-```
-
-Expect gaps until ConPTY and Windows linking land in `build.zig` / `src/pty`. Prefer WSL for a working terminal today. Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
@@ -387,6 +467,8 @@ Check the latest tag on [Releases](https://github.com/marksikaundi/Orbit/release
 
 ## Uninstall
 
+### Unix (macOS / Linux)
+
 1. Remove the global launcher and config (optional):
 
 ```bash
@@ -408,6 +490,18 @@ On macOS, also remove any leftover app bundle if you copied it elsewhere:
 rm -rf /Applications/Orbit.app   # only if you moved it there yourself
 ```
 
+### Windows
+
+1. Remove the launcher and config (optional), in PowerShell:
+
+```powershell
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Orbit" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "$env:APPDATA\orbit" -ErrorAction SilentlyContinue
+```
+
+2. Remove `%LOCALAPPDATA%\Orbit\bin` from your user PATH (Settings → System → About → Advanced system settings → Environment Variables).
+
+3. Delete the clone folder.
 ---
 
 ## Troubleshooting
@@ -418,8 +512,10 @@ rm -rf /Applications/Orbit.app   # only if you moved it there yourself
 | Zig too old | Download from [ziglang.org/download](https://ziglang.org/download/) — distro packages are often behind |
 | `error: unable to find library glfw` (macOS) | `brew install glfw`; Apple Silicon uses `/opt/homebrew`, Intel often `/usr/local` |
 | Missing GLFW / GL / X11 (Linux) | Re-run the apt/dnf/pacman package block above |
+| `error: unable to find library glfw` (Windows) | Install GLFW via vcpkg or pass `-Dglfw-path=...` (see [Windows](#windows)) |
+| `orbit: command not found` (Windows) | Run `zig build setup`, open a **new** terminal, confirm `%LOCALAPPDATA%\Orbit\bin` is on `PATH` |
 | Window does not open (WSL) | Enable WSLg (Win 11) or set `DISPLAY` with an X server (Win 10) |
-| `orbit: command not found` | Run `zig build setup` and ensure `~/.local/bin` is on `PATH` |
+| `orbit: command not found` | Run `zig build setup` and ensure `~/.local/bin` (Unix) is on `PATH` |
 | Build works but Dock icon is generic (macOS) | Use `zig build run` / `open zig-out/Orbit.app` so the bundled `Orbit.app` is used |
 | Another project’s `build.zig` “steals” `zig build run` | Expected — Orbit’s shell redirect skips directories that already have a `build.zig`; use `orbit` instead |
 

@@ -67,17 +67,27 @@ Platform notes:
 
 - **macOS** — Homebrew GLFW; OpenGL + Cocoa frameworks linked via `build.zig`
 - **Linux** — system GLFW, OpenGL, X11, `util` (for `openpty`)
-- **Windows** — ConPTY path (see `src/pty/`)
+- **Windows** — GLFW (vcpkg or `-Dglfw-path`), OpenGL (`opengl32`), ConPTY in `src/pty/windows.zig` (see [INSTALL.md](INSTALL.md#windows))
 
 ### Clone and build
 
 ```bash
 git clone https://github.com/marksikaundi/Orbit.git
 cd Orbit
-zig build          # produces zig-out/bin/orbit
+zig build          # produces zig-out/bin/orbit (orbit.exe on Windows)
 zig build test     # run the unit test suite
 zig build security-scan  # secrets + injection heuristics
 zig build run-fg   # launch in the foreground (logs in this terminal)
+```
+
+Windows (PowerShell) after installing Zig + GLFW:
+
+```powershell
+git clone https://github.com/marksikaundi/Orbit.git
+cd Orbit
+zig build
+zig build run-fg
+zig build setup    # optional global `orbit` launcher
 ```
 
 Optional one-time global setup (so `orbit` / `zig build run` work from any directory):

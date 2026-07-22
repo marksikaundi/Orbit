@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const c = @import("../c.zig").c;
 
 pub const PumpFn = *const fn () void;
 
@@ -15,6 +14,7 @@ pub fn pickFolder(allocator: std.mem.Allocator, io: std.Io, pump: ?PumpFn) !?[]u
     return switch (builtin.os.tag) {
         .macos => pickMacos(allocator, io, pump),
         .linux => pickLinux(allocator, io, pump),
+        .windows => pickWindows(allocator, io, pump),
         else => error.UnsupportedPlatform,
     };
 }
@@ -42,6 +42,22 @@ fn pickLinux(allocator: std.mem.Allocator, io: std.Io, pump: ?PumpFn) !?[]u8 {
         ".",
         "--title",
         "Open Workspace",
+    }, pump);
+}
+
+fn pickWindows(allocator: std.mem.Allocator, io: std.Io, pump: ?PumpFn) !?[]u8 {
+    // FolderBrowserDialog via PowerShell (no extra Win32 COM glue required).
+    const script =
+        \\Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Open Workspace'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }
+    ;
+    return runChooser(allocator, io, &.{
+        "powershell",
+        "-NoProfile",
+        "-STA",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        script,
     }, pump);
 }
 
@@ -115,11 +131,7 @@ fn runChooserPumped(allocator: std.mem.Allocator, io: std.Io, argv: []const []co
 
     while (!slot.done.load(.acquire)) {
         pump();
-        var req = c.struct_timespec{
-            .tv_sec = 0,
-            .tv_nsec = 10 * std.time.ns_per_ms,
-        };
-        _ = c.nanosleep(&req, null);
+        sleepMs(10);
     }
     thr.join();
 
@@ -132,9 +144,25 @@ fn runChooserPumped(allocator: std.mem.Allocator, io: std.Io, argv: []const []co
     return try normalizePath(allocator, stdout);
 }
 
+fn sleepMs(ms: u64) void {
+    if (builtin.os.tag == .windows) {
+        const Sleep = struct {
+            extern "kernel32" fn Sleep(dwMilliseconds: u32) callconv(.winapi) void;
+        };
+        Sleep.Sleep(@intCast(ms));
+        return;
+    }
+    const c = @import("../c.zig").c;
+    var req = c.struct_timespec{
+        .tv_sec = @intCast(ms / 1000),
+        .tv_nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
+    };
+    _ = c.nanosleep(&req, null);
+}
+
 fn normalizePath(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     var path = std.mem.trim(u8, raw, " \t\r\n");
-    while (path.len > 1 and path[path.len - 1] == '/') {
+    while (path.len > 1 and (path[path.len - 1] == '/' or path[path.len - 1] == '\\')) {
         path = path[0 .. path.len - 1];
     }
     if (path.len == 0) return error.EmptyPath;
@@ -144,8 +172,8 @@ fn normalizePath(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
 /// Last path component suitable for a tab / workspace title.
 pub fn folderBasename(path: []const u8) []const u8 {
     var p = path;
-    while (p.len > 1 and p[p.len - 1] == '/') p = p[0 .. p.len - 1];
-    if (std.mem.lastIndexOfScalar(u8, p, '/')) |i| {
+    while (p.len > 1 and (p[p.len - 1] == '/' or p[p.len - 1] == '\\')) p = p[0 .. p.len - 1];
+    if (std.mem.lastIndexOfAny(u8, p, "/\\")) |i| {
         if (i + 1 < p.len) return p[i + 1 ..];
     }
     return p;
@@ -154,5 +182,6 @@ pub fn folderBasename(path: []const u8) []const u8 {
 test "folderBasename" {
     try std.testing.expectEqualStrings("Orbit", folderBasename("/Users/me/Orbit"));
     try std.testing.expectEqualStrings("Orbit", folderBasename("/Users/me/Orbit/"));
+    try std.testing.expectEqualStrings("Orbit", folderBasename("C:\\Users\\me\\Orbit"));
     try std.testing.expectEqualStrings("tmp", folderBasename("/tmp"));
 }

@@ -248,13 +248,11 @@ pub const Session = struct {
     }
 
     fn defaultCwd() []const u8 {
-        if (std.c.getenv("HOME")) |h| return std.mem.span(h);
-        return "/";
+        return @import("../platform/paths.zig").defaultCwd();
     }
 
     fn defaultShell() []const u8 {
-        if (std.c.getenv("SHELL")) |s| return std.mem.span(s);
-        return "/bin/zsh";
+        return @import("../platform/paths.zig").defaultShell();
     }
 };
 

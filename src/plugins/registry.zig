@@ -1,4 +1,4 @@
-//! Discover and load plugins from ~/.config/orbit/plugins/<name>/plugin.toml
+//! Discover and load plugins from the Orbit config plugins directory.
 
 const std = @import("std");
 const types = @import("types.zig");
@@ -6,6 +6,7 @@ const manifest = @import("manifest.zig");
 const plugin_audit = @import("../security/plugin_audit.zig");
 const Theme = @import("../config/theme.zig").Theme;
 const Color = @import("../terminal/cell.zig").Color;
+const paths = @import("../platform/paths.zig");
 
 pub const Registry = struct {
     allocator: std.mem.Allocator,
@@ -14,10 +15,9 @@ pub const Registry = struct {
     plugins: std.ArrayList(types.Plugin) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) !Registry {
-        const home = std.c.getenv("HOME") orelse return error.NoHome;
-        const dir_path = try std.fmt.allocPrint(allocator, "{s}/.config/orbit/plugins", .{std.mem.span(home)});
+        const dir_path = try paths.joinConfig(allocator, &.{"plugins"});
         errdefer allocator.free(dir_path);
-        ensureDir(dir_path);
+        paths.ensureDir(dir_path);
         var reg: Registry = .{
             .allocator = allocator,
             .io = io,
@@ -41,7 +41,7 @@ pub const Registry = struct {
     pub fn reload(self: *Registry) !void {
         // Fire unload hooks first (caller may also do this for status UI)
         self.clear();
-        ensureDir(self.dir_path);
+        paths.ensureDir(self.dir_path);
         const dir = std.Io.Dir.openDirAbsolute(self.io, self.dir_path, .{ .iterate = true }) catch return;
         defer dir.close(self.io);
 
@@ -50,9 +50,9 @@ pub const Registry = struct {
             if (entry.kind != .directory and entry.kind != .sym_link) continue;
             if (entry.name.len == 0 or entry.name[0] == '.') continue;
 
-            const plugin_dir = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.dir_path, entry.name });
+            const plugin_dir = try std.fmt.allocPrint(self.allocator, "{s}{c}{s}", .{ self.dir_path, std.fs.path.sep, entry.name });
             defer self.allocator.free(plugin_dir);
-            const toml_path = try std.fmt.allocPrint(self.allocator, "{s}/plugin.toml", .{plugin_dir});
+            const toml_path = try std.fmt.allocPrint(self.allocator, "{s}{c}plugin.toml", .{ plugin_dir, std.fs.path.sep });
             defer self.allocator.free(toml_path);
 
             const file = std.Io.Dir.openFileAbsolute(self.io, toml_path, .{}) catch continue;
@@ -140,19 +140,6 @@ pub const Registry = struct {
     }
 };
 
-fn ensureDir(path: []const u8) void {
-    var buf: [std.fs.max_path_bytes:0]u8 = undefined;
-    if (path.len >= buf.len) return;
-    var i: usize = 1;
-    while (i <= path.len) : (i += 1) {
-        if (i < path.len and path[i] != '/') continue;
-        @memcpy(buf[0..i], path[0..i]);
-        buf[i] = 0;
-        _ = std.c.mkdir(buf[0..i :0], 0o755);
-    }
-}
-
-/// Warn when a plugin insert payload can inject dangerous shell behavior.
 fn warnRiskyPlugin(plugin: *const types.Plugin) void {
     for (plugin.commands) |cmd| {
         if (cmd.kind != .insert) continue;
