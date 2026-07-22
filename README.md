@@ -271,12 +271,15 @@ See [roamap.md](roamap.md) for full phase detail.
 
 ## Getting started
 
-Requirements:
+**Full step-by-step install for macOS, Linux, and Windows:** see **[INSTALL.md](INSTALL.md)**.
 
-- [Zig](https://ziglang.org/) **0.16+**
-- [GLFW](https://www.glfw.org/) 3.x (e.g. `brew install glfw` on macOS)
+Quick path (macOS / Linux — from source):
 
 ```bash
+git clone https://github.com/marksikaundi/Orbit.git
+cd Orbit
+# macOS: brew install zig glfw
+# Linux: install Zig 0.16+ and GLFW/OpenGL/X11 (see INSTALL.md)
 zig build          # produces zig-out/bin/orbit
 zig build run      # build and launch (detached — shell returns immediately)
 zig build run-fg   # build and launch in the foreground (logs in this terminal)
@@ -295,6 +298,8 @@ orbit              # launches Orbit (detached)
 Both print `Orbit terminal opened successfully` and return to your prompt. Use `zig build run-fg` or `ORBIT_FOREGROUND=1 orbit` when you need live logs.
 
 Optional config: copy `assets/config.example.toml` to `~/.config/orbit/config.toml`.
+
+On Windows, use **WSL2** today (native ConPTY is on the roadmap) — details in [INSTALL.md](INSTALL.md#windows).
 
 ### Shortcuts (Phases 2–5)
 

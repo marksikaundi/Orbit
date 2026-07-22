@@ -86,7 +86,7 @@ Optional one-time global setup (so `orbit` / `zig build run` work from any direc
 zig build setup
 ```
 
-See [how-to-use.md](how-to-use.md) for detached launch, config paths, and day-to-day usage.
+See [INSTALL.md](INSTALL.md) for OS-specific download/install steps, and [how-to-use.md](how-to-use.md) for detached launch, config paths, and day-to-day usage.
 
 ### Useful build steps
 
