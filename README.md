@@ -201,7 +201,8 @@ Workspaces live in `~/.config/orbit/workspaces/<name>.toml`.
 | `Ctrl+PageDown` | Focus next pane |
 | `Ctrl/Cmd+Shift+F` | Search terminal or workspace files |
 | `Cmd+C` / `Cmd+V` | Copy / paste (macOS) |
-| `Ctrl/Cmd+Shift+C` / `V` | Copy / paste |
+| `Ctrl+C` / `Ctrl+V` | Copy (when selected) / paste (Windows/Linux) |
+| `Ctrl/Cmd+Shift+C` / `V` | Copy / paste (all platforms) |
 | Right-click | Copy / Paste context menu |
 | `Ctrl/Cmd+=` / `-` / `0` | Font larger / smaller / reset |
 | `Ctrl+Shift+O` | Open folder as workspace |

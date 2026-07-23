@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const c = @import("../c.zig").c;
 const Window = @import("../window/window.zig").Window;
 const Renderer = @import("../renderer/renderer.zig").Renderer;
@@ -1296,8 +1297,11 @@ pub const App = struct {
             return;
         }
 
-        // Clipboard — Cmd+C/V (macOS) plus Ctrl/Cmd+Shift+C/V (terminal-safe).
-        // Plain Ctrl+C stays with the shell (interrupt); plain Ctrl+V stays as ^V.
+        // Clipboard — works the same idea on every OS:
+        //   macOS:           Cmd+C / Cmd+V
+        //   Windows / Linux: Ctrl+V always pastes; Ctrl+C copies when text is
+        //                    selected, otherwise still interrupts the shell.
+        //   All platforms:   Ctrl/Cmd+Shift+C / V (never conflicts with ^C)
         if (super and !ctrl and !alt and key == c.GLFW_KEY_C) {
             self.closeContextMenu();
             self.copySelection();
@@ -1317,6 +1321,24 @@ pub const App = struct {
             self.closeContextMenu();
             self.pasteClipboard();
             return;
+        }
+        // Primary Ctrl chords on Windows/Linux (and other non-macOS).
+        if (builtin.os.tag != .macos and ctrl and !shift and !super and !alt) {
+            if (key == c.GLFW_KEY_V) {
+                self.closeContextMenu();
+                self.pasteClipboard();
+                return;
+            }
+            if (key == c.GLFW_KEY_C) {
+                if (self.focused()) |s| {
+                    if (s.selection.active) {
+                        self.closeContextMenu();
+                        self.copySelection();
+                        return;
+                    }
+                }
+                // No selection → fall through so ^C still interrupts.
+            }
         }
 
         // Built-in chords from the shared bindings table (palette hints stay in sync).
