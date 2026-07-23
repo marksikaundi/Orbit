@@ -223,35 +223,56 @@ pub fn draw(
         @intCast(@divTrunc(@as(i32, fg.g) + @as(i32, bg.g) * 4, 5)),
         @intCast(@divTrunc(@as(i32, fg.b) + @as(i32, bg.b) * 4, 5)),
     );
+    const accent = Color.rgb(90, 175, 220);
 
     try renderer.drawRect(0, 0, fb_w, fb_h, bg, 1.0);
 
-    const cw = @as(i32, @intFromFloat(renderer.cell_w));
-    const ch = @as(i32, @intFromFloat(renderer.cell_h));
+    // Grow with framebuffer so fullscreen isn't a tiny island of terminal-sized text.
+    const ui = homeUiScale(fb_w, fb_h);
+    const base_cw = @as(i32, @intFromFloat(renderer.cell_w));
+    const base_ch = @as(i32, @intFromFloat(renderer.cell_h));
+    const body: f32 = ui;
+    const brand_s: f32 = ui * 1.85;
+    const tag_s: f32 = ui * 1.2;
+    const cw = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_cw)) * body))));
+    const ch = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_ch)) * body))));
+    const brand_cw = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_cw)) * brand_s))));
+    const brand_ch = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_ch)) * brand_s))));
+    const tag_cw = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_cw)) * tag_s))));
+    const tag_ch = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_ch)) * tag_s))));
     const cx = @divTrunc(fb_w, 2);
 
-    // Ghostty-like: generous outer padding, single vertical composition.
-    const pad_y = @max(ch * 2, @divTrunc(fb_h, 8));
-    var y = pad_y;
+    if (home.show_help) {
+        try drawHelp(renderer, fb_w, fb_h, cx, home.help_scroll, bg, fg, muted, dim, body);
+        return;
+    }
 
-    // Prompt mark instead of a heavy logo
     const prompt = "~ >";
+    const brand = "Orbit";
+    const tag = "Stay in the flow.";
+    const row_h = ch + @divTrunc(ch, 2);
+    const list_w: i32 = @min(cw * 34, fb_w - cw * 4);
+
+    // Approximate stacked height so we can vertically center on tall displays.
+    const block_h = brand_ch + tag_ch + ch * 3 + row_h * @as(i32, @intCast(entries.len)) + ch * 5;
+    const pad_y = @max(ch * 2, @divTrunc(fb_h - block_h, 3));
+    var y = @min(@max(ch * 2, pad_y), @divTrunc(fb_h, 4));
+
+    // Prompt mark
     const prompt_x = cx - @divTrunc(@as(i32, @intCast(prompt.len)) * cw, 2);
-    try renderer.drawText(prompt_x, y, "~", Color.rgb(120, 160, 140));
-    try renderer.drawText(prompt_x + cw + @divTrunc(cw, 4), y, ">", Color.rgb(90, 175, 220));
+    try renderer.drawTextScaled(prompt_x, y, "~", Color.rgb(120, 160, 140), body);
+    try renderer.drawTextScaled(prompt_x + cw + @divTrunc(cw, 4), y, ">", accent, body);
     try renderer.drawRect(prompt_x + cw * 2 + @divTrunc(cw, 2), y + 2, @max(6, cw - 4), ch - 4, fg, 0.85);
     y += ch + @divTrunc(ch, 2);
 
     // Brand — hero
-    const brand = "Orbit";
-    const brand_x = cx - @divTrunc(@as(i32, @intCast(brand.len)) * cw, 2);
-    try renderer.drawText(brand_x, y, brand, fg);
-    y += ch + 6;
+    const brand_x = cx - @divTrunc(@as(i32, @intCast(brand.len)) * brand_cw, 2);
+    try renderer.drawTextScaled(brand_x, y, brand, fg, brand_s);
+    y += brand_ch + @divTrunc(ch, 3);
 
-    const tag = "Stay in the flow.";
-    const tag_x = cx - @divTrunc(@as(i32, @intCast(tag.len)) * cw, 2);
-    try renderer.drawText(tag_x, y, tag, muted);
-    y += ch + @divTrunc(ch, 2);
+    const tag_x = cx - @divTrunc(@as(i32, @intCast(tag.len)) * tag_cw, 2);
+    try renderer.drawTextScaled(tag_x, y, tag, muted, tag_s);
+    y += tag_ch + @divTrunc(ch, 2);
 
     var meta: [96]u8 = undefined;
     const meta_line = std.fmt.bufPrint(
@@ -260,35 +281,27 @@ pub fn draw(
         .{ version, theme_name, font_size },
     ) catch "v0.1.0";
     const meta_x = cx - @divTrunc(@as(i32, @intCast(meta_line.len)) * cw, 2);
-    try renderer.drawText(meta_x, y, meta_line, dim);
+    try renderer.drawTextScaled(meta_x, y, meta_line, dim, body);
     y += ch * 2;
 
-    if (home.show_help) {
-        try drawHelp(renderer, fb_w, fb_h, cx, home.help_scroll, bg, fg, muted, dim);
-        return;
-    }
-
-    // Action list — no cards; selection is a quiet bar only
-    const list_w: i32 = @min(cw * 36, fb_w - cw * 4);
+    // Action list
     const list_x = cx - @divTrunc(list_w, 2);
-    const row_h = ch + @divTrunc(ch, 3);
-
-    try renderer.drawText(list_x, y, "What would you like to do?", muted);
+    try renderer.drawTextScaled(list_x, y, "What would you like to do?", muted, body);
     y += ch + @divTrunc(ch, 2);
 
     for (entries, 0..) |entry, i| {
         const ry = y + @as(i32, @intCast(i)) * row_h;
         if (i == home.selected) {
-            try renderer.drawRect(list_x - 8, ry - 2, list_w + 16, row_h - 2, Color.rgb(
+            try renderer.drawRect(list_x - 10, ry - 4, list_w + 20, row_h - 2, Color.rgb(
                 @intCast(@min(255, @as(i32, bg.r) + 18)),
                 @intCast(@min(255, @as(i32, bg.g) + 22)),
                 @intCast(@min(255, @as(i32, bg.b) + 28)),
             ), 1.0);
-            try renderer.drawRect(list_x - 8, ry - 2, 3, row_h - 2, Color.rgb(90, 175, 220), 1.0);
+            try renderer.drawRect(list_x - 10, ry - 4, @max(3, @divTrunc(cw, 3)), row_h - 2, accent, 1.0);
         }
-        try renderer.drawText(list_x + 8, ry + 2, entry.label, fg);
+        try renderer.drawTextScaled(list_x + 10, ry + 2, entry.label, fg, body);
         const key_x = list_x + list_w - @as(i32, @intCast(entry.key.len)) * cw;
-        try renderer.drawText(key_x, ry + 2, entry.key, muted);
+        try renderer.drawTextScaled(key_x, ry + 2, entry.key, muted, body);
     }
 
     y += @as(i32, @intCast(entries.len)) * row_h + ch;
@@ -301,13 +314,22 @@ pub fn draw(
     ) catch "~/.config/orbit";
     const foot_x = cx - @divTrunc(@as(i32, @intCast(foot_line.len)) * cw, 2);
     if (y + ch < fb_h - ch * 3) {
-        try renderer.drawText(foot_x, y, foot_line, dim);
+        try renderer.drawTextScaled(foot_x, y, foot_line, dim, body);
     }
 
     const credit = "Created by Mark Sikaundi - Lupleg Studios";
     const credit_x = cx - @divTrunc(@as(i32, @intCast(credit.len)) * cw, 2);
     const credit_y = fb_h - ch * 2;
-    try renderer.drawText(credit_x, credit_y, credit, dim);
+    try renderer.drawTextScaled(credit_x, credit_y, credit, dim, body);
+}
+
+/// Scale home UI with window size (1.0 at ~default framebuffer, up to ~2.2 in fullscreen).
+fn homeUiScale(fb_w: i32, fb_h: i32) f32 {
+    _ = fb_w;
+    // ~1120px is a typical Retina height for the default 560pt window.
+    const ref_h: f32 = 1100.0;
+    const s = @as(f32, @floatFromInt(@max(fb_h, 1))) / ref_h;
+    return @min(2.2, @max(1.0, s));
 }
 
 fn drawHelp(
@@ -320,17 +342,20 @@ fn drawHelp(
     fg: Color,
     muted: Color,
     dim: Color,
+    ui: f32,
 ) !void {
-    const cw = @as(i32, @intFromFloat(renderer.cell_w));
-    const ch = @as(i32, @intFromFloat(renderer.cell_h));
+    const base_cw = @as(i32, @intFromFloat(renderer.cell_w));
+    const base_ch = @as(i32, @intFromFloat(renderer.cell_h));
+    const cw = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_cw)) * ui))));
+    const ch = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_ch)) * ui))));
     const accent = Color.rgb(90, 175, 220);
-    const panel_w: i32 = @min(cw * 56, fb_w - cw * 2);
+    const panel_w: i32 = @min(cw * 52, fb_w - cw * 2);
     const panel_x = cx - @divTrunc(panel_w, 2);
-    const panel_y = @max(ch, @divTrunc(fb_h, 12));
+    const panel_y = @max(ch, @divTrunc(fb_h, 14));
     const panel_h = fb_h - panel_y - ch;
     const header_h = ch * 2;
     const footer_h = ch + 4;
-    const row_gap = 2;
+    const row_gap = @max(2, @divTrunc(ch, 6));
     const row_h = ch + row_gap;
     const body_h = panel_h - header_h - footer_h;
     const visible: usize = @intCast(@max(1, @divTrunc(body_h, row_h)));
@@ -344,7 +369,7 @@ fn drawHelp(
         @intCast(@min(255, @as(i32, bg.b) + 10)),
     ), 1.0);
 
-    try renderer.drawText(panel_x + cw, panel_y + @divTrunc(ch, 2), "Help & Shortcuts", fg);
+    try renderer.drawTextScaled(panel_x + cw, panel_y + @divTrunc(ch, 2), "Help & Shortcuts", fg, ui);
     var hint_buf: [48]u8 = undefined;
     const hint = std.fmt.bufPrint(
         &hint_buf,
@@ -352,28 +377,28 @@ fn drawHelp(
         .{ start + 1, end, help_rows.len },
     ) catch "";
     const hint_x = panel_x + panel_w - cw - @as(i32, @intCast(hint.len)) * cw;
-    try renderer.drawText(hint_x, panel_y + @divTrunc(ch, 2), hint, dim);
+    try renderer.drawTextScaled(hint_x, panel_y + @divTrunc(ch, 2), hint, dim, ui);
 
-    const keys_col_w = cw * 22;
+    const keys_col_w = cw * 20;
     var ly = panel_y + header_h;
     var i = start;
     while (i < end) : (i += 1) {
         const row = help_rows[i];
         switch (row) {
             .heading => |title| {
-                try renderer.drawText(panel_x + cw, ly, title, accent);
+                try renderer.drawTextScaled(panel_x + cw, ly, title, accent, ui);
             },
             .item => |it| {
-                try renderer.drawText(panel_x + cw, ly, it.keys, fg);
+                try renderer.drawTextScaled(panel_x + cw, ly, it.keys, fg, ui);
                 const desc_x = panel_x + cw + keys_col_w;
                 const max_desc = @max(0, @divTrunc(panel_x + panel_w - cw - desc_x, cw));
                 if (it.desc.len > 0 and max_desc > 0) {
                     const shown = it.desc[0..@min(it.desc.len, @as(usize, @intCast(max_desc)))];
-                    try renderer.drawText(desc_x, ly, shown, muted);
+                    try renderer.drawTextScaled(desc_x, ly, shown, muted, ui);
                 }
             },
             .note => |text| {
-                try renderer.drawText(panel_x + cw, ly, text, dim);
+                try renderer.drawTextScaled(panel_x + cw, ly, text, dim, ui);
             },
             .spacer => {},
         }
@@ -381,5 +406,11 @@ fn drawHelp(
     }
 
     const foot = "↑↓ / wheel scroll   Esc or H close";
-    try renderer.drawText(panel_x + cw, panel_y + panel_h - footer_h, foot, dim);
+    try renderer.drawTextScaled(panel_x + cw, panel_y + panel_h - footer_h, foot, dim, ui);
+}
+
+test "home UI scale grows on tall framebuffers" {
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), homeUiScale(1800, 900), 0.05);
+    try std.testing.expect(homeUiScale(1800, 2200) > 1.8);
+    try std.testing.expect(homeUiScale(1800, 2200) <= 2.2);
 }

@@ -37,6 +37,7 @@ comptime {
     _ = @import("platform/folder_picker.zig");
     _ = @import("platform/shell.zig");
     _ = @import("platform/paths.zig");
+    _ = @import("ui/home.zig");
 }
 
 test "suite boots" {

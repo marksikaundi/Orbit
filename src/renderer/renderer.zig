@@ -326,10 +326,18 @@ pub const Renderer = struct {
     }
 
     pub fn drawText(self: *Renderer, x: i32, y: i32, text: []const u8, color: Color) !void {
+        try self.drawTextScaled(x, y, text, color, 1.0);
+    }
+
+    /// Draw UI text at `scale` × cell size (atlas glyphs; soft when scaled up).
+    pub fn drawTextScaled(self: *Renderer, x: i32, y: i32, text: []const u8, color: Color, scale: f32) !void {
+        const s = @max(0.5, scale);
         self.vertices.clearRetainingCapacity();
         const fw: f32 = @floatFromInt(self.fb_w);
         const fh: f32 = @floatFromInt(self.fb_h);
         const glyph_count: f32 = @floatFromInt(atlas_mod.glyph_count);
+        const cw = self.cell_w * s;
+        const ch = self.cell_h * s;
         var i: usize = 0;
         while (i < text.len) : (i += 1) {
             const cp: u21 = text[i];
@@ -337,9 +345,9 @@ pub const Renderer = struct {
             const gi: f32 = @floatFromInt(cp - atlas_mod.first_codepoint);
             const uv_left = gi / glyph_count;
             const uv_right = (gi + 1.0) / glyph_count;
-            const px = @as(f32, @floatFromInt(x)) + @as(f32, @floatFromInt(i)) * self.cell_w;
+            const px = @as(f32, @floatFromInt(x)) + @as(f32, @floatFromInt(i)) * cw;
             const py = @as(f32, @floatFromInt(y));
-            try self.appendGlyphPx(fw, fh, px, py, self.cell_w, self.cell_h, uv_left, uv_right, color);
+            try self.appendGlyphPx(fw, fh, px, py, cw, ch, uv_left, uv_right, color);
         }
         try self.flush();
     }
