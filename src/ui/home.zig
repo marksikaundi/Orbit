@@ -247,25 +247,22 @@ pub fn draw(
         return;
     }
 
-    const prompt = "~ >";
     const brand = "Orbit";
     const tag = "Stay in the flow.";
     const row_h = ch + @divTrunc(ch, 2);
     const list_w: i32 = @min(cw * 34, fb_w - cw * 4);
+    const logo_size = @max(ch * 5, @as(i32, @intFromFloat(@round(72.0 * ui))));
 
     // Approximate stacked height so we can vertically center on tall displays.
-    const block_h = brand_ch + tag_ch + ch * 3 + row_h * @as(i32, @intCast(entries.len)) + ch * 5;
+    const block_h = logo_size + brand_ch + tag_ch + ch * 3 + row_h * @as(i32, @intCast(entries.len)) + ch * 5;
     const pad_y = @max(ch * 2, @divTrunc(fb_h - block_h, 3));
     var y = @min(@max(ch * 2, pad_y), @divTrunc(fb_h, 4));
 
-    // Prompt mark
-    const prompt_x = cx - @divTrunc(@as(i32, @intCast(prompt.len)) * cw, 2);
-    try renderer.drawTextScaled(prompt_x, y, "~", Color.rgb(120, 160, 140), body);
-    try renderer.drawTextScaled(prompt_x + cw + @divTrunc(cw, 4), y, ">", accent, body);
-    try renderer.drawRect(prompt_x + cw * 2 + @divTrunc(cw, 2), y + 2, @max(6, cw - 4), ch - 4, fg, 0.85);
-    y += ch + @divTrunc(ch, 2);
+    // Brand logo — hero visual (Orbit app icon)
+    try renderer.drawLogo(cx, y, logo_size);
+    y += logo_size + @divTrunc(ch, 2);
 
-    // Brand — hero
+    // Brand wordmark
     const brand_x = cx - @divTrunc(@as(i32, @intCast(brand.len)) * brand_cw, 2);
     try renderer.drawTextScaled(brand_x, y, brand, fg, brand_s);
     y += brand_ch + @divTrunc(ch, 3);

@@ -34,6 +34,10 @@ pub fn build(b: *std.Build) void {
         .file = b.path("vendor/stb_truetype_impl.c"),
         .flags = &.{ "-std=c99", "-fno-sanitize=undefined" },
     });
+    root_module.addCSourceFile(.{
+        .file = b.path("vendor/stb_image_impl.c"),
+        .flags = &.{ "-std=c99", "-fno-sanitize=undefined" },
+    });
 
     addGlfwPaths(b, root_module, target, glfw_path, glfw_include, glfw_lib);
 
@@ -193,6 +197,10 @@ pub fn build(b: *std.Build) void {
     test_module.addIncludePath(b.path("vendor"));
     test_module.addCSourceFile(.{
         .file = b.path("vendor/stb_truetype_impl.c"),
+        .flags = &.{ "-std=c99", "-fno-sanitize=undefined" },
+    });
+    test_module.addCSourceFile(.{
+        .file = b.path("vendor/stb_image_impl.c"),
         .flags = &.{ "-std=c99", "-fno-sanitize=undefined" },
     });
 
