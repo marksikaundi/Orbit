@@ -38,6 +38,7 @@ comptime {
     _ = @import("platform/shell.zig");
     _ = @import("platform/paths.zig");
     _ = @import("ui/home.zig");
+    _ = @import("ui/scale.zig");
 }
 
 test "suite boots" {

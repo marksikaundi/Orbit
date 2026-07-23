@@ -13,6 +13,7 @@ const palette_mod = @import("../ui/palette.zig");
 const bindings = @import("../ui/bindings.zig");
 const home_mod = @import("../ui/home.zig");
 const Home = home_mod.Home;
+const ui_scale = @import("../ui/scale.zig");
 const Config = @import("../config/config.zig").Config;
 const CursorStyle = @import("../config/config.zig").CursorStyle;
 const theme_mod = @import("../config/theme.zig");
@@ -573,26 +574,32 @@ pub const App = struct {
     }
 
     fn drawPalette(self: *App) !void {
-        const cw = @as(i32, @intFromFloat(self.renderer.cell_w));
-        const ch = @as(i32, @intFromFloat(self.renderer.cell_h));
         const fb_w = self.window.fb_width;
         const fb_h = self.window.fb_height;
+        const ui = ui_scale.uiScale(fb_w, fb_h);
+        const title_s = ui * 1.2;
+        const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const cw = ui_scale.scaled(base_cw, ui);
+        const ch = ui_scale.scaled(base_ch, ui);
+        const title_ch = ui_scale.scaled(base_ch, title_s);
 
         // Dim the scene so the palette reads as a focused overlay.
-        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.45);
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.48);
 
-        const pad_x = @max(20, cw + 8);
-        const pad_y = @max(16, @divTrunc(ch, 2) + 6);
-        const row_h = ch + @divTrunc(ch, 2) + 4;
-        const title_h = ch + 6;
-        const search_h = ch + @divTrunc(ch, 2) + 8;
+        const pad_x = @max(cw + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
+        const pad_y = @max(@divTrunc(ch, 2) + 6, @as(i32, @intFromFloat(@round(18.0 * ui))));
+        const row_h = ch + @divTrunc(ch, 2) + @max(4, @divTrunc(ch, 5));
+        const title_h = title_ch + @divTrunc(ch, 3);
+        const search_h = ch + @divTrunc(ch, 2) + @max(8, @divTrunc(ch, 4));
         const footer_h = ch + pad_y;
-        const gap = @max(10, @divTrunc(ch, 2));
+        const gap = @max(@divTrunc(ch, 2), @as(i32, @intFromFloat(@round(12.0 * ui))));
+        const accent_h = @max(2, @divTrunc(ch, 10));
 
-        const max_w = fb_w - cw * 4;
-        const w = @min(@max(cw * 52, 560), max_w);
-        const max_rows_by_height = @max(1, @divTrunc(fb_h - title_h - search_h - footer_h - gap * 3 - 80, row_h));
-        const max_visible: usize = @min(12, @as(usize, @intCast(max_rows_by_height)));
+        const w = ui_scale.panelWidth(fb_w, cw, 52, @as(i32, @intFromFloat(@round(560.0 * ui))));
+        const chrome = title_h + search_h + footer_h + gap * 3 + pad_y * 2;
+        const max_rows_by_height = @max(1, @divTrunc(fb_h - chrome - ch * 2, row_h));
+        const max_visible: usize = @min(16, @as(usize, @intCast(max_rows_by_height)));
 
         var start: usize = 0;
         if (self.palette.match_count > 0 and self.palette.selected >= max_visible) {
@@ -606,25 +613,30 @@ pub const App = struct {
         const list_h = @as(i32, @intCast(visible)) * row_h;
         const h = pad_y + title_h + search_h + gap + list_h + footer_h;
         const x = @divTrunc(fb_w - w, 2);
-        const y = @max(ch * 2, @divTrunc(fb_h - h, 5));
+        const y = @max(ch * 2, @divTrunc(fb_h - h, 6));
 
         const panel = Color.rgb(22, 26, 34);
+        const field = Color.rgb(14, 17, 24);
         const fg = Color.rgb(230, 235, 240);
         const muted = Color.rgb(140, 150, 165);
         const dim = Color.rgb(100, 110, 125);
         const accent = Color.rgb(90, 175, 220);
         const sel_bg = Color.rgb(36, 48, 64);
+        const rule = Color.rgb(40, 48, 60);
 
         try self.renderer.drawRect(x, y, w, h, panel, 0.98);
-        // Soft top accent line
-        try self.renderer.drawRect(x, y, w, 2, accent, 0.55);
+        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.65);
 
         var cy = y + pad_y;
-        try self.renderer.drawText(x + pad_x, cy, "Command Palette", fg);
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Command Palette", fg, title_s);
+        const kbd = "Ctrl+Shift+P";
+        const kbd_x = x + w - pad_x - @as(i32, @intCast(kbd.len)) * cw;
+        try self.renderer.drawTextScaled(kbd_x, cy + @divTrunc(title_ch - ch, 2), kbd, dim, ui);
         cy += title_h;
 
         // Search field
-        try self.renderer.drawRect(x + pad_x - 4, cy - 4, w - pad_x * 2 + 8, search_h, Color.rgb(16, 19, 26), 1.0);
+        try self.renderer.drawRect(x + pad_x - 4, cy - 4, w - pad_x * 2 + 8, search_h, field, 1.0);
+        try self.renderer.drawRect(x + pad_x - 4, cy - 4, accent_h, search_h, accent, 0.35);
         var qbuf: [96]u8 = undefined;
         const query = self.palette.querySlice();
         const qline = if (query.len == 0)
@@ -632,14 +644,13 @@ pub const App = struct {
         else
             (std.fmt.bufPrint(&qbuf, "> {s}", .{query}) catch "> ");
         const qcolor = if (query.len == 0) dim else accent;
-        try self.renderer.drawText(x + pad_x + 4, cy + @divTrunc(search_h - ch, 2) - 2, qline, qcolor);
+        try self.renderer.drawTextScaled(x + pad_x + 8, cy + @divTrunc(search_h - ch, 2) - 2, qline, qcolor, ui);
         cy += search_h + gap;
 
-        // Divider under search
-        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
 
         if (self.palette.match_count == 0) {
-            try self.renderer.drawText(x + pad_x, cy + @divTrunc(row_h - ch, 2), "No matching commands", muted);
+            try self.renderer.drawTextScaled(x + pad_x, cy + @divTrunc(row_h - ch, 2), "No matching commands", muted, ui);
         } else {
             const hint_reserve = cw * 18;
             const label_max_cols = @max(12, @divTrunc(w - pad_x * 2 - hint_reserve - cw * 2, cw));
@@ -653,27 +664,26 @@ pub const App = struct {
 
                 if (mi == self.palette.selected) {
                     try self.renderer.drawRect(x + 10, ry, w - 20, row_h - 2, sel_bg, 1.0);
-                    try self.renderer.drawRect(x + 10, ry, 3, row_h - 2, accent, 1.0);
+                    try self.renderer.drawRect(x + 10, ry, @max(3, @divTrunc(cw, 4)), row_h - 2, accent, 1.0);
                 }
 
                 const label_len = @min(entry.label.len, @as(usize, @intCast(label_max_cols)));
-                try self.renderer.drawText(x + pad_x + 6, text_y, entry.label[0..label_len], fg);
+                try self.renderer.drawTextScaled(x + pad_x + 8, text_y, entry.label[0..label_len], fg, ui);
 
                 if (entry.hint.len > 0) {
-                    const hint_len = @min(entry.hint.len, 16);
+                    const hint_len = @min(entry.hint.len, 18);
                     const hx = x + w - pad_x - @as(i32, @intCast(hint_len)) * cw;
-                    try self.renderer.drawText(hx, text_y, entry.hint[0..hint_len], muted);
+                    try self.renderer.drawTextScaled(hx, text_y, entry.hint[0..hint_len], muted, ui);
                 }
             }
         }
 
-        // Footer with match count when filtering
         var foot: [64]u8 = undefined;
         const foot_line = if (self.palette.query_len > 0 and self.palette.match_count > 0)
             (std.fmt.bufPrint(&foot, "{d} matches   Enter run   Esc close", .{self.palette.match_count}) catch "Enter run   Esc close")
         else
             "Up/Down move   Enter run   Esc close";
-        try self.renderer.drawText(x + pad_x, y + h - footer_h + @divTrunc(pad_y, 2), foot_line, dim);
+        try self.renderer.drawTextScaled(x + pad_x, y + h - footer_h + @divTrunc(pad_y, 2), foot_line, dim, ui);
     }
 
     fn drawSearch(self: *App) !void {
@@ -894,24 +904,29 @@ pub const App = struct {
     }
 
     fn drawSettings(self: *App) !void {
-        const cw = @as(i32, @intFromFloat(self.renderer.cell_w));
-        const ch = @as(i32, @intFromFloat(self.renderer.cell_h));
         const fb_w = self.window.fb_width;
         const fb_h = self.window.fb_height;
+        const ui = ui_scale.uiScale(fb_w, fb_h);
+        const title_s = ui * 1.25;
+        const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const cw = ui_scale.scaled(base_cw, ui);
+        const ch = ui_scale.scaled(base_ch, ui);
+        const title_ch = ui_scale.scaled(base_ch, title_s);
 
-        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.45);
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.48);
 
-        const pad_x = @max(24, cw + 10);
-        const pad_y = @max(20, @divTrunc(ch, 2) + 8);
-        const row_h = ch + @divTrunc(ch, 2) + 8;
-        const title_h = ch + 4;
+        const pad_x = @max(cw + 10, @as(i32, @intFromFloat(@round(26.0 * ui))));
+        const pad_y = @max(@divTrunc(ch, 2) + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
+        const row_h = ch + @divTrunc(ch, 2) + @max(8, @divTrunc(ch, 4));
+        const title_h = title_ch + @divTrunc(ch, 4);
         const subtitle_h = ch + @divTrunc(ch, 2);
-        const gap = @max(12, @divTrunc(ch, 2));
+        const gap = @max(@divTrunc(ch, 2), @as(i32, @intFromFloat(@round(14.0 * ui))));
         const footer_lines = 3;
-        const footer_h = footer_lines * (ch + 4) + pad_y;
+        const footer_h = footer_lines * (ch + @max(4, @divTrunc(ch, 5))) + pad_y;
+        const accent_h = @max(2, @divTrunc(ch, 10));
 
-        const max_w = fb_w - cw * 4;
-        const w = @min(@max(cw * 48, 540), max_w);
+        const w = ui_scale.panelWidth(fb_w, cw, 48, @as(i32, @intFromFloat(@round(540.0 * ui))));
         const rows_n: i32 = 5;
         const list_h = rows_n * row_h;
         const h = pad_y + title_h + subtitle_h + gap + list_h + gap + footer_h;
@@ -924,17 +939,18 @@ pub const App = struct {
         const dim = Color.rgb(100, 110, 125);
         const accent = Color.rgb(90, 175, 220);
         const sel_bg = Color.rgb(36, 48, 64);
+        const rule = Color.rgb(40, 48, 60);
 
         try self.renderer.drawRect(x, y, w, h, panel, 0.98);
-        try self.renderer.drawRect(x, y, w, 2, accent, 0.55);
+        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.65);
 
         var cy = y + pad_y;
-        try self.renderer.drawText(x + pad_x, cy, "Appearance", fg);
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Appearance", fg, title_s);
         cy += title_h;
-        try self.renderer.drawText(x + pad_x, cy, "Theme, text color, cursor, and shell for new tabs", muted);
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Theme, text color, cursor, and shell for new tabs", muted, ui);
         cy += subtitle_h + gap;
 
-        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
 
         const rows = [_]struct { label: []const u8, value: []const u8 }{
             .{ .label = "Theme", .value = self.config.theme_name },
@@ -945,6 +961,7 @@ pub const App = struct {
         };
 
         var value_buf: [96]u8 = undefined;
+        const value_col_w = @divTrunc(w * 11, 20);
         for (rows, 0..) |row, i| {
             const ry = cy + @as(i32, @intCast(i)) * row_h;
             const text_y = ry + @divTrunc(row_h - ch, 2);
@@ -952,22 +969,23 @@ pub const App = struct {
 
             if (selected) {
                 try self.renderer.drawRect(x + 10, ry, w - 20, row_h - 2, sel_bg, 1.0);
-                try self.renderer.drawRect(x + 10, ry, 3, row_h - 2, accent, 1.0);
+                try self.renderer.drawRect(x + 10, ry, @max(3, @divTrunc(cw, 4)), row_h - 2, accent, 1.0);
             }
 
-            try self.renderer.drawText(x + pad_x + 6, text_y, row.label, if (selected) fg else muted);
+            try self.renderer.drawTextScaled(x + pad_x + 8, text_y, row.label, if (selected) fg else muted, ui);
 
             const value_text = if (selected)
                 (std.fmt.bufPrint(&value_buf, "< {s} >", .{row.value}) catch row.value)
             else
                 row.value;
-            const value_len = @min(value_text.len, @as(usize, @intCast(@max(8, @divTrunc(@divTrunc(w, 2), cw)))));
+            const max_val_cols = @max(8, @divTrunc(value_col_w - pad_x, cw));
+            const value_len = @min(value_text.len, @as(usize, @intCast(max_val_cols)));
             const vx = x + w - pad_x - @as(i32, @intCast(value_len)) * cw;
-            try self.renderer.drawText(vx, text_y, value_text[0..value_len], if (selected) accent else muted);
+            try self.renderer.drawTextScaled(vx, text_y, value_text[0..value_len], if (selected) accent else muted, ui);
         }
 
         cy += list_h + gap;
-        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
 
         var info: [96]u8 = undefined;
         const font_line = std.fmt.bufPrint(&info, "Font  {d:.0}pt    padding  {d}x{d}", .{
@@ -975,37 +993,42 @@ pub const App = struct {
             self.config.padding_x,
             self.config.padding_y,
         }) catch "";
-        try self.renderer.drawText(x + pad_x, cy, font_line, muted);
-        cy += ch + 6;
-        try self.renderer.drawText(x + pad_x, cy, "Up/Down select    Left/Right change    S save", dim);
-        cy += ch + 6;
-        try self.renderer.drawText(x + pad_x, cy, "Esc close    Ctrl+=/-/0 font size", dim);
+        try self.renderer.drawTextScaled(x + pad_x, cy, font_line, muted, ui);
+        cy += ch + @max(6, @divTrunc(ch, 4));
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Up/Down select    Left/Right change    S save", dim, ui);
+        cy += ch + @max(6, @divTrunc(ch, 4));
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Esc close    Ctrl+=/-/0 font size", dim, ui);
     }
 
     fn drawPlugins(self: *App) !void {
-        const cw = @as(i32, @intFromFloat(self.renderer.cell_w));
-        const ch = @as(i32, @intFromFloat(self.renderer.cell_h));
         const fb_w = self.window.fb_width;
         const fb_h = self.window.fb_height;
+        const ui = ui_scale.uiScale(fb_w, fb_h);
+        const title_s = ui * 1.25;
+        const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const cw = ui_scale.scaled(base_cw, ui);
+        const ch = ui_scale.scaled(base_ch, ui);
+        const title_ch = ui_scale.scaled(base_ch, title_s);
 
-        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.45);
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.48);
 
-        const pad_x = @max(24, cw + 10);
-        const pad_y = @max(20, @divTrunc(ch, 2) + 8);
-        const row_gap = 4;
+        const pad_x = @max(cw + 10, @as(i32, @intFromFloat(@round(26.0 * ui))));
+        const pad_y = @max(@divTrunc(ch, 2) + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
+        const row_gap = @max(4, @divTrunc(ch, 6));
         // Two-line rows: name/version + description.
         const row_h = ch * 2 + @divTrunc(ch, 2) + row_gap;
-        const title_h = ch + 4;
+        const title_h = title_ch + @divTrunc(ch, 4);
         const subtitle_h = ch + @divTrunc(ch, 2);
-        const gap = @max(12, @divTrunc(ch, 2));
+        const gap = @max(@divTrunc(ch, 2), @as(i32, @intFromFloat(@round(14.0 * ui))));
         const footer_lines = 3;
         const plugin_n = self.plugins.count();
+        const accent_h = @max(2, @divTrunc(ch, 10));
 
-        const max_w = fb_w - cw * 4;
-        const w = @min(@max(cw * 52, 580), max_w);
+        const w = ui_scale.panelWidth(fb_w, cw, 52, @as(i32, @intFromFloat(@round(580.0 * ui))));
 
-        const header_h = pad_y + title_h + subtitle_h + gap + (ch + 6) + gap;
-        const footer_h = footer_lines * (ch + 6) + pad_y;
+        const header_h = pad_y + title_h + subtitle_h + gap + (ch + @max(6, @divTrunc(ch, 4))) + gap;
+        const footer_h = footer_lines * (ch + @max(6, @divTrunc(ch, 4))) + pad_y;
         const avail_list = @max(row_h, fb_h - header_h - footer_h - ch * 2);
         const max_visible: usize = @max(1, @as(usize, @intCast(@divTrunc(avail_list, row_h))));
         const list_rows = @max(@as(usize, 1), @min(@max(plugin_n, 1), max_visible));
@@ -1025,12 +1048,12 @@ pub const App = struct {
         const off_col = Color.rgb(160, 110, 110);
 
         try self.renderer.drawRect(x, y, w, h, panel, 0.98);
-        try self.renderer.drawRect(x, y, w, 2, accent, 0.55);
+        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.65);
 
         var cy = y + pad_y;
-        try self.renderer.drawText(x + pad_x, cy, "Plugins", fg);
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Plugins", fg, title_s);
         cy += title_h;
-        try self.renderer.drawText(x + pad_x, cy, "Shortcuts, themes, and commands you can edit", muted);
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Shortcuts, themes, and commands you can edit", muted, ui);
         cy += subtitle_h;
 
         try self.renderer.drawRect(x + pad_x - 4, cy, w - pad_x * 2 + 8, 1, rule, 0.9);
@@ -1041,19 +1064,19 @@ pub const App = struct {
             "No plugins installed"
         else
             (std.fmt.bufPrint(&count_buf, "{d} installed", .{plugin_n}) catch "installed");
-        try self.renderer.drawText(x + pad_x, cy, count_line, muted);
+        try self.renderer.drawTextScaled(x + pad_x, cy, count_line, muted, ui);
         if (plugin_n < 6) {
             const tip = "I  install pack";
             const tip_x = x + w - pad_x - @as(i32, @intCast(tip.len)) * cw;
-            try self.renderer.drawText(tip_x, cy, tip, accent);
+            try self.renderer.drawTextScaled(tip_x, cy, tip, accent, ui);
         }
-        cy += ch + 6;
+        cy += ch + @max(6, @divTrunc(ch, 4));
 
         const list_top = cy;
         if (plugin_n == 0) {
             const empty_y = list_top + @divTrunc(list_h - ch * 2, 2);
-            try self.renderer.drawText(x + pad_x + 6, empty_y, "Press I to install the bundled pack", fg);
-            try self.renderer.drawText(x + pad_x + 6, empty_y + ch + 4, "hello · git · devtools · themes · workflow · keys", dim);
+            try self.renderer.drawTextScaled(x + pad_x + 8, empty_y, "Press I to install the bundled pack", fg, ui);
+            try self.renderer.drawTextScaled(x + pad_x + 8, empty_y + ch + 4, "hello · git · devtools · themes · workflow · keys", dim, ui);
         } else {
             if (self.plugin_row >= plugin_n) self.plugin_row = plugin_n - 1;
             var start: usize = 0;
@@ -1070,20 +1093,20 @@ pub const App = struct {
 
                 if (selected) {
                     try self.renderer.drawRect(x + 10, ry, w - 20, row_h - row_gap, sel_bg, 1.0);
-                    try self.renderer.drawRect(x + 10, ry, 3, row_h - row_gap, accent, 1.0);
+                    try self.renderer.drawRect(x + 10, ry, @max(3, @divTrunc(cw, 4)), row_h - row_gap, accent, 1.0);
                 }
 
                 const name_y = ry + @divTrunc(ch, 3);
                 const desc_y = name_y + ch + 2;
-                const text_x = x + pad_x + 6;
+                const text_x = x + pad_x + 8;
 
                 // Name + version on the first line.
-                try self.renderer.drawText(text_x, name_y, p.name, if (selected) fg else muted);
+                try self.renderer.drawTextScaled(text_x, name_y, p.name, if (selected) fg else muted, ui);
 
                 var ver_buf: [24]u8 = undefined;
                 const ver = std.fmt.bufPrint(&ver_buf, "v{s}", .{p.version}) catch "";
                 const name_w = @as(i32, @intCast(p.name.len)) * cw;
-                try self.renderer.drawText(text_x + name_w + cw, name_y, ver, dim);
+                try self.renderer.drawTextScaled(text_x + name_w + cw, name_y, ver, dim, ui);
 
                 // Compact capability counts when selected (skip zeros).
                 if (selected) {
@@ -1110,7 +1133,7 @@ pub const App = struct {
                         const meta_max = @max(0, (x + w - pad_x - state_reserve) - meta_x);
                         const meta_chars = @min(meta_len, @as(usize, @intCast(@divTrunc(meta_max, cw))));
                         if (meta_chars > 0) {
-                            try self.renderer.drawText(meta_x, name_y, meta_buf[0..meta_chars], dim);
+                            try self.renderer.drawTextScaled(meta_x, name_y, meta_buf[0..meta_chars], dim, ui);
                         }
                     }
                 }
@@ -1119,22 +1142,22 @@ pub const App = struct {
                 const desc = if (p.description.len > 0) p.description else "No description";
                 const desc_max = @max(8, @divTrunc(w - pad_x * 2 - cw * 4, cw));
                 const desc_shown = desc[0..@min(desc.len, @as(usize, @intCast(desc_max)))];
-                try self.renderer.drawText(text_x, desc_y, desc_shown, if (selected) muted else dim);
+                try self.renderer.drawTextScaled(text_x, desc_y, desc_shown, if (selected) muted else dim, ui);
 
                 // Fixed-width toggle so columns stay aligned.
                 const state = if (p.enabled) "ON " else "OFF";
                 const state_x = x + w - pad_x - @as(i32, @intCast(state.len)) * cw;
-                try self.renderer.drawText(state_x, name_y, state, if (p.enabled) on_col else off_col);
+                try self.renderer.drawTextScaled(state_x, name_y, state, if (p.enabled) on_col else off_col, ui);
             }
         }
 
         cy = y + h - footer_h;
         try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
-        try self.renderer.drawText(x + pad_x, cy, "~/.config/orbit/plugins/<name>/plugin.toml", dim);
-        cy += ch + 6;
-        try self.renderer.drawText(x + pad_x, cy, "Up/Down select    Space toggle    R reload", dim);
-        cy += ch + 6;
-        try self.renderer.drawText(x + pad_x, cy, "I install/update pack    Esc close", dim);
+        try self.renderer.drawTextScaled(x + pad_x, cy, "~/.config/orbit/plugins/<name>/plugin.toml", dim, ui);
+        cy += ch + @max(6, @divTrunc(ch, 4));
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Up/Down select    Space toggle    R reload", dim, ui);
+        cy += ch + @max(6, @divTrunc(ch, 4));
+        try self.renderer.drawTextScaled(x + pad_x, cy, "I install/update pack    Esc close", dim, ui);
     }
 
     fn drawWorkspacePicker(self: *App) !void {

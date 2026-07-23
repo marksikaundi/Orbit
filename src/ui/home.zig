@@ -4,6 +4,7 @@ const std = @import("std");
 const Renderer = @import("../renderer/renderer.zig").Renderer;
 const Color = @import("../terminal/cell.zig").Color;
 const app_version = @import("../version.zig");
+const ui_scale = @import("scale.zig");
 
 pub const version = app_version.string;
 
@@ -126,7 +127,7 @@ pub const help_rows = [_]HelpRow{
     .{ .heading = "Appearance" },
     .{ .item = .{ .keys = "S / Settings", .desc = "Theme, text color, cursor, shell (Left/Right to change)" } },
     .{ .item = .{ .keys = "Ctrl+Shift+P", .desc = "Palette -> Theme: ... / Cursor: ..." } },
-    .{ .note = "Prompt text (zsh/bash) comes from your shell rc — Orbit styles colors & cursor" },
+    .{ .note = "Prompt text (zsh/bash) comes from your shell rc " },
     .{ .spacer = {} },
 
     .{ .heading = "Config & plugins" },
@@ -134,7 +135,7 @@ pub const help_rows = [_]HelpRow{
     .{ .item = .{ .keys = "config.toml", .desc = "~/.config/orbit/config.toml" } },
     .{ .item = .{ .keys = "shortcut=", .desc = "In plugin.toml: your own key chords" } },
     .{ .item = .{ .keys = "plugins/", .desc = "~/.config/orbit/plugins/<name>/" } },
-    .{ .note = "Plugins add shortcuts, themes, commands — see assets/plugins/README.md" },
+    .{ .note = "Plugins add shortcuts, themes, commands" },
     .{ .spacer = {} },
 
     .{ .heading = "This Help panel" },
@@ -228,18 +229,18 @@ pub fn draw(
     try renderer.drawRect(0, 0, fb_w, fb_h, bg, 1.0);
 
     // Grow with framebuffer so fullscreen isn't a tiny island of terminal-sized text.
-    const ui = homeUiScale(fb_w, fb_h);
+    const ui = ui_scale.uiScale(fb_w, fb_h);
     const base_cw = @as(i32, @intFromFloat(renderer.cell_w));
     const base_ch = @as(i32, @intFromFloat(renderer.cell_h));
     const body: f32 = ui;
     const brand_s: f32 = ui * 1.85;
     const tag_s: f32 = ui * 1.2;
-    const cw = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_cw)) * body))));
-    const ch = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_ch)) * body))));
-    const brand_cw = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_cw)) * brand_s))));
-    const brand_ch = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_ch)) * brand_s))));
-    const tag_cw = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_cw)) * tag_s))));
-    const tag_ch = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_ch)) * tag_s))));
+    const cw = ui_scale.scaled(base_cw, body);
+    const ch = ui_scale.scaled(base_ch, body);
+    const brand_cw = ui_scale.scaled(base_cw, brand_s);
+    const brand_ch = ui_scale.scaled(base_ch, brand_s);
+    const tag_cw = ui_scale.scaled(base_cw, tag_s);
+    const tag_ch = ui_scale.scaled(base_ch, tag_s);
     const cx = @divTrunc(fb_w, 2);
 
     if (home.show_help) {
@@ -320,15 +321,6 @@ pub fn draw(
     try renderer.drawTextScaled(credit_x, credit_y, credit, dim, body);
 }
 
-/// Scale home UI with window size (1.0 at ~default framebuffer, up to ~2.2 in fullscreen).
-fn homeUiScale(fb_w: i32, fb_h: i32) f32 {
-    _ = fb_w;
-    // ~1120px is a typical Retina height for the default 560pt window.
-    const ref_h: f32 = 1100.0;
-    const s = @as(f32, @floatFromInt(@max(fb_h, 1))) / ref_h;
-    return @min(2.2, @max(1.0, s));
-}
-
 fn drawHelp(
     renderer: *Renderer,
     fb_w: i32,
@@ -343,10 +335,10 @@ fn drawHelp(
 ) !void {
     const base_cw = @as(i32, @intFromFloat(renderer.cell_w));
     const base_ch = @as(i32, @intFromFloat(renderer.cell_h));
-    const cw = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_cw)) * ui))));
-    const ch = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(base_ch)) * ui))));
+    const cw = ui_scale.scaled(base_cw, ui);
+    const ch = ui_scale.scaled(base_ch, ui);
     const accent = Color.rgb(90, 175, 220);
-    const panel_w: i32 = @min(cw * 52, fb_w - cw * 2);
+    const panel_w = ui_scale.panelWidth(fb_w, cw, 52, 560);
     const panel_x = cx - @divTrunc(panel_w, 2);
     const panel_y = @max(ch, @divTrunc(fb_h, 14));
     const panel_h = fb_h - panel_y - ch;
@@ -406,8 +398,3 @@ fn drawHelp(
     try renderer.drawTextScaled(panel_x + cw, panel_y + panel_h - footer_h, foot, dim, ui);
 }
 
-test "home UI scale grows on tall framebuffers" {
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), homeUiScale(1800, 900), 0.05);
-    try std.testing.expect(homeUiScale(1800, 2200) > 1.8);
-    try std.testing.expect(homeUiScale(1800, 2200) <= 2.2);
-}
