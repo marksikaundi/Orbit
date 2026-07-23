@@ -300,6 +300,31 @@ pub const Renderer = struct {
         try self.flush();
     }
 
+    /// Powerline-style parallelogram: both vertical edges slant by `slant` px.
+    /// Shape: top runs (x+slant..x+w), bottom runs (x..x+w-slant).
+    pub fn drawSlantRect(self: *Renderer, x: i32, y: i32, w: i32, h: i32, slant: i32, color: Color, alpha: f32) !void {
+        if (w <= 0 or h <= 0) return;
+        const s = @min(slant, @divTrunc(w, 2));
+        self.vertices.clearRetainingCapacity();
+        const fw: f32 = @floatFromInt(self.fb_w);
+        const fh: f32 = @floatFromInt(self.fb_h);
+        try self.appendPixelParallelogram(
+            fw,
+            fh,
+            @floatFromInt(x + s),
+            @floatFromInt(y),
+            @floatFromInt(x + w),
+            @floatFromInt(y),
+            @floatFromInt(x + w - s),
+            @floatFromInt(y + h),
+            @floatFromInt(x),
+            @floatFromInt(y + h),
+            color,
+            alpha,
+        );
+        try self.flush();
+    }
+
     pub fn drawText(self: *Renderer, x: i32, y: i32, text: []const u8, color: Color) !void {
         self.vertices.clearRetainingCapacity();
         const fw: f32 = @floatFromInt(self.fb_w);
@@ -354,6 +379,52 @@ pub const Renderer = struct {
             nx1, ny0, -1, 0, r, g, b, alpha,
             nx1, ny1, -1, 0, r, g, b, alpha,
             nx0, ny1, -1, 0, r, g, b, alpha,
+        });
+    }
+
+    fn appendPixelParallelogram(
+        self: *Renderer,
+        fw: f32,
+        fh: f32,
+        x_tl: f32,
+        y_tl: f32,
+        x_tr: f32,
+        y_tr: f32,
+        x_br: f32,
+        y_br: f32,
+        x_bl: f32,
+        y_bl: f32,
+        color: Color,
+        alpha: f32,
+    ) !void {
+        const toNdcX = struct {
+            fn f(px: f32, width: f32) f32 {
+                return (px / width) * 2.0 - 1.0;
+            }
+        }.f;
+        const toNdcY = struct {
+            fn f(py: f32, height: f32) f32 {
+                return 1.0 - (py / height) * 2.0;
+            }
+        }.f;
+        const r = @as(f32, @floatFromInt(color.r)) / 255.0;
+        const g = @as(f32, @floatFromInt(color.g)) / 255.0;
+        const b = @as(f32, @floatFromInt(color.b)) / 255.0;
+        const nx_tl = toNdcX(x_tl, fw);
+        const ny_tl = toNdcY(y_tl, fh);
+        const nx_tr = toNdcX(x_tr, fw);
+        const ny_tr = toNdcY(y_tr, fh);
+        const nx_br = toNdcX(x_br, fw);
+        const ny_br = toNdcY(y_br, fh);
+        const nx_bl = toNdcX(x_bl, fw);
+        const ny_bl = toNdcY(y_bl, fh);
+        try self.vertices.appendSlice(self.allocator, &.{
+            nx_tl, ny_tl, -1, 0, r, g, b, alpha,
+            nx_tr, ny_tr, -1, 0, r, g, b, alpha,
+            nx_bl, ny_bl, -1, 0, r, g, b, alpha,
+            nx_tr, ny_tr, -1, 0, r, g, b, alpha,
+            nx_br, ny_br, -1, 0, r, g, b, alpha,
+            nx_bl, ny_bl, -1, 0, r, g, b, alpha,
         });
     }
 

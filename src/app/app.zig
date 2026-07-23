@@ -361,9 +361,10 @@ pub const App = struct {
 
         self.renderer.clearBackground();
 
-        // Ghostty-like integrated tab strip (matches terminal background)
+        // Tab strip with Powerline-style slanted active label
         const tbg = self.renderer.theme.background;
         const tfg = self.renderer.theme.foreground;
+        const accent = self.renderer.theme.ansi[4]; // theme blue
         try self.renderer.drawRect(0, 0, self.window.fb_width, Tabs.bar_height, tbg, 1.0);
         try self.renderer.drawRect(0, Tabs.bar_height - 1, self.window.fb_width, 1, Color.rgb(
             @intCast(@min(255, @as(i32, tbg.r) + 22)),
@@ -371,24 +372,36 @@ pub const App = struct {
             @intCast(@min(255, @as(i32, tbg.b) + 26)),
         ), 1.0);
         const cell_w_i: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
-        var x: i32 = 10;
+        const cell_h_i: i32 = @intFromFloat(@max(1.0, self.renderer.cell_h));
+        const slant: i32 = 10;
+        const tab_h: i32 = Tabs.bar_height - 10;
+        const tab_y: i32 = 5;
+        var x: i32 = 8;
         for (self.tabs.items.items, 0..) |tab, i| {
             const active = i == self.tabs.active;
-            const label_w: i32 = @as(i32, @intCast(@min(tab.title.len, 16))) * cell_w_i + 20;
+            const title = tab.title[0..@min(tab.title.len, 16)];
+            const text_w: i32 = @as(i32, @intCast(title.len)) * cell_w_i;
+            const label_w: i32 = text_w + 28;
             if (active) {
-                try self.renderer.drawRect(x, 6, label_w, Tabs.bar_height - 12, Color.rgb(
-                    @intCast(@min(255, @as(i32, tbg.r) + 16)),
-                    @intCast(@min(255, @as(i32, tbg.g) + 18)),
-                    @intCast(@min(255, @as(i32, tbg.b) + 22)),
-                ), 1.0);
+                try self.renderer.drawSlantRect(x, tab_y, label_w, tab_h, slant, accent, 1.0);
+            } else {
+                const muted = Color.rgb(
+                    @intCast(@divTrunc(@as(i32, tbg.r) * 2 + @as(i32, accent.r), 3)),
+                    @intCast(@divTrunc(@as(i32, tbg.g) * 2 + @as(i32, accent.g), 3)),
+                    @intCast(@divTrunc(@as(i32, tbg.b) * 2 + @as(i32, accent.b), 3)),
+                );
+                try self.renderer.drawSlantRect(x, tab_y, label_w, tab_h, slant, muted, 0.55);
             }
-            const fg = if (active) tfg else Color.rgb(
-                @intCast(@divTrunc(@as(i32, tfg.r) + @as(i32, tbg.r) * 2, 3)),
-                @intCast(@divTrunc(@as(i32, tfg.g) + @as(i32, tbg.g) * 2, 3)),
-                @intCast(@divTrunc(@as(i32, tfg.b) + @as(i32, tbg.b) * 2, 3)),
+            const fg = if (active) Color.rgb(255, 255, 255) else Color.rgb(
+                @intCast(@divTrunc(@as(i32, tfg.r) + @as(i32, tbg.r), 2)),
+                @intCast(@divTrunc(@as(i32, tfg.g) + @as(i32, tbg.g), 2)),
+                @intCast(@divTrunc(@as(i32, tfg.b) + @as(i32, tbg.b), 2)),
             );
-            try self.renderer.drawText(x + 10, 10, tab.title[0..@min(tab.title.len, 16)], fg);
-            x += label_w + 6;
+            // Center label in the parallelogram (centroid is at x+w/2, y+h/2)
+            const text_x = x + @divTrunc(label_w - text_w, 2);
+            const text_y = tab_y + @divTrunc(tab_h - cell_h_i, 2);
+            try self.renderer.drawText(text_x, text_y, title, fg);
+            x += label_w + 4;
         }
 
         // Workspace badge on the right
