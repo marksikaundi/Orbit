@@ -100,6 +100,8 @@ const w = struct {
     extern "kernel32" fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) callconv(.winapi) DWORD;
     extern "kernel32" fn Sleep(dwMilliseconds: DWORD) callconv(.winapi) void;
     extern "kernel32" fn CloseHandle(hObject: HANDLE) callconv(.winapi) BOOL;
+    extern "kernel32" fn GetEnvironmentStringsW() callconv(.winapi) ?[*:0]u16;
+    extern "kernel32" fn FreeEnvironmentStringsW(penv: [*:0]u16) callconv(.winapi) BOOL;
 
     const UINT = u32;
     const WAIT_OBJECT_0: DWORD = 0;
@@ -207,9 +209,11 @@ pub const Pty = struct {
             break :blk cwd_w_buf[0..n :0];
         };
 
-        // Apply extra env vars to the current process so the child inherits them.
-        for (opts.env) |entry| {
-            applyEnvEntry(entry);
+        // Child-only environment: never mutate Orbit's process env.
+        var env_block: ?[:0]u16 = null;
+        defer if (env_block) |eb| std.heap.c_allocator.free(eb);
+        if (opts.env.len > 0) {
+            env_block = try buildChildEnvironmentBlock(std.heap.c_allocator, opts.env);
         }
 
         var pi: windows.PROCESS.INFORMATION = undefined;
@@ -225,7 +229,7 @@ pub const Pty = struct {
                 .extended_startupinfo_present = true,
                 .create_unicode_environment = true,
             },
-            null,
+            if (env_block) |eb| @ptrCast(eb.ptr) else null,
             if (cwd_w) |cw| cw.ptr else null,
             @ptrCast(&si),
             &pi,
@@ -359,30 +363,65 @@ fn buildCommandLine(buf: []u8, shell: []const u8) ![]const u8 {
     return std.fmt.bufPrint(buf, "\"{s}\"", .{shell}) catch return error.CommandLineTooLong;
 }
 
-fn applyEnvEntry(entry: []const u8) void {
-    const eq = std.mem.indexOfScalar(u8, entry, '=') orelse return;
-    const key = entry[0..eq];
-    if (isUnsafeEnvKey(key)) return;
-    paths.setEnv(key, entry[eq + 1 ..]);
-}
+/// Build a Unicode environment block for CreateProcessW (child-only; parent unchanged).
+/// Format: KEY=VALUE\0 KEY=VALUE\0 \0 as UTF-16LE.
+fn buildChildEnvironmentBlock(allocator: std.mem.Allocator, extra: []const []const u8) ![:0]u16 {
+    const env_w = w.GetEnvironmentStringsW() orelse return error.GetEnvironmentFailed;
+    defer _ = w.FreeEnvironmentStringsW(env_w);
 
-fn isUnsafeEnvKey(key: []const u8) bool {
-    const blocked = [_][]const u8{
-        "LD_PRELOAD",
-        "LD_LIBRARY_PATH",
-        "DYLD_INSERT_LIBRARIES",
-        "DYLD_LIBRARY_PATH",
-        "PATH",
-        "PATHEXT",
-        "ComSpec",
-        "PSModulePath",
-        "BASH_ENV",
-        "ENV",
-        "NODE_OPTIONS",
-        "PYTHONPATH",
-    };
-    for (blocked) |b| {
-        if (std.ascii.eqlIgnoreCase(key, b)) return true;
+    var entries: std.ArrayList([]u8) = .empty;
+    defer {
+        for (entries.items) |e| allocator.free(e);
+        entries.deinit(allocator);
     }
-    return false;
+
+    // Copy parent environment (UTF-16 → UTF-8).
+    var p: [*]const u16 = env_w;
+    while (true) {
+        if (p[0] == 0) break;
+        var len: usize = 0;
+        while (p[len] != 0) : (len += 1) {}
+            var utf8_buf: [32 * 1024]u8 = undefined;
+            const n = std.unicode.utf16LeToUtf8(utf8_buf[0..], p[0..len]) catch {
+                p += len + 1;
+                continue;
+            };
+        try entries.append(allocator, try allocator.dupe(u8, utf8_buf[0..n]));
+        p += len + 1;
+    }
+
+    // Overlay workspace extras (skip hijack keys; replace matching keys case-insensitively).
+    for (extra) |entry| {
+        const eq = std.mem.indexOfScalar(u8, entry, '=') orelse continue;
+        const key = entry[0..eq];
+        if (key.len == 0 or options.isUnsafeEnvKey(key)) continue;
+
+        var replaced = false;
+        for (entries.items, 0..) |existing, i| {
+            const existing_eq = std.mem.indexOfScalar(u8, existing, '=') orelse continue;
+            if (!std.ascii.eqlIgnoreCase(existing[0..existing_eq], key)) continue;
+            allocator.free(existing);
+            entries.items[i] = try allocator.dupe(u8, entry);
+            replaced = true;
+            break;
+        }
+        if (!replaced) {
+            try entries.append(allocator, try allocator.dupe(u8, entry));
+        }
+    }
+
+    // Serialize to double-NUL-terminated UTF-16LE block.
+    var out: std.ArrayList(u16) = .empty;
+    errdefer out.deinit(allocator);
+    for (entries.items) |entry| {
+        var wbuf: [32 * 1024]u16 = undefined;
+        const wn = std.unicode.wtf8ToWtf16Le(wbuf[0..], entry) catch continue;
+        try out.appendSlice(allocator, wbuf[0..wn]);
+        try out.append(allocator, 0);
+    }
+    try out.append(allocator, 0); // final terminator
+
+    const owned = try out.toOwnedSlice(allocator);
+    // Ensure Zig [:0]u16 — last element is already 0.
+    return owned[0 .. owned.len - 1 :0];
 }

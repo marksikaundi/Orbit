@@ -35,6 +35,8 @@ comptime {
     // Private workspace parse helpers (same-file tests)
     _ = @import("workspace/workspace.zig");
     _ = @import("platform/folder_picker.zig");
+    _ = @import("platform/shell.zig");
+    _ = @import("platform/paths.zig");
 }
 
 test "suite boots" {

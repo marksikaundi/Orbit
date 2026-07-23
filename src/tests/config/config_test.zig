@@ -28,6 +28,16 @@ test "parse shell cursor and blink" {
     try std.testing.expect(!cfg.cursor_blink);
 }
 
+test "parse rejects disallowed shell paths" {
+    var cfg: Config = .{};
+    defer cfg.deinit(std.testing.allocator);
+    Config.parseInto(&cfg, std.testing.allocator,
+        \\[terminal]
+        \\shell = "/tmp/evil-shell"
+    );
+    try std.testing.expect(cfg.shell == null);
+}
+
 test "parse window theme and terminal sections" {
     var cfg: Config = .{};
     defer cfg.deinit(std.testing.allocator);

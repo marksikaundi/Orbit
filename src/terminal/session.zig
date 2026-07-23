@@ -6,6 +6,8 @@ const Screen = @import("screen.zig").Screen;
 const Parser = @import("parser.zig").Parser;
 const Selection = @import("selection.zig").Selection;
 const Color = @import("cell.zig").Color;
+const shell_guard = @import("../platform/shell.zig");
+const options = @import("../pty/options.zig");
 
 pub const SessionOptions = struct {
     cols: u16,
@@ -53,16 +55,22 @@ pub const Session = struct {
 
         const cwd_owned = try allocator.dupe(u8, opts.cwd orelse defaultCwd());
         errdefer allocator.free(cwd_owned);
-        const shell_owned = try allocator.dupe(u8, opts.shell orelse defaultShell());
+        const shell_owned = try allocator.dupe(u8, shell_guard.sanitize(opts.shell));
         errdefer allocator.free(shell_owned);
 
         var env_owned: [][]u8 = &.{};
         if (opts.env.len > 0) {
-            env_owned = try allocator.alloc([]u8, opts.env.len);
-            errdefer allocator.free(env_owned);
-            for (opts.env, 0..) |e, i| {
-                env_owned[i] = try allocator.dupe(u8, e);
+            var filtered: std.ArrayList([]u8) = .empty;
+            errdefer {
+                for (filtered.items) |e| allocator.free(e);
+                filtered.deinit(allocator);
             }
+            for (opts.env) |e| {
+                const eq = std.mem.indexOfScalar(u8, e, '=') orelse continue;
+                if (options.isUnsafeEnvKey(e[0..eq])) continue;
+                try filtered.append(allocator, try allocator.dupe(u8, e));
+            }
+            env_owned = try filtered.toOwnedSlice(allocator);
         }
         errdefer freeEnv(allocator, env_owned);
 
@@ -249,10 +257,6 @@ pub const Session = struct {
 
     fn defaultCwd() []const u8 {
         return @import("../platform/paths.zig").defaultCwd();
-    }
-
-    fn defaultShell() []const u8 {
-        return @import("../platform/paths.zig").defaultShell();
     }
 };
 

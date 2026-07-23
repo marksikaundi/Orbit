@@ -4,6 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const theme_mod = @import("theme.zig");
 const paths = @import("../platform/paths.zig");
+const shell_guard = @import("../platform/shell.zig");
 
 pub const CursorStyle = enum {
     block,
@@ -105,23 +106,12 @@ pub const Config = struct {
         return null;
     }
 
-    /// Shell to launch: configured path if it exists, else platform default.
+    /// Shell to launch: configured path if allowed and present, else platform default.
     pub fn resolveLaunchShell(self: *const Config) []const u8 {
         if (self.shellPath()) |s| {
-            if (paths.pathExecutable(s)) return s;
+            return shell_guard.sanitize(s);
         }
-        if (builtin.os.tag != .windows) {
-            if (std.c.getenv("SHELL")) |env| {
-                const span = std.mem.span(env);
-                if (span.len > 0 and paths.pathExecutable(span)) return span;
-            }
-            if (paths.pathExecutable("/bin/zsh")) return "/bin/zsh";
-            if (paths.pathExecutable("/bin/bash")) return "/bin/bash";
-            return "/bin/sh";
-        }
-        if (paths.pathExecutable("pwsh.exe")) return "pwsh.exe";
-        if (paths.pathExecutable("powershell.exe")) return "powershell.exe";
-        return paths.defaultShell();
+        return shell_guard.sanitize(null);
     }
 
     pub fn shellDisplay(self: *const Config) []const u8 {
@@ -162,6 +152,7 @@ pub const Config = struct {
         self.shell_owned = null;
         self.shell = null;
         if (path.len == 0) return;
+        if (!shell_guard.isAllowed(path)) return;
         const owned = try allocator.dupe(u8, path);
         self.shell_owned = owned;
         self.shell = owned;
@@ -337,6 +328,7 @@ pub const Config = struct {
                         cfg.padding_y = @max(0, @min(48, cfg.padding_y));
                     }
                     if (std.mem.eql(u8, key, "shell")) {
+                        if (!shell_guard.isAllowed(val)) continue;
                         if (cfg.shell_owned) |old| allocator.free(old);
                         const owned = allocator.dupe(u8, val) catch continue;
                         cfg.shell_owned = owned;
@@ -354,9 +346,9 @@ pub const Config = struct {
         }
         cfg.opacity = @min(1.0, @max(0.15, cfg.opacity));
 
-        // Drop configured shell if the binary is missing (e.g. fish not installed).
+        // Drop configured shell if disallowed or missing (e.g. fish not installed).
         if (cfg.shell) |s| {
-            if (s.len > 0 and !paths.pathExecutable(s)) {
+            if (s.len > 0 and (!shell_guard.isAllowed(s) or !paths.pathExecutable(s))) {
                 if (cfg.shell_owned) |old| allocator.free(old);
                 cfg.shell_owned = null;
                 cfg.shell = null;
