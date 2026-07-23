@@ -7,11 +7,25 @@ const atlas_mod = @import("../font/atlas.zig");
 const theme_mod = @import("../config/theme.zig");
 const CursorStyle = @import("../config/config.zig").CursorStyle;
 
+const logo_png = @embedFile("../platform/orbit-icon-256.png");
+
+extern fn stbi_load_from_memory(
+    buffer: [*]const u8,
+    len: c_int,
+    x: *c_int,
+    y: *c_int,
+    channels_in_file: *c_int,
+    desired_channels: c_int,
+) ?[*]u8;
+extern fn stbi_image_free(retval_from_stbi_load: ?*anyopaque) void;
+
 pub const Renderer = struct {
     program: c.GLuint = 0,
     vao: c.GLuint = 0,
     vbo: c.GLuint = 0,
     atlas_tex: c.GLuint = 0,
+    logo_tex: c.GLuint = 0,
+    logo_px: i32 = 0,
     atlas: ?atlas_mod.Atlas = null,
     cell_w: f32 = 8,
     cell_h: f32 = 16,
@@ -49,10 +63,15 @@ pub const Renderer = struct {
         \\in vec2 v_uv;
         \\in vec4 v_color;
         \\uniform sampler2D u_atlas;
+        \\uniform int u_tex_mode;
         \\out vec4 out_color;
         \\void main() {
         \\  if (v_uv.x < 0.0) {
         \\    out_color = v_color;
+        \\  } else if (u_tex_mode == 1) {
+        \\    vec4 t = texture(u_atlas, v_uv);
+        \\    out_color = t * v_color;
+        \\    if (out_color.a < 0.02) discard;
         \\  } else {
         \\    float a = texture(u_atlas, v_uv).a;
         \\    if (a < 0.02) discard;
@@ -65,6 +84,7 @@ pub const Renderer = struct {
         var self: Renderer = .{ .allocator = allocator };
         try self.initGl();
         try self.rebuildAtlas();
+        self.loadLogo();
         return self;
     }
 
@@ -72,6 +92,7 @@ pub const Renderer = struct {
         self.vertices.deinit(self.allocator);
         if (self.atlas) |*a| a.deinit();
         if (self.atlas_tex != 0) c.glDeleteTextures(1, &self.atlas_tex);
+        if (self.logo_tex != 0) c.glDeleteTextures(1, &self.logo_tex);
         if (self.vbo != 0) c.glDeleteBuffers(1, &self.vbo);
         if (self.vao != 0) c.glDeleteVertexArrays(1, &self.vao);
         if (self.program != 0) c.glDeleteProgram(self.program);
@@ -300,11 +321,44 @@ pub const Renderer = struct {
         try self.flush();
     }
 
+    /// Powerline-style parallelogram: both vertical edges slant by `slant` px.
+    /// Shape: top runs (x+slant..x+w), bottom runs (x..x+w-slant).
+    pub fn drawSlantRect(self: *Renderer, x: i32, y: i32, w: i32, h: i32, slant: i32, color: Color, alpha: f32) !void {
+        if (w <= 0 or h <= 0) return;
+        const s = @min(slant, @divTrunc(w, 2));
+        self.vertices.clearRetainingCapacity();
+        const fw: f32 = @floatFromInt(self.fb_w);
+        const fh: f32 = @floatFromInt(self.fb_h);
+        try self.appendPixelParallelogram(
+            fw,
+            fh,
+            @floatFromInt(x + s),
+            @floatFromInt(y),
+            @floatFromInt(x + w),
+            @floatFromInt(y),
+            @floatFromInt(x + w - s),
+            @floatFromInt(y + h),
+            @floatFromInt(x),
+            @floatFromInt(y + h),
+            color,
+            alpha,
+        );
+        try self.flush();
+    }
+
     pub fn drawText(self: *Renderer, x: i32, y: i32, text: []const u8, color: Color) !void {
+        try self.drawTextScaled(x, y, text, color, 1.0);
+    }
+
+    /// Draw UI text at `scale` × cell size (atlas glyphs; soft when scaled up).
+    pub fn drawTextScaled(self: *Renderer, x: i32, y: i32, text: []const u8, color: Color, scale: f32) !void {
+        const s = @max(0.5, scale);
         self.vertices.clearRetainingCapacity();
         const fw: f32 = @floatFromInt(self.fb_w);
         const fh: f32 = @floatFromInt(self.fb_h);
         const glyph_count: f32 = @floatFromInt(atlas_mod.glyph_count);
+        const cw = self.cell_w * s;
+        const ch = self.cell_h * s;
         var i: usize = 0;
         while (i < text.len) : (i += 1) {
             const cp: u21 = text[i];
@@ -312,11 +366,85 @@ pub const Renderer = struct {
             const gi: f32 = @floatFromInt(cp - atlas_mod.first_codepoint);
             const uv_left = gi / glyph_count;
             const uv_right = (gi + 1.0) / glyph_count;
-            const px = @as(f32, @floatFromInt(x)) + @as(f32, @floatFromInt(i)) * self.cell_w;
+            const px = @as(f32, @floatFromInt(x)) + @as(f32, @floatFromInt(i)) * cw;
             const py = @as(f32, @floatFromInt(y));
-            try self.appendGlyphPx(fw, fh, px, py, self.cell_w, self.cell_h, uv_left, uv_right, color);
+            try self.appendGlyphPx(fw, fh, px, py, cw, ch, uv_left, uv_right, color);
         }
-        try self.flush();
+        try self.flushMode(self.atlas_tex, 0);
+    }
+
+    /// Draw the embedded Orbit logo centered at `(cx, y)` with side length `size`.
+    pub fn drawLogo(self: *Renderer, cx: i32, y: i32, size: i32) !void {
+        if (self.logo_tex == 0 or size <= 0) return;
+        const side = @max(16, size);
+        const x = cx - @divTrunc(side, 2);
+        try self.drawTexture(self.logo_tex, x, y, side, side);
+    }
+
+    pub fn drawTexture(self: *Renderer, tex: c.GLuint, x: i32, y: i32, w: i32, h: i32) !void {
+        if (tex == 0 or w <= 0 or h <= 0) return;
+        self.vertices.clearRetainingCapacity();
+        const fw: f32 = @floatFromInt(self.fb_w);
+        const fh: f32 = @floatFromInt(self.fb_h);
+        const x0: f32 = @floatFromInt(x);
+        const y0: f32 = @floatFromInt(y);
+        const x1 = x0 + @as(f32, @floatFromInt(w));
+        const y1 = y0 + @as(f32, @floatFromInt(h));
+        // Flip V — stb loads top-down, GL samples bottom-up.
+        const nx0 = (x0 / fw) * 2.0 - 1.0;
+        const nx1 = (x1 / fw) * 2.0 - 1.0;
+        const ny0 = 1.0 - (y0 / fh) * 2.0;
+        const ny1 = 1.0 - (y1 / fh) * 2.0;
+        try self.vertices.appendSlice(self.allocator, &.{
+            nx0, ny0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+            nx1, ny0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+            nx0, ny1, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            nx1, ny0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+            nx1, ny1, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            nx0, ny1, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+        });
+        try self.flushMode(tex, 1);
+    }
+
+    fn loadLogo(self: *Renderer) void {
+        var w: c_int = 0;
+        var h: c_int = 0;
+        var channels: c_int = 0;
+        const pixels = stbi_load_from_memory(
+            logo_png.ptr,
+            @intCast(logo_png.len),
+            &w,
+            &h,
+            &channels,
+            4,
+        ) orelse {
+            std.log.warn("home logo: failed to decode PNG", .{});
+            return;
+        };
+        defer stbi_image_free(pixels);
+
+        var tex: c.GLuint = 0;
+        c.glGenTextures(1, &tex);
+        c.glBindTexture(c.GL_TEXTURE_2D, tex);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MIN_FILTER, c.GL_LINEAR);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MAG_FILTER, c.GL_LINEAR);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_S, c.GL_CLAMP_TO_EDGE);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_T, c.GL_CLAMP_TO_EDGE);
+        c.glPixelStorei(c.GL_UNPACK_ALIGNMENT, 1);
+        c.glTexImage2D(
+            c.GL_TEXTURE_2D,
+            0,
+            c.GL_RGBA,
+            w,
+            h,
+            0,
+            c.GL_RGBA,
+            c.GL_UNSIGNED_BYTE,
+            pixels,
+        );
+        c.glBindTexture(c.GL_TEXTURE_2D, 0);
+        self.logo_tex = tex;
+        self.logo_px = w;
     }
 
     fn appendSolid(
@@ -354,6 +482,52 @@ pub const Renderer = struct {
             nx1, ny0, -1, 0, r, g, b, alpha,
             nx1, ny1, -1, 0, r, g, b, alpha,
             nx0, ny1, -1, 0, r, g, b, alpha,
+        });
+    }
+
+    fn appendPixelParallelogram(
+        self: *Renderer,
+        fw: f32,
+        fh: f32,
+        x_tl: f32,
+        y_tl: f32,
+        x_tr: f32,
+        y_tr: f32,
+        x_br: f32,
+        y_br: f32,
+        x_bl: f32,
+        y_bl: f32,
+        color: Color,
+        alpha: f32,
+    ) !void {
+        const toNdcX = struct {
+            fn f(px: f32, width: f32) f32 {
+                return (px / width) * 2.0 - 1.0;
+            }
+        }.f;
+        const toNdcY = struct {
+            fn f(py: f32, height: f32) f32 {
+                return 1.0 - (py / height) * 2.0;
+            }
+        }.f;
+        const r = @as(f32, @floatFromInt(color.r)) / 255.0;
+        const g = @as(f32, @floatFromInt(color.g)) / 255.0;
+        const b = @as(f32, @floatFromInt(color.b)) / 255.0;
+        const nx_tl = toNdcX(x_tl, fw);
+        const ny_tl = toNdcY(y_tl, fh);
+        const nx_tr = toNdcX(x_tr, fw);
+        const ny_tr = toNdcY(y_tr, fh);
+        const nx_br = toNdcX(x_br, fw);
+        const ny_br = toNdcY(y_br, fh);
+        const nx_bl = toNdcX(x_bl, fw);
+        const ny_bl = toNdcY(y_bl, fh);
+        try self.vertices.appendSlice(self.allocator, &.{
+            nx_tl, ny_tl, -1, 0, r, g, b, alpha,
+            nx_tr, ny_tr, -1, 0, r, g, b, alpha,
+            nx_bl, ny_bl, -1, 0, r, g, b, alpha,
+            nx_tr, ny_tr, -1, 0, r, g, b, alpha,
+            nx_br, ny_br, -1, 0, r, g, b, alpha,
+            nx_bl, ny_bl, -1, 0, r, g, b, alpha,
         });
     }
 
@@ -408,12 +582,18 @@ pub const Renderer = struct {
     }
 
     fn flush(self: *Renderer) !void {
+        try self.flushMode(self.atlas_tex, 0);
+    }
+
+    fn flushMode(self: *Renderer, tex: c.GLuint, mode: c_int) !void {
         if (self.vertices.items.len == 0) return;
         c.glUseProgram(self.program);
         c.glActiveTexture(c.GL_TEXTURE0);
-        c.glBindTexture(c.GL_TEXTURE_2D, self.atlas_tex);
+        c.glBindTexture(c.GL_TEXTURE_2D, tex);
         const loc_atlas = c.glGetUniformLocation(self.program, "u_atlas");
         c.glUniform1i(loc_atlas, 0);
+        const loc_mode = c.glGetUniformLocation(self.program, "u_tex_mode");
+        if (loc_mode >= 0) c.glUniform1i(loc_mode, mode);
 
         c.glBindVertexArray(self.vao);
         c.glBindBuffer(c.GL_ARRAY_BUFFER, self.vbo);

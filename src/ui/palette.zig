@@ -12,6 +12,7 @@ pub const Action = enum {
     prev_tab,
     focus_next_pane,
     open_workspace,
+    load_saved_workspace,
     save_workspace,
     search,
     ssh,
@@ -44,16 +45,17 @@ pub const BuiltinEntry = struct {
 
 pub const catalog = [_]BuiltinEntry{
     .{ .action = .new_tab, .label = "New Tab", .hint = "Ctrl+Shift+T" },
-    .{ .action = .close_tab, .label = "Close Tab", .hint = "Cmd+W / Ctrl+Shift+W" },
+    .{ .action = .close_tab, .label = "Close Tab", .hint = "Ctrl+Shift+W" },
     .{ .action = .split_right, .label = "Split Right", .hint = "Ctrl+Shift+D" },
     .{ .action = .split_down, .label = "Split Down", .hint = "Ctrl+Shift+E" },
     .{ .action = .next_tab, .label = "Next Tab", .hint = "Ctrl+Tab" },
     .{ .action = .prev_tab, .label = "Previous Tab", .hint = "Ctrl+Shift+Tab" },
     .{ .action = .focus_next_pane, .label = "Focus Next Pane", .hint = "Ctrl+PageDown" },
     .{ .action = .open_workspace, .label = "Open Workspace", .hint = "Ctrl+Shift+O" },
+    .{ .action = .load_saved_workspace, .label = "Load Saved Workspace", .hint = "saved" },
     .{ .action = .save_workspace, .label = "Save Workspace", .hint = "Ctrl+Shift+S" },
     .{ .action = .search, .label = "Search", .hint = "Ctrl+Shift+F" },
-    .{ .action = .ssh, .label = "SSH…", .hint = "new tab + ssh" },
+    .{ .action = .ssh, .label = "SSH…", .hint = "ssh host" },
     .{ .action = .theme_orbit_dark, .label = "Theme: Orbit Dark", .hint = "" },
     .{ .action = .theme_orbit_light, .label = "Theme: Orbit Light", .hint = "" },
     .{ .action = .theme_nord, .label = "Theme: Nord", .hint = "" },
@@ -67,12 +69,12 @@ pub const catalog = [_]BuiltinEntry{
     .{ .action = .font_larger, .label = "Font: Larger", .hint = "Ctrl+=" },
     .{ .action = .font_smaller, .label = "Font: Smaller", .hint = "Ctrl+-" },
     .{ .action = .font_reset, .label = "Font: Reset Size", .hint = "Ctrl+0" },
-    .{ .action = .settings, .label = "Appearance Settings", .hint = "S on home" },
+    .{ .action = .settings, .label = "Appearance Settings", .hint = "S" },
     .{ .action = .go_home, .label = "Go Home", .hint = "Ctrl+Shift+H" },
-    .{ .action = .quit, .label = "Quit Orbit", .hint = "Cmd+Q / Ctrl+Q" },
+    .{ .action = .quit, .label = "Quit Orbit", .hint = "Ctrl+Q" },
     .{ .action = .reload_config, .label = "Reload Config", .hint = "" },
     .{ .action = .reload_plugins, .label = "Reload Plugins", .hint = "" },
-    .{ .action = .list_plugins, .label = "List Plugins", .hint = "" },
+    .{ .action = .list_plugins, .label = "Plugins…", .hint = "L on home" },
 };
 
 pub const Item = struct {

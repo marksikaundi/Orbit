@@ -1,0 +1,55 @@
+name = "devtools"
+version = "0.1.0"
+description = "Everyday shell utilities for navigating and inspecting projects"
+
+[[commands]]
+id = "dev.pwd"
+label = "Dev: Print cwd"
+hint = "pwd"
+action = "insert"
+payload = "pwd\r"
+
+[[commands]]
+id = "dev.ls"
+label = "Dev: List files"
+hint = "ls -la"
+action = "insert"
+payload = "ls -la\r"
+
+[[commands]]
+id = "dev.tree"
+label = "Dev: Tree (depth 2)"
+hint = "find"
+action = "insert"
+payload = "find . -maxdepth 2 -not -path '*/.*' | head -80\r"
+
+[[commands]]
+id = "dev.clear"
+label = "Dev: Clear screen"
+hint = "clear"
+action = "insert"
+payload = "clear\r"
+
+[[commands]]
+id = "dev.disk"
+label = "Dev: Disk usage here"
+hint = "du"
+action = "insert"
+payload = "du -sh ./* 2>/dev/null | sort -h | tail -20\r"
+
+[[commands]]
+id = "dev.ports"
+label = "Dev: Listening ports"
+hint = "lsof"
+action = "insert"
+payload = "lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | head -30\r"
+
+[[commands]]
+id = "dev.env"
+label = "Dev: Path & shell"
+hint = "echo"
+action = "insert"
+payload = "echo \"SHELL=$SHELL\" && echo \"PATH=$PATH\" | tr ':' '\\n' | head -20\r"
+
+[hooks]
+on_load = "status:devtools ready"

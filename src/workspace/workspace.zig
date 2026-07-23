@@ -5,6 +5,7 @@ const Session = @import("../terminal/session.zig").Session;
 const Tabs = @import("../ui/tabs.zig").Tabs;
 const Layout = @import("../ui/layout.zig").Layout;
 const Color = @import("../terminal/cell.zig").Color;
+const paths = @import("../platform/paths.zig");
 
 pub const Manager = struct {
     allocator: std.mem.Allocator,
@@ -14,10 +15,9 @@ pub const Manager = struct {
     current_name: ?[]u8 = null,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) !Manager {
-        const home = std.c.getenv("HOME") orelse return error.NoHome;
-        const dir_path = try std.fmt.allocPrint(allocator, "{s}/.config/orbit/workspaces", .{std.mem.span(home)});
+        const dir_path = try paths.joinConfig(allocator, &.{"workspaces"});
         errdefer allocator.free(dir_path);
-        ensureDir(dir_path);
+        paths.ensureDir(dir_path);
         var m: Manager = .{
             .allocator = allocator,
             .io = io,
@@ -41,7 +41,7 @@ pub const Manager = struct {
 
     pub fn refresh(self: *Manager) !void {
         self.clearNames();
-        ensureDir(self.dir_path);
+        paths.ensureDir(self.dir_path);
         const dir = std.Io.Dir.openDirAbsolute(self.io, self.dir_path, .{ .iterate = true }) catch return;
         defer dir.close(self.io);
 
@@ -66,8 +66,19 @@ pub const Manager = struct {
         self.current_name = try self.allocator.dupe(u8, name);
     }
 
+    /// Workspace file names must be a single path segment (no `..` escape from workspaces/).
+    pub fn isValidName(name: []const u8) bool {
+        if (name.len == 0) return false;
+        if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
+        for (name) |ch| {
+            if (ch < 32 or ch == '/' or ch == '\\' or ch == '"' or ch == 0) return false;
+        }
+        return true;
+    }
+
     pub fn pathFor(self: *Manager, name: []const u8) ![]u8 {
-        return std.fmt.allocPrint(self.allocator, "{s}/{s}.toml", .{ self.dir_path, name });
+        if (!isValidName(name)) return error.InvalidWorkspaceName;
+        return std.fmt.allocPrint(self.allocator, "{s}{c}{s}.toml", .{ self.dir_path, std.fs.path.sep, name });
     }
 
     pub fn saveTabs(self: *Manager, name: []const u8, tabs: *Tabs) !void {
@@ -126,7 +137,7 @@ pub const Manager = struct {
             try out.append(self.allocator, '\n');
         }
 
-        ensureDir(self.dir_path);
+        paths.ensureDir(self.dir_path);
         const path = try self.pathFor(name);
         defer self.allocator.free(path);
         const file = try std.Io.Dir.createFileAbsolute(self.io, path, .{});
@@ -284,18 +295,6 @@ fn appendEscaped(out: *std.ArrayList(u8), allocator: std.mem.Allocator, s: []con
     for (s) |ch| {
         if (ch == '"' or ch == '\\') try out.append(allocator, '\\');
         try out.append(allocator, ch);
-    }
-}
-
-fn ensureDir(path: []const u8) void {
-    var buf: [std.fs.max_path_bytes:0]u8 = undefined;
-    if (path.len >= buf.len) return;
-    var i: usize = 1;
-    while (i <= path.len) : (i += 1) {
-        if (i < path.len and path[i] != '/') continue;
-        @memcpy(buf[0..i], path[0..i]);
-        buf[i] = 0;
-        _ = std.c.mkdir(buf[0..i :0], 0o755);
     }
 }
 
@@ -467,19 +466,28 @@ fn parseStringArray(allocator: std.mem.Allocator, val: []const u8) ![][]u8 {
 }
 
 fn defaultCwd() []const u8 {
-    if (std.c.getenv("HOME")) |h| return std.mem.span(h);
-    return "/";
+    return paths.defaultCwd();
 }
 
 fn defaultShell() []const u8 {
-    if (std.c.getenv("SHELL")) |s| return std.mem.span(s);
-    return "/bin/zsh";
+    return paths.defaultShell();
 }
 
 test "parse float array" {
     const ratios = try parseFloatArray(std.testing.allocator, "[0.5, 0.3]");
     defer std.testing.allocator.free(ratios);
     try std.testing.expectEqual(@as(usize, 2), ratios.len);
+}
+
+test "workspace name rejects path traversal" {
+    try std.testing.expect(Manager.isValidName("Backend"));
+    try std.testing.expect(Manager.isValidName("my-api"));
+    try std.testing.expect(Manager.isValidName("v1.2"));
+    try std.testing.expect(!Manager.isValidName(""));
+    try std.testing.expect(!Manager.isValidName("."));
+    try std.testing.expect(!Manager.isValidName(".."));
+    try std.testing.expect(!Manager.isValidName("foo/bar"));
+    try std.testing.expect(!Manager.isValidName("foo\\bar"));
 }
 
 test "parse workspace toml" {

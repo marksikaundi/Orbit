@@ -22,15 +22,22 @@ pub fn parsePlugin(allocator: std.mem.Allocator, dir: []const u8, data: []const 
         for (themes.items) |*t| t.deinit(allocator);
         themes.deinit(allocator);
     }
+    var bindings: std.ArrayList(types.KeyBinding) = .empty;
+    errdefer {
+        for (bindings.items) |*b| b.deinit(allocator);
+        bindings.deinit(allocator);
+    }
     var hooks: types.Hooks = .{};
 
-    var section: enum { root, commands, themes, hooks } = .root;
+    var section: enum { root, commands, themes, hooks, bindings } = .root;
     var cur_cmd: ?types.PluginCommand = null;
     var cur_theme_name: ?[]u8 = null;
     var cur_fg: ?Color = null;
     var cur_bg: ?Color = null;
     var cur_cursor: ?Color = null;
     var cur_sel: ?Color = null;
+    var cur_bind_keys: ?[]u8 = null;
+    var cur_bind_cmd: ?[]u8 = null;
 
     var lines = std.mem.splitScalar(u8, data, '\n');
     while (lines.next()) |raw| {
@@ -38,8 +45,9 @@ pub fn parsePlugin(allocator: std.mem.Allocator, dir: []const u8, data: []const 
         if (line.len == 0 or line[0] == '#') continue;
 
         if (std.mem.eql(u8, line, "[[commands]]")) {
-            try flushCommand(allocator, &commands, &cur_cmd);
+            try flushCommand(allocator, &commands, &bindings, &cur_cmd);
             try flushTheme(allocator, &themes, &cur_theme_name, &cur_fg, &cur_bg, &cur_cursor, &cur_sel);
+            try flushBinding(allocator, &bindings, &cur_bind_keys, &cur_bind_cmd);
             section = .commands;
             cur_cmd = .{
                 .id = try allocator.dupe(u8, ""),
@@ -47,24 +55,35 @@ pub fn parsePlugin(allocator: std.mem.Allocator, dir: []const u8, data: []const 
                 .hint = try allocator.dupe(u8, ""),
                 .kind = .status,
                 .payload = try allocator.dupe(u8, ""),
+                .shortcut = null,
             };
             continue;
         }
         if (std.mem.eql(u8, line, "[[themes]]")) {
-            try flushCommand(allocator, &commands, &cur_cmd);
+            try flushCommand(allocator, &commands, &bindings, &cur_cmd);
             try flushTheme(allocator, &themes, &cur_theme_name, &cur_fg, &cur_bg, &cur_cursor, &cur_sel);
+            try flushBinding(allocator, &bindings, &cur_bind_keys, &cur_bind_cmd);
             section = .themes;
             continue;
         }
-        if (std.mem.eql(u8, line, "[hooks]")) {
-            try flushCommand(allocator, &commands, &cur_cmd);
+        if (std.mem.eql(u8, line, "[[bindings]]")) {
+            try flushCommand(allocator, &commands, &bindings, &cur_cmd);
             try flushTheme(allocator, &themes, &cur_theme_name, &cur_fg, &cur_bg, &cur_cursor, &cur_sel);
+            try flushBinding(allocator, &bindings, &cur_bind_keys, &cur_bind_cmd);
+            section = .bindings;
+            continue;
+        }
+        if (std.mem.eql(u8, line, "[hooks]")) {
+            try flushCommand(allocator, &commands, &bindings, &cur_cmd);
+            try flushTheme(allocator, &themes, &cur_theme_name, &cur_fg, &cur_bg, &cur_cursor, &cur_sel);
+            try flushBinding(allocator, &bindings, &cur_bind_keys, &cur_bind_cmd);
             section = .hooks;
             continue;
         }
         if (line[0] == '[') {
-            try flushCommand(allocator, &commands, &cur_cmd);
+            try flushCommand(allocator, &commands, &bindings, &cur_cmd);
             try flushTheme(allocator, &themes, &cur_theme_name, &cur_fg, &cur_bg, &cur_cursor, &cur_sel);
+            try flushBinding(allocator, &bindings, &cur_bind_keys, &cur_bind_cmd);
             section = .root;
             continue;
         }
@@ -104,6 +123,9 @@ pub fn parsePlugin(allocator: std.mem.Allocator, dir: []const u8, data: []const 
                 } else if (std.mem.eql(u8, key, "payload")) {
                     allocator.free(cmd.payload);
                     cmd.payload = try unquote(allocator, val);
+                } else if (std.mem.eql(u8, key, "shortcut") or std.mem.eql(u8, key, "keys")) {
+                    if (cmd.shortcut) |s| allocator.free(s);
+                    cmd.shortcut = try unquote(allocator, val);
                 }
             },
             .themes => {
@@ -118,6 +140,15 @@ pub fn parsePlugin(allocator: std.mem.Allocator, dir: []const u8, data: []const 
                     cur_cursor = types.parseHexColor(stripQuotes(val));
                 } else if (std.mem.eql(u8, key, "selection")) {
                     cur_sel = types.parseHexColor(stripQuotes(val));
+                }
+            },
+            .bindings => {
+                if (std.mem.eql(u8, key, "keys") or std.mem.eql(u8, key, "shortcut")) {
+                    if (cur_bind_keys) |s| allocator.free(s);
+                    cur_bind_keys = try unquote(allocator, val);
+                } else if (std.mem.eql(u8, key, "command") or std.mem.eql(u8, key, "id")) {
+                    if (cur_bind_cmd) |s| allocator.free(s);
+                    cur_bind_cmd = try unquote(allocator, val);
                 }
             },
             .hooks => {
@@ -140,8 +171,9 @@ pub fn parsePlugin(allocator: std.mem.Allocator, dir: []const u8, data: []const 
             },
         }
     }
-    try flushCommand(allocator, &commands, &cur_cmd);
+    try flushCommand(allocator, &commands, &bindings, &cur_cmd);
     try flushTheme(allocator, &themes, &cur_theme_name, &cur_fg, &cur_bg, &cur_cursor, &cur_sel);
+    try flushBinding(allocator, &bindings, &cur_bind_keys, &cur_bind_cmd);
 
     return .{
         .allocator = allocator,
@@ -151,14 +183,53 @@ pub fn parsePlugin(allocator: std.mem.Allocator, dir: []const u8, data: []const 
         .dir = try allocator.dupe(u8, dir),
         .commands = try commands.toOwnedSlice(allocator),
         .themes = try themes.toOwnedSlice(allocator),
+        .bindings = try bindings.toOwnedSlice(allocator),
         .hooks = hooks,
     };
 }
 
-fn flushCommand(allocator: std.mem.Allocator, list: *std.ArrayList(types.PluginCommand), cur: *?types.PluginCommand) !void {
-    if (cur.*) |cmd| {
-        try list.append(allocator, cmd);
+fn flushCommand(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList(types.PluginCommand),
+    bindings: *std.ArrayList(types.KeyBinding),
+    cur: *?types.PluginCommand,
+) !void {
+    if (cur.*) |*cmd| {
+        if (cmd.shortcut) |sc| {
+            if (cmd.id.len > 0) {
+                const binding = types.parseShortcut(allocator, sc, cmd.id) catch null;
+                if (binding) |b| try bindings.append(allocator, b);
+            }
+            allocator.free(sc);
+            cmd.shortcut = null;
+        }
+        try list.append(allocator, cmd.*);
         cur.* = null;
+    }
+}
+
+fn flushBinding(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList(types.KeyBinding),
+    keys: *?[]u8,
+    command: *?[]u8,
+) !void {
+    if (keys.*) |k| {
+        defer {
+            allocator.free(k);
+            keys.* = null;
+        }
+        if (command.*) |cid| {
+            defer {
+                allocator.free(cid);
+                command.* = null;
+            }
+            const binding = types.parseShortcut(allocator, k, cid) catch return;
+            try list.append(allocator, binding);
+        }
+    } else if (command.*) |cid| {
+        allocator.free(cid);
+        command.* = null;
     }
 }
 

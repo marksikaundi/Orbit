@@ -1,7 +1,10 @@
-//! Minimal TOML subset loader for Orbit config (~/.config/orbit/config.toml).
+//! Minimal TOML subset loader for Orbit config.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const theme_mod = @import("theme.zig");
+const paths = @import("../platform/paths.zig");
+const shell_guard = @import("../platform/shell.zig");
 
 pub const CursorStyle = enum {
     block,
@@ -40,7 +43,12 @@ pub const CursorStyle = enum {
 };
 
 /// Common shells users can cycle in Settings (next new tab uses this).
-pub const shell_choices = [_][]const u8{
+pub const shell_choices = if (builtin.os.tag == .windows) [_][]const u8{
+    "", // empty = default shell
+    "powershell.exe",
+    "pwsh.exe",
+    "cmd.exe",
+} else [_][]const u8{
     "", // empty = $SHELL
     "/bin/zsh",
     "/bin/bash",
@@ -56,6 +64,8 @@ pub const Config = struct {
     window_height: i32 = 560,
     opacity: f32 = 1.0,
     theme_name: []const u8 = "orbit-dark",
+    /// Text color preset id (`theme` = use theme default). See `theme.fg_presets`.
+    fg_preset: []const u8 = "theme",
     scrollback: usize = 2000,
     /// Font size in points (Ghostty-style). Scaled for Retina automatically.
     font_size: f32 = 14.0,
@@ -68,18 +78,25 @@ pub const Config = struct {
     cursor_blink: bool = true,
     /// Owned theme name buffer when loaded from file.
     theme_name_owned: ?[]u8 = null,
+    fg_preset_owned: ?[]u8 = null,
     shell_owned: ?[]u8 = null,
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         if (self.theme_name_owned) |t| allocator.free(t);
+        if (self.fg_preset_owned) |f| allocator.free(f);
         if (self.shell_owned) |s| allocator.free(s);
         self.theme_name_owned = null;
+        self.fg_preset_owned = null;
         self.shell_owned = null;
         self.shell = null;
     }
 
     pub fn theme(self: *const Config) theme_mod.Theme {
-        return theme_mod.byName(self.theme_name);
+        return theme_mod.withFgOverride(theme_mod.byName(self.theme_name), self.fg_preset);
+    }
+
+    pub fn fgDisplay(self: *const Config) []const u8 {
+        return theme_mod.fgPresetById(self.fg_preset).label;
     }
 
     pub fn shellPath(self: *const Config) ?[]const u8 {
@@ -89,31 +106,25 @@ pub const Config = struct {
         return null;
     }
 
-    /// Shell to launch: configured path if it exists, else $SHELL, else /bin/zsh.
+    /// Shell to launch: configured path if allowed and present, else platform default.
     pub fn resolveLaunchShell(self: *const Config) []const u8 {
         if (self.shellPath()) |s| {
-            if (pathExecutable(s)) return s;
+            return shell_guard.sanitize(s);
         }
-        if (std.c.getenv("SHELL")) |env| {
-            const span = std.mem.span(env);
-            if (span.len > 0 and pathExecutable(span)) return span;
-        }
-        if (pathExecutable("/bin/zsh")) return "/bin/zsh";
-        if (pathExecutable("/bin/bash")) return "/bin/bash";
-        return "/bin/sh";
+        return shell_guard.sanitize(null);
     }
 
     pub fn shellDisplay(self: *const Config) []const u8 {
         if (self.shellPath()) |s| {
-            if (!pathExecutable(s)) {
+            if (!paths.pathExecutable(s)) {
                 // Still show configured name so Settings can fix it
-                if (std.mem.lastIndexOfScalar(u8, s, '/')) |i| return s[i + 1 ..];
+                if (std.mem.lastIndexOfAny(u8, s, "/\\")) |i| return s[i + 1 ..];
                 return s;
             }
-            if (std.mem.lastIndexOfScalar(u8, s, '/')) |i| return s[i + 1 ..];
+            if (std.mem.lastIndexOfAny(u8, s, "/\\")) |i| return s[i + 1 ..];
             return s;
         }
-        return "$SHELL";
+        return if (builtin.os.tag == .windows) "default" else "$SHELL";
     }
 
     pub fn setThemeName(self: *Config, allocator: std.mem.Allocator, name: []const u8) !void {
@@ -123,11 +134,25 @@ pub const Config = struct {
         self.theme_name = owned;
     }
 
+    pub fn setFgPreset(self: *Config, allocator: std.mem.Allocator, id: []const u8) !void {
+        const canonical = theme_mod.fgPresetById(id).id;
+        if (self.fg_preset_owned) |old| allocator.free(old);
+        const owned = try allocator.dupe(u8, canonical);
+        self.fg_preset_owned = owned;
+        self.fg_preset = owned;
+    }
+
+    pub fn cycleFgPreset(self: *Config, allocator: std.mem.Allocator, delta: i32) !void {
+        const next = theme_mod.nextFgPresetId(self.fg_preset, delta);
+        try self.setFgPreset(allocator, next);
+    }
+
     pub fn setShell(self: *Config, allocator: std.mem.Allocator, path: []const u8) !void {
         if (self.shell_owned) |old| allocator.free(old);
         self.shell_owned = null;
         self.shell = null;
         if (path.len == 0) return;
+        if (!shell_guard.isAllowed(path)) return;
         const owned = try allocator.dupe(u8, path);
         self.shell_owned = owned;
         self.shell = owned;
@@ -141,7 +166,7 @@ pub const Config = struct {
             if (choice.len == 0) {
                 available[count] = choice;
                 count += 1;
-            } else if (pathExecutable(choice)) {
+            } else if (paths.pathExecutable(choice)) {
                 available[count] = choice;
                 count += 1;
             }
@@ -169,9 +194,7 @@ pub const Config = struct {
 
     pub fn load(allocator: std.mem.Allocator, io: std.Io) Config {
         var cfg: Config = .{};
-        const home = std.c.getenv("HOME") orelse return cfg;
-        const home_slice = std.mem.span(home);
-        const path = std.fmt.allocPrint(allocator, "{s}/.config/orbit/config.toml", .{home_slice}) catch return cfg;
+        const path = paths.joinConfig(allocator, &.{"config.toml"}) catch return cfg;
         defer allocator.free(path);
 
         const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch return cfg;
@@ -186,15 +209,13 @@ pub const Config = struct {
         return cfg;
     }
 
-    /// Persist current settings to ~/.config/orbit/config.toml.
+    /// Persist current settings to the Orbit config file.
     pub fn save(self: *const Config, allocator: std.mem.Allocator, io: std.Io) !void {
-        const home = std.c.getenv("HOME") orelse return error.NoHome;
-        const home_slice = std.mem.span(home);
-        const dir_path = try std.fmt.allocPrint(allocator, "{s}/.config/orbit", .{home_slice});
+        const dir_path = try paths.configDir(allocator);
         defer allocator.free(dir_path);
-        ensureDir(dir_path);
+        paths.ensureDir(dir_path);
 
-        const path = try std.fmt.allocPrint(allocator, "{s}/config.toml", .{dir_path});
+        const path = try std.fmt.allocPrint(allocator, "{s}{c}config.toml", .{ dir_path, std.fs.path.sep });
         defer allocator.free(path);
 
         var body: std.ArrayList(u8) = .empty;
@@ -211,6 +232,7 @@ pub const Config = struct {
         try appendFmt(&body, allocator, "opacity = {d:.2}\n", .{self.opacity});
         try body.appendSlice(allocator, "\n[theme]\n");
         try appendFmt(&body, allocator, "name = \"{s}\"\n", .{self.theme_name});
+        try appendFmt(&body, allocator, "foreground = \"{s}\"\n", .{self.fg_preset});
         try body.appendSlice(allocator,
             \\
             \\[terminal]
@@ -225,7 +247,10 @@ pub const Config = struct {
         if (self.shellPath()) |sh| {
             try appendFmt(&body, allocator, "shell = \"{s}\"\n", .{sh});
         } else {
-            try body.appendSlice(allocator, "# shell = \"$SHELL\"  # e.g. \"/bin/bash\" or \"/bin/zsh\"\n");
+            try body.appendSlice(allocator, if (builtin.os.tag == .windows)
+                "# shell = \"powershell.exe\"  # or \"pwsh.exe\" / \"cmd.exe\"\n"
+            else
+                "# shell = \"$SHELL\"  # e.g. \"/bin/bash\" or \"/bin/zsh\"\n");
         }
 
         const file = try std.Io.Dir.createFileAbsolute(io, path, .{});
@@ -274,6 +299,13 @@ pub const Config = struct {
                         cfg.theme_name_owned = owned;
                         cfg.theme_name = owned;
                     }
+                    if (std.mem.eql(u8, key, "foreground") or std.mem.eql(u8, key, "text") or std.mem.eql(u8, key, "fg")) {
+                        if (cfg.fg_preset_owned) |old| allocator.free(old);
+                        const canonical = theme_mod.fgPresetById(val).id;
+                        const owned = allocator.dupe(u8, canonical) catch continue;
+                        cfg.fg_preset_owned = owned;
+                        cfg.fg_preset = owned;
+                    }
                 },
                 .terminal => {
                     if (std.mem.eql(u8, key, "scrollback")) {
@@ -296,6 +328,7 @@ pub const Config = struct {
                         cfg.padding_y = @max(0, @min(48, cfg.padding_y));
                     }
                     if (std.mem.eql(u8, key, "shell")) {
+                        if (!shell_guard.isAllowed(val)) continue;
                         if (cfg.shell_owned) |old| allocator.free(old);
                         const owned = allocator.dupe(u8, val) catch continue;
                         cfg.shell_owned = owned;
@@ -313,9 +346,9 @@ pub const Config = struct {
         }
         cfg.opacity = @min(1.0, @max(0.15, cfg.opacity));
 
-        // Drop configured shell if the binary is missing (e.g. fish not installed).
+        // Drop configured shell if disallowed or missing (e.g. fish not installed).
         if (cfg.shell) |s| {
-            if (s.len > 0 and !pathExecutable(s)) {
+            if (s.len > 0 and (!shell_guard.isAllowed(s) or !paths.pathExecutable(s))) {
                 if (cfg.shell_owned) |old| allocator.free(old);
                 cfg.shell_owned = null;
                 cfg.shell = null;
@@ -324,31 +357,10 @@ pub const Config = struct {
     }
 };
 
-fn pathExecutable(path: []const u8) bool {
-    if (path.len == 0) return false;
-    var buf: [std.fs.max_path_bytes:0]u8 = undefined;
-    if (path.len >= buf.len) return false;
-    @memcpy(buf[0..path.len], path);
-    buf[path.len] = 0;
-    return std.c.access(buf[0..path.len :0], 1) == 0; // X_OK
-}
-
 fn appendFmt(list: *std.ArrayList(u8), allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
     const slice = try std.fmt.allocPrint(allocator, fmt, args);
     defer allocator.free(slice);
     try list.appendSlice(allocator, slice);
-}
-
-fn ensureDir(path: []const u8) void {
-    var buf: [std.fs.max_path_bytes:0]u8 = undefined;
-    if (path.len >= buf.len) return;
-    var i: usize = 1;
-    while (i <= path.len) : (i += 1) {
-        if (i < path.len and path[i] != '/') continue;
-        @memcpy(buf[0..i], path[0..i]);
-        buf[i] = 0;
-        _ = std.c.mkdir(buf[0..i :0], 0o755);
-    }
 }
 
 fn parseI32(s: []const u8) ?i32 {

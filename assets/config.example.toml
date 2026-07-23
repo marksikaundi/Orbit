@@ -1,4 +1,5 @@
-# Orbit config — copy to ~/.config/orbit/config.toml
+# Orbit config — copy to ~/.config/orbit/config.toml (Unix)
+# or %APPDATA%\orbit\config.toml (Windows)
 # Or open Appearance (S on home) and press S to save.
 
 [window]
@@ -9,6 +10,9 @@ opacity = 1.0
 [theme]
 # orbit-dark | orbit-light | nord | dracula | gruvbox-dark | solarized-dark
 name = "orbit-dark"
+# Text color override (optional). theme | soft-white | bright | cool-gray | warm-gray
+# mint | green | amber | sky | lavender | rose
+foreground = "theme"
 
 [terminal]
 scrollback = 2000
@@ -17,7 +21,9 @@ font_size = 14
 # Interior padding in logical pixels
 padding_x = 10
 padding_y = 6
-# Shell for new tabs (omit to use $SHELL). Examples: /bin/zsh /bin/bash /bin/fish
+# Shell for new tabs (omit for platform default).
+# Unix: "/bin/zsh" "/bin/bash" "/bin/fish"
+# Windows: "powershell.exe" "pwsh.exe" "cmd.exe"
 # shell = "/bin/zsh"
 # Cursor: block | underline | bar
 cursor_style = "block"

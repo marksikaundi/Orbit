@@ -1,10 +1,12 @@
-//! Discover and load plugins from ~/.config/orbit/plugins/<name>/plugin.toml
+//! Discover and load plugins from the Orbit config plugins directory.
 
 const std = @import("std");
 const types = @import("types.zig");
 const manifest = @import("manifest.zig");
+const plugin_audit = @import("../security/plugin_audit.zig");
 const Theme = @import("../config/theme.zig").Theme;
 const Color = @import("../terminal/cell.zig").Color;
+const paths = @import("../platform/paths.zig");
 
 pub const Registry = struct {
     allocator: std.mem.Allocator,
@@ -13,10 +15,9 @@ pub const Registry = struct {
     plugins: std.ArrayList(types.Plugin) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) !Registry {
-        const home = std.c.getenv("HOME") orelse return error.NoHome;
-        const dir_path = try std.fmt.allocPrint(allocator, "{s}/.config/orbit/plugins", .{std.mem.span(home)});
+        const dir_path = try paths.joinConfig(allocator, &.{"plugins"});
         errdefer allocator.free(dir_path);
-        ensureDir(dir_path);
+        paths.ensureDir(dir_path);
         var reg: Registry = .{
             .allocator = allocator,
             .io = io,
@@ -40,18 +41,24 @@ pub const Registry = struct {
     pub fn reload(self: *Registry) !void {
         // Fire unload hooks first (caller may also do this for status UI)
         self.clear();
-        ensureDir(self.dir_path);
+        paths.ensureDir(self.dir_path);
         const dir = std.Io.Dir.openDirAbsolute(self.io, self.dir_path, .{ .iterate = true }) catch return;
         defer dir.close(self.io);
 
         var it = dir.iterate();
         while (it.next(self.io) catch null) |entry| {
-            if (entry.kind != .directory and entry.kind != .sym_link) continue;
+            // Refuse symlinks so a planted link cannot pull plugins from outside the config tree.
+            if (entry.kind != .directory) continue;
             if (entry.name.len == 0 or entry.name[0] == '.') continue;
+            if (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, "..")) continue;
 
-            const plugin_dir = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.dir_path, entry.name });
+            const plugin_dir = try std.fmt.allocPrint(self.allocator, "{s}{c}{s}", .{ self.dir_path, std.fs.path.sep, entry.name });
             defer self.allocator.free(plugin_dir);
-            const toml_path = try std.fmt.allocPrint(self.allocator, "{s}/plugin.toml", .{plugin_dir});
+            if (!pluginDirIsContained(self.dir_path, plugin_dir)) {
+                std.log.warn("security: skipped plugin `{s}` (path escapes plugins directory)", .{entry.name});
+                continue;
+            }
+            const toml_path = try std.fmt.allocPrint(self.allocator, "{s}{c}plugin.toml", .{ plugin_dir, std.fs.path.sep });
             defer self.allocator.free(toml_path);
 
             const file = std.Io.Dir.openFileAbsolute(self.io, toml_path, .{}) catch continue;
@@ -62,6 +69,7 @@ pub const Registry = struct {
             defer self.allocator.free(data);
 
             const plugin = manifest.parsePlugin(self.allocator, plugin_dir, data) catch continue;
+            warnRiskyPlugin(&plugin);
             try self.plugins.append(self.allocator, plugin);
         }
     }
@@ -82,6 +90,28 @@ pub const Registry = struct {
             if (!std.mem.eql(u8, p.name, plugin_name)) continue;
             for (p.commands) |*c| {
                 if (std.mem.eql(u8, c.id, command_id)) return c;
+            }
+        }
+        return null;
+    }
+
+    /// Find a command by id across all enabled plugins.
+    pub fn findCommandById(self: *Registry, command_id: []const u8) ?*types.PluginCommand {
+        for (self.plugins.items) |*p| {
+            if (!p.enabled) continue;
+            for (p.commands) |*c| {
+                if (std.mem.eql(u8, c.id, command_id)) return c;
+            }
+        }
+        return null;
+    }
+
+    /// Match a user key chord against enabled plugin bindings. Returns command id if any.
+    pub fn matchBinding(self: *const Registry, key_name: []const u8, ctrl: bool, shift: bool, super: bool, alt: bool) ?[]const u8 {
+        for (self.plugins.items) |p| {
+            if (!p.enabled) continue;
+            for (p.bindings) |b| {
+                if (b.matches(key_name, ctrl, shift, super, alt)) return b.command_id;
             }
         }
         return null;
@@ -116,14 +146,39 @@ pub const Registry = struct {
     }
 };
 
-fn ensureDir(path: []const u8) void {
-    var buf: [std.fs.max_path_bytes:0]u8 = undefined;
-    if (path.len >= buf.len) return;
-    var i: usize = 1;
-    while (i <= path.len) : (i += 1) {
-        if (i < path.len and path[i] != '/') continue;
-        @memcpy(buf[0..i], path[0..i]);
-        buf[i] = 0;
-        _ = std.c.mkdir(buf[0..i :0], 0o755);
+fn warnRiskyPlugin(plugin: *const types.Plugin) void {
+    for (plugin.commands) |cmd| {
+        if (cmd.kind != .insert) continue;
+        const hit = plugin_audit.auditInsertPayload(cmd.payload) orelse continue;
+        const action = if (plugin_audit.shouldBlock(hit)) "blocked" else "warning";
+        std.log.warn(
+            "security: plugin `{s}` command `{s}` [{s}/{s}] {s}",
+            .{ plugin.name, cmd.id, hit.severity.label(), action, hit.message },
+        );
     }
+    warnRiskyHook(plugin, "on_load", plugin.hooks.on_load);
+    warnRiskyHook(plugin, "on_unload", plugin.hooks.on_unload);
+    warnRiskyHook(plugin, "on_workspace_open", plugin.hooks.on_workspace_open);
+    warnRiskyHook(plugin, "on_workspace_save", plugin.hooks.on_workspace_save);
+}
+
+fn warnRiskyHook(plugin: *const types.Plugin, which: []const u8, hook: ?[]const u8) void {
+    const raw = hook orelse return;
+    if (!std.mem.startsWith(u8, raw, "insert:")) return;
+    const payload = raw["insert:".len..];
+    const hit = plugin_audit.auditInsertPayload(payload) orelse return;
+    const action = if (plugin_audit.shouldBlock(hit)) "blocked" else "warning";
+    std.log.warn(
+        "security: plugin `{s}` hook `{s}` [{s}/{s}] {s}",
+        .{ plugin.name, which, hit.severity.label(), action, hit.message },
+    );
+}
+
+/// True when `plugin_dir` is exactly under `plugins_root` (no `..` escape).
+fn pluginDirIsContained(plugins_root: []const u8, plugin_dir: []const u8) bool {
+    if (std.mem.indexOf(u8, plugin_dir, "..") != null) return false;
+    if (!std.mem.startsWith(u8, plugin_dir, plugins_root)) return false;
+    if (plugin_dir.len <= plugins_root.len) return false;
+    const sep = plugin_dir[plugins_root.len];
+    return sep == std.fs.path.sep or sep == '/' or sep == '\\';
 }

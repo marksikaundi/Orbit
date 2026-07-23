@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const c = @import("../c.zig").c;
 const Window = @import("../window/window.zig").Window;
 const Renderer = @import("../renderer/renderer.zig").Renderer;
@@ -9,17 +10,39 @@ const Rect = layout_mod.Rect;
 const Search = @import("../ui/search.zig").Search;
 const Palette = @import("../ui/palette.zig").Palette;
 const palette_mod = @import("../ui/palette.zig");
+const bindings = @import("../ui/bindings.zig");
 const home_mod = @import("../ui/home.zig");
 const Home = home_mod.Home;
+const ui_scale = @import("../ui/scale.zig");
 const Config = @import("../config/config.zig").Config;
 const CursorStyle = @import("../config/config.zig").CursorStyle;
 const theme_mod = @import("../config/theme.zig");
 const WsManager = @import("../workspace/workspace.zig").Manager;
 const PluginRegistry = @import("../plugins/registry.zig").Registry;
+const PluginCommand = @import("../plugins/types.zig").PluginCommand;
+const plugin_audit = @import("../security/plugin_audit.zig");
 const clipboard = @import("../clipboard/clipboard.zig");
+const folder_picker = @import("../platform/folder_picker.zig");
 const Color = @import("../terminal/cell.zig").Color;
+const dev_root = @import("../dev_root.zig");
 
-const UiMode = enum { home, normal, search, ws_picker, ws_save, palette, ssh_prompt, settings };
+const UiMode = enum { home, normal, search, ws_picker, ws_save, palette, ssh_prompt, settings, plugins };
+
+const StatusKind = enum { info, success, err };
+
+/// Right-click terminal menu (Copy / Paste).
+const ContextMenu = struct {
+    x: i32,
+    y: i32,
+    /// 0 = Copy, 1 = Paste
+    hover: usize = 1,
+};
+
+const context_menu_items = [_][]const u8{ "Copy", "Paste" };
+
+/// How long the bottom-left toast stays visible (seconds).
+const status_ttl_s: f64 = 2.8;
+const status_ttl_error_s: f64 = 4.2;
 
 pub const App = struct {
     allocator: std.mem.Allocator,
@@ -41,10 +64,18 @@ pub const App = struct {
     ssh_host_len: usize = 0,
     status_msg: [96]u8 = undefined,
     status_len: usize = 0,
+    /// Seconds (glfwGetTime) when the toast should disappear (0 = hidden).
+    status_until: f64 = 0,
+    /// Soft styling: success (green), error (warm), info (default).
+    status_kind: StatusKind = .info,
     mouse_x: f64 = 0,
     mouse_y: f64 = 0,
-    /// Settings row: 0 theme, 1 cursor, 2 blink, 3 shell
+    /// Right-click Copy/Paste menu over the terminal (null = closed).
+    context_menu: ?ContextMenu = null,
+    /// Settings row: 0 theme, 1 text, 2 cursor, 3 blink, 4 shell
     settings_row: usize = 0,
+    /// Selected plugin index in the Plugins panel.
+    plugin_row: usize = 0,
 
     pub fn create(allocator: std.mem.Allocator, io: std.Io) !*App {
         const self = try allocator.create(App);
@@ -98,7 +129,16 @@ pub const App = struct {
         self.updateWindowTitle();
         self.fireHooks(.on_load);
         self.applyRendererHooks();
+        self.publishSourceRoot();
         return self;
+    }
+
+    /// Keep Orbit config source_root fresh and export ORBIT_SOURCE_ROOT to child shells.
+    fn publishSourceRoot(self: *App) void {
+        dev_root.ensureRecorded(self.allocator, self.io);
+        const root = dev_root.resolve(self.allocator, self.io) orelse return;
+        defer self.allocator.free(root);
+        @import("../platform/paths.zig").setEnv("ORBIT_SOURCE_ROOT", root);
     }
 
     pub fn destroy(self: *App) void {
@@ -111,6 +151,7 @@ pub const App = struct {
         Window.on_scroll = null;
         self.plugins.deinit();
         self.workspaces.deinit();
+        self.search.close(self.allocator);
         self.tabs.deinit();
         self.renderer.deinit();
         self.window.deinit();
@@ -123,6 +164,8 @@ pub const App = struct {
             Window.poll();
             self.handleResize();
             self.tabs.tickAll();
+            self.pollTerminalStatus();
+            self.tickStatus();
             self.reapExitedSessions();
             try self.draw();
             self.window.swap();
@@ -135,7 +178,7 @@ pub const App = struct {
         if (!self.tabs.pruneDead()) return;
 
         if (self.tabs.items.items.len == 0) {
-            self.search.close();
+            self.search.close(self.allocator);
             self.goHome();
             return;
         }
@@ -195,10 +238,109 @@ pub const App = struct {
         tab.layout.forEachLeaf(bounds, *Ctx, &ctx, Ctx.cb);
     }
 
+    fn clearStatus(self: *App) void {
+        self.status_len = 0;
+        self.status_until = 0;
+        self.status_kind = .info;
+    }
+
     fn setStatus(self: *App, msg: []const u8) void {
+        if (msg.len == 0) {
+            self.clearStatus();
+            return;
+        }
         const n = @min(msg.len, self.status_msg.len);
         @memcpy(self.status_msg[0..n], msg[0..n]);
         self.status_len = n;
+        self.status_kind = classifyStatus(msg);
+        const ttl: f64 = if (self.status_kind == .err) status_ttl_error_s else status_ttl_s;
+        self.status_until = c.glfwGetTime() + ttl;
+    }
+
+    fn classifyStatus(msg: []const u8) StatusKind {
+        if (containsIgnoreCase(msg, "fail") or
+            containsIgnoreCase(msg, "error") or
+            containsIgnoreCase(msg, "fatal") or
+            containsIgnoreCase(msg, "denied"))
+            return .err;
+        if (containsIgnoreCase(msg, "saved") or
+            containsIgnoreCase(msg, "created") or
+            containsIgnoreCase(msg, "wrote") or
+            containsIgnoreCase(msg, "written") or
+            containsIgnoreCase(msg, "applied") or
+            containsIgnoreCase(msg, "opened") or
+            containsIgnoreCase(msg, "loaded") or
+            containsIgnoreCase(msg, "installed") or
+            containsIgnoreCase(msg, "enabled") or
+            containsIgnoreCase(msg, "ready"))
+            return .success;
+        return .info;
+    }
+
+    fn containsIgnoreCase(hay: []const u8, needle: []const u8) bool {
+        if (needle.len == 0 or needle.len > hay.len) return false;
+        var i: usize = 0;
+        while (i + needle.len <= hay.len) : (i += 1) {
+            if (std.ascii.eqlIgnoreCase(hay[i .. i + needle.len], needle)) return true;
+        }
+        return false;
+    }
+
+    /// Hide the toast once its TTL elapses — it should not linger on screen.
+    fn tickStatus(self: *App) void {
+        if (self.status_len == 0) return;
+        if (c.glfwGetTime() >= self.status_until) {
+            self.clearStatus();
+        }
+    }
+
+    /// Pull ephemeral notices from PTY output (file ops, errors, OSC notifies).
+    fn pollTerminalStatus(self: *App) void {
+        if (self.ui != .normal and self.ui != .search) return;
+        const tab = self.tabs.current() orelse return;
+        const Ctx = struct {
+            app: *App,
+            fn cb(ctx: *@This(), session: *Session, _: Rect) void {
+                if (session.takeStatus()) |msg| {
+                    ctx.app.setStatus(msg);
+                }
+            }
+        };
+        var ctx: Ctx = .{ .app = self };
+        tab.layout.forEachLeaf(self.contentRect(), *Ctx, &ctx, Ctx.cb);
+    }
+
+    /// Floating status toast near the bottom-left — raised so it is not flush with the window edge.
+    /// Only drawn while a recent event is active (`status_len > 0`); auto-clears via `tickStatus`.
+    fn drawStatusBar(self: *App) !void {
+        if (self.status_len == 0) return;
+
+        const cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+
+        const pad_x: i32 = 16;
+        const pad_y: i32 = 10;
+        const bar_h = ch + pad_y * 2;
+        // Sit clearly above the window edge (not flush to the bottom).
+        const margin_bottom = @max(48, ch * 2 + 16);
+        const bar_y = fb_h - margin_bottom - bar_h;
+
+        const text = self.status_msg[0..self.status_len];
+        const text_w = @as(i32, @intCast(text.len)) * cw;
+        const bar_w = @min(fb_w - 24, text_w + pad_x * 2 + 8);
+        const bar_x: i32 = 12;
+
+        const bg: Color, const accent: Color, const fg: Color = switch (self.status_kind) {
+            .err => .{ Color.rgb(48, 28, 28), Color.rgb(220, 120, 110), Color.rgb(255, 210, 205) },
+            .success => .{ Color.rgb(28, 42, 34), Color.rgb(110, 200, 140), Color.rgb(200, 240, 200) },
+            .info => .{ Color.rgb(28, 34, 44), Color.rgb(120, 170, 220), Color.rgb(210, 225, 240) },
+        };
+
+        try self.renderer.drawRect(bar_x, bar_y, bar_w, bar_h, bg, 0.96);
+        try self.renderer.drawRect(bar_x, bar_y, 3, bar_h, accent, 1.0);
+        try self.renderer.drawText(bar_x + pad_x, bar_y + pad_y, text, fg);
     }
 
     fn updateWindowTitle(self: *App) void {
@@ -226,43 +368,49 @@ pub const App = struct {
                 self.plugins.count(),
             );
             if (self.status_len > 0) {
-                const bar_y = self.window.fb_height - 28;
-                try self.renderer.drawRect(0, bar_y, self.window.fb_width, 28, Color.rgb(25, 35, 30), 0.92);
-                try self.renderer.drawText(12, bar_y + 6, self.status_msg[0..self.status_len], Color.rgb(180, 220, 180));
+                try self.drawStatusBar();
             }
             return;
         }
 
         self.renderer.clearBackground();
 
-        // Ghostty-like integrated tab strip (matches terminal background)
+        // Tab strip with Powerline-style slanted active label
         const tbg = self.renderer.theme.background;
         const tfg = self.renderer.theme.foreground;
+        const accent = self.renderer.theme.ansi[4]; // theme blue
         try self.renderer.drawRect(0, 0, self.window.fb_width, Tabs.bar_height, tbg, 1.0);
-        try self.renderer.drawRect(0, Tabs.bar_height - 1, self.window.fb_width, 1, Color.rgb(
-            @intCast(@min(255, @as(i32, tbg.r) + 22)),
-            @intCast(@min(255, @as(i32, tbg.g) + 22)),
-            @intCast(@min(255, @as(i32, tbg.b) + 26)),
-        ), 1.0);
         const cell_w_i: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
-        var x: i32 = 10;
+        const cell_h_i: i32 = @intFromFloat(@max(1.0, self.renderer.cell_h));
+        const slant: i32 = 10;
+        const tab_h: i32 = Tabs.bar_height - 10;
+        const tab_y: i32 = 5;
+        var x: i32 = 8;
         for (self.tabs.items.items, 0..) |tab, i| {
             const active = i == self.tabs.active;
-            const label_w: i32 = @as(i32, @intCast(@min(tab.title.len, 16))) * cell_w_i + 20;
+            const title = tab.title[0..@min(tab.title.len, 16)];
+            const text_w: i32 = @as(i32, @intCast(title.len)) * cell_w_i;
+            const label_w: i32 = text_w + 28;
             if (active) {
-                try self.renderer.drawRect(x, 6, label_w, Tabs.bar_height - 12, Color.rgb(
-                    @intCast(@min(255, @as(i32, tbg.r) + 16)),
-                    @intCast(@min(255, @as(i32, tbg.g) + 18)),
-                    @intCast(@min(255, @as(i32, tbg.b) + 22)),
-                ), 1.0);
+                try self.renderer.drawSlantRect(x, tab_y, label_w, tab_h, slant, accent, 1.0);
+            } else {
+                const muted = Color.rgb(
+                    @intCast(@divTrunc(@as(i32, tbg.r) * 2 + @as(i32, accent.r), 3)),
+                    @intCast(@divTrunc(@as(i32, tbg.g) * 2 + @as(i32, accent.g), 3)),
+                    @intCast(@divTrunc(@as(i32, tbg.b) * 2 + @as(i32, accent.b), 3)),
+                );
+                try self.renderer.drawSlantRect(x, tab_y, label_w, tab_h, slant, muted, 0.55);
             }
-            const fg = if (active) tfg else Color.rgb(
-                @intCast(@divTrunc(@as(i32, tfg.r) + @as(i32, tbg.r) * 2, 3)),
-                @intCast(@divTrunc(@as(i32, tfg.g) + @as(i32, tbg.g) * 2, 3)),
-                @intCast(@divTrunc(@as(i32, tfg.b) + @as(i32, tbg.b) * 2, 3)),
+            const fg = if (active) Color.rgb(255, 255, 255) else Color.rgb(
+                @intCast(@divTrunc(@as(i32, tfg.r) + @as(i32, tbg.r), 2)),
+                @intCast(@divTrunc(@as(i32, tfg.g) + @as(i32, tbg.g), 2)),
+                @intCast(@divTrunc(@as(i32, tfg.b) + @as(i32, tbg.b), 2)),
             );
-            try self.renderer.drawText(x + 10, 10, tab.title[0..@min(tab.title.len, 16)], fg);
-            x += label_w + 6;
+            // Center label in the parallelogram (centroid is at x+w/2, y+h/2)
+            const text_x = x + @divTrunc(label_w - text_w, 2);
+            const text_y = tab_y + @divTrunc(tab_h - cell_h_i, 2);
+            try self.renderer.drawText(text_x, text_y, title, fg);
+            x += label_w + 4;
         }
 
         // Workspace badge on the right
@@ -278,17 +426,16 @@ pub const App = struct {
             // Only bounce to home when nothing is open.
             switch (self.ui) {
                 .settings => try self.drawSettings(),
+                .plugins => try self.drawPlugins(),
                 .palette => try self.drawPalette(),
                 .ws_picker => try self.drawWorkspacePicker(),
                 .ws_save => try self.drawSavePrompt(),
                 .ssh_prompt => try self.drawSshPrompt(),
-                .search => {},
+                .search => try self.drawSearch(),
                 .home, .normal => self.ui = .home,
             }
             if (self.status_len > 0) {
-                const bar_y = self.window.fb_height - 24;
-                try self.renderer.drawRect(0, bar_y, self.window.fb_width, 24, Color.rgb(25, 35, 30), 0.9);
-                try self.renderer.drawText(8, bar_y + 4, self.status_msg[0..self.status_len], Color.rgb(180, 220, 180));
+                try self.drawStatusBar();
             }
             return;
         };
@@ -318,23 +465,14 @@ pub const App = struct {
                     hl_col,
                     hl_len,
                 ) catch {};
-
-                if (session == ctx.app.tabs.focusedSession()) {
-                    ctx.app.renderer.drawRect(r.x, r.y, r.w, 2, Color.rgb(80, 140, 220), 0.8) catch {};
-                }
             }
         };
         var dctx: DrawCtx = .{ .app = self };
         tab.layout.forEachLeaf(bounds, *DrawCtx, &dctx, DrawCtx.cb);
 
         if (self.ui == .search) {
-            const bar_y = self.window.fb_height - 32;
-            try self.renderer.drawRect(0, bar_y, self.window.fb_width, 32, Color.rgb(30, 40, 55), 0.95);
-            var label_buf: [160]u8 = undefined;
-            const label = std.fmt.bufPrint(&label_buf, "Search: {s}", .{self.search.querySlice()}) catch "Search:";
-            try self.renderer.drawText(8, bar_y + 8, label, Color.rgb(230, 235, 240));
+            try self.drawSearch();
         }
-
         if (self.ui == .ws_picker) {
             try self.drawWorkspacePicker();
         }
@@ -350,45 +488,406 @@ pub const App = struct {
         if (self.ui == .settings) {
             try self.drawSettings();
         }
-        if (self.status_len > 0 and self.ui == .normal) {
-            const bar_y = self.window.fb_height - 24;
-            try self.renderer.drawRect(0, bar_y, self.window.fb_width, 24, Color.rgb(25, 35, 30), 0.9);
-            try self.renderer.drawText(8, bar_y + 4, self.status_msg[0..self.status_len], Color.rgb(180, 220, 180));
+        if (self.ui == .plugins) {
+            try self.drawPlugins();
+        }
+        if (self.context_menu != null) {
+            try self.drawContextMenu();
+        }
+        // Always on top of overlays so "saved" / theme notes stay readable.
+        if (self.status_len > 0) {
+            try self.drawStatusBar();
         }
     }
 
+    fn contextMenuRect(self: *const App, menu: ContextMenu) Rect {
+        const cw = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_w)));
+        const ch = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_h)));
+        const pad_x: i32 = 12;
+        const pad_y: i32 = 6;
+        const row_h = ch + 8;
+        const w = cw * 10 + pad_x * 2;
+        const h = pad_y * 2 + row_h * @as(i32, @intCast(context_menu_items.len));
+        var x = menu.x;
+        var y = menu.y;
+        if (x + w > self.window.fb_width) x = @max(0, self.window.fb_width - w);
+        if (y + h > self.window.fb_height) y = @max(0, self.window.fb_height - h);
+        return .{ .x = x, .y = y, .w = w, .h = h };
+    }
+
+    fn contextMenuHit(self: *const App, menu: ContextMenu, px: i32, py: i32) ?usize {
+        const r = self.contextMenuRect(menu);
+        if (px < r.x or px >= r.x + r.w or py < r.y or py >= r.y + r.h) return null;
+        const ch = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_h)));
+        const pad_y: i32 = 6;
+        const row_h = ch + 8;
+        const rel = py - r.y - pad_y;
+        if (rel < 0) return null;
+        const idx: usize = @intCast(@divTrunc(rel, row_h));
+        if (idx >= context_menu_items.len) return null;
+        return idx;
+    }
+
+    fn drawContextMenu(self: *App) !void {
+        const menu = self.context_menu orelse return;
+        const r = self.contextMenuRect(menu);
+        const ch = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_h)));
+        const pad_x: i32 = 12;
+        const pad_y: i32 = 6;
+        const row_h = ch + 8;
+        const panel = Color.rgb(24, 28, 36);
+        const accent = Color.rgb(90, 175, 220);
+        const fg = Color.rgb(220, 228, 236);
+        const muted = Color.rgb(110, 120, 132);
+        const sel_bg = Color.rgb(40, 52, 68);
+
+        try self.renderer.drawRect(r.x, r.y, r.w, r.h, panel, 0.98);
+        try self.renderer.drawRect(r.x, r.y, 2, r.h, accent, 0.7);
+
+        const can_copy = if (self.focused()) |s| s.selection.active else false;
+        for (context_menu_items, 0..) |label, i| {
+            const ry = r.y + pad_y + @as(i32, @intCast(i)) * row_h;
+            const enabled = i != 0 or can_copy;
+            if (menu.hover == i and enabled) {
+                try self.renderer.drawRect(r.x + 4, ry, r.w - 8, row_h - 2, sel_bg, 1.0);
+            }
+            const color = if (enabled) fg else muted;
+            try self.renderer.drawText(r.x + pad_x, ry + 4, label, color);
+        }
+    }
+
+    fn closeContextMenu(self: *App) void {
+        self.context_menu = null;
+    }
+
+    fn openContextMenu(self: *App, fb_x: i32, fb_y: i32) void {
+        self.context_menu = .{ .x = fb_x, .y = fb_y, .hover = 1 };
+    }
+
+    fn runContextMenuItem(self: *App, index: usize) void {
+        switch (index) {
+            0 => self.copySelection(),
+            1 => self.pasteClipboard(),
+            else => {},
+        }
+        self.closeContextMenu();
+    }
+
     fn drawPalette(self: *App) !void {
-        const w: i32 = 520;
-        const row_h: i32 = 22;
-        const header: i32 = 56;
-        const visible = @min(self.palette.match_count, 12);
-        const h: i32 = header + @as(i32, @intCast(@max(1, visible))) * row_h + 36;
-        const x = @divTrunc(self.window.fb_width - w, 2);
-        const y = @max(40, @divTrunc(self.window.fb_height - h, 4));
-        try self.renderer.drawRect(x, y, w, h, Color.rgb(22, 26, 34), 0.98);
-        try self.renderer.drawText(x + 16, y + 12, "Command Palette", Color.rgb(230, 235, 240));
-        var qbuf: [80]u8 = undefined;
-        const qline = std.fmt.bufPrint(&qbuf, "> {s}", .{self.palette.querySlice()}) catch "> ";
-        try self.renderer.drawText(x + 16, y + 32, qline, Color.rgb(160, 200, 255));
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+        const ui = ui_scale.uiScale(fb_w, fb_h);
+        const title_s = ui * 1.2;
+        const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const cw = ui_scale.scaled(base_cw, ui);
+        const ch = ui_scale.scaled(base_ch, ui);
+        const title_ch = ui_scale.scaled(base_ch, title_s);
+
+        // Dim the scene so the palette reads as a focused overlay.
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.48);
+
+        const pad_x = @max(cw + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
+        const pad_y = @max(@divTrunc(ch, 2) + 6, @as(i32, @intFromFloat(@round(18.0 * ui))));
+        const row_h = ch + @divTrunc(ch, 2) + @max(4, @divTrunc(ch, 5));
+        const title_h = title_ch + @divTrunc(ch, 3);
+        const search_h = ch + @divTrunc(ch, 2) + @max(8, @divTrunc(ch, 4));
+        const footer_h = ch + pad_y;
+        const gap = @max(@divTrunc(ch, 2), @as(i32, @intFromFloat(@round(12.0 * ui))));
+        const accent_h = @max(2, @divTrunc(ch, 10));
+
+        const w = ui_scale.panelWidth(fb_w, cw, 52, @as(i32, @intFromFloat(@round(560.0 * ui))));
+        const chrome = title_h + search_h + footer_h + gap * 3 + pad_y * 2;
+        const max_rows_by_height = @max(1, @divTrunc(fb_h - chrome - ch * 2, row_h));
+        const max_visible: usize = @min(16, @as(usize, @intCast(max_rows_by_height)));
+
+        var start: usize = 0;
+        if (self.palette.match_count > 0 and self.palette.selected >= max_visible) {
+            start = self.palette.selected + 1 - max_visible;
+        }
+        const visible = if (self.palette.match_count == 0)
+            @as(usize, 1)
+        else
+            @min(self.palette.match_count - start, max_visible);
+
+        const list_h = @as(i32, @intCast(visible)) * row_h;
+        const h = pad_y + title_h + search_h + gap + list_h + footer_h;
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @max(ch * 2, @divTrunc(fb_h - h, 6));
+
+        const panel = Color.rgb(22, 26, 34);
+        const field = Color.rgb(14, 17, 24);
+        const fg = Color.rgb(230, 235, 240);
+        const muted = Color.rgb(140, 150, 165);
+        const dim = Color.rgb(100, 110, 125);
+        const accent = Color.rgb(90, 175, 220);
+        const sel_bg = Color.rgb(36, 48, 64);
+        const rule = Color.rgb(40, 48, 60);
+
+        try self.renderer.drawRect(x, y, w, h, panel, 0.98);
+        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.65);
+
+        var cy = y + pad_y;
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Command Palette", fg, title_s);
+        const kbd = "Ctrl+Shift+P";
+        const kbd_x = x + w - pad_x - @as(i32, @intCast(kbd.len)) * cw;
+        try self.renderer.drawTextScaled(kbd_x, cy + @divTrunc(title_ch - ch, 2), kbd, dim, ui);
+        cy += title_h;
+
+        // Search field
+        try self.renderer.drawRect(x + pad_x - 4, cy - 4, w - pad_x * 2 + 8, search_h, field, 1.0);
+        try self.renderer.drawRect(x + pad_x - 4, cy - 4, accent_h, search_h, accent, 0.35);
+        var qbuf: [96]u8 = undefined;
+        const query = self.palette.querySlice();
+        const qline = if (query.len == 0)
+            "Type to filter commands..."
+        else
+            (std.fmt.bufPrint(&qbuf, "> {s}", .{query}) catch "> ");
+        const qcolor = if (query.len == 0) dim else accent;
+        try self.renderer.drawTextScaled(x + pad_x + 8, cy + @divTrunc(search_h - ch, 2) - 2, qline, qcolor, ui);
+        cy += search_h + gap;
+
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
 
         if (self.palette.match_count == 0) {
-            try self.renderer.drawText(x + 16, y + header, "No matching commands", Color.rgb(140, 150, 160));
+            try self.renderer.drawTextScaled(x + pad_x, cy + @divTrunc(row_h - ch, 2), "No matching commands", muted, ui);
         } else {
+            const hint_reserve = cw * 18;
+            const label_max_cols = @max(12, @divTrunc(w - pad_x * 2 - hint_reserve - cw * 2, cw));
+
             var i: usize = 0;
             while (i < visible) : (i += 1) {
-                const entry = self.palette.items[self.palette.matches[i]];
-                const ry = y + header + @as(i32, @intCast(i)) * row_h;
-                if (i == self.palette.selected) {
-                    try self.renderer.drawRect(x + 8, ry, w - 16, row_h, Color.rgb(50, 80, 120), 1.0);
+                const mi = start + i;
+                const entry = self.palette.items[self.palette.matches[mi]];
+                const ry = cy + @as(i32, @intCast(i)) * row_h;
+                const text_y = ry + @divTrunc(row_h - ch, 2);
+
+                if (mi == self.palette.selected) {
+                    try self.renderer.drawRect(x + 10, ry, w - 20, row_h - 2, sel_bg, 1.0);
+                    try self.renderer.drawRect(x + 10, ry, @max(3, @divTrunc(cw, 4)), row_h - 2, accent, 1.0);
                 }
-                try self.renderer.drawText(x + 20, ry + 4, entry.label[0..@min(entry.label.len, 36)], Color.rgb(220, 225, 230));
+
+                const label_len = @min(entry.label.len, @as(usize, @intCast(label_max_cols)));
+                try self.renderer.drawTextScaled(x + pad_x + 8, text_y, entry.label[0..label_len], fg, ui);
+
                 if (entry.hint.len > 0) {
-                    const hx = x + w - 8 - @as(i32, @intCast(@min(entry.hint.len, 18))) * @as(i32, @intFromFloat(self.renderer.cell_w));
-                    try self.renderer.drawText(hx, ry + 4, entry.hint[0..@min(entry.hint.len, 18)], Color.rgb(120, 130, 145));
+                    const hint_len = @min(entry.hint.len, 18);
+                    const hx = x + w - pad_x - @as(i32, @intCast(hint_len)) * cw;
+                    try self.renderer.drawTextScaled(hx, text_y, entry.hint[0..hint_len], muted, ui);
                 }
             }
         }
-        try self.renderer.drawText(x + 16, y + h - 24, "Enter run  |  Esc close", Color.rgb(130, 140, 155));
+
+        var foot: [64]u8 = undefined;
+        const foot_line = if (self.palette.query_len > 0 and self.palette.match_count > 0)
+            (std.fmt.bufPrint(&foot, "{d} matches   Enter run   Esc close", .{self.palette.match_count}) catch "Enter run   Esc close")
+        else
+            "Up/Down move   Enter run   Esc close";
+        try self.renderer.drawTextScaled(x + pad_x, y + h - footer_h + @divTrunc(pad_y, 2), foot_line, dim, ui);
+    }
+
+    fn drawSearch(self: *App) !void {
+        const cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.45);
+
+        const pad_x = @max(20, cw + 8);
+        const pad_y = @max(16, @divTrunc(ch, 2) + 6);
+        const row_h = ch + @divTrunc(ch, 2) + 4;
+        const title_h = ch + 6;
+        const search_h = ch + @divTrunc(ch, 2) + 8;
+        const mode_h = ch + 8;
+        const footer_h = ch + pad_y;
+        const gap = @max(10, @divTrunc(ch, 2));
+
+        const max_w = fb_w - cw * 4;
+        const w = @min(@max(cw * 52, 560), max_w);
+        const max_rows_by_height = @max(1, @divTrunc(fb_h - title_h - search_h - mode_h - footer_h - gap * 4 - 80, row_h));
+        const max_visible: usize = @min(12, @as(usize, @intCast(max_rows_by_height)));
+
+        const hit_n = self.search.hitCount();
+        var start: usize = 0;
+        if (hit_n > 0 and self.search.selected >= max_visible) {
+            start = self.search.selected + 1 - max_visible;
+        }
+        const visible = if (hit_n == 0) @as(usize, 1) else @min(hit_n - start, max_visible);
+        const list_h = @as(i32, @intCast(visible)) * row_h;
+        const h = pad_y + title_h + mode_h + search_h + gap + list_h + footer_h;
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @max(ch * 2, @divTrunc(fb_h - h, 5));
+
+        const panel = Color.rgb(22, 26, 34);
+        const fg = Color.rgb(230, 235, 240);
+        const muted = Color.rgb(140, 150, 165);
+        const dim = Color.rgb(100, 110, 125);
+        const accent = Color.rgb(90, 175, 220);
+        const sel_bg = Color.rgb(36, 48, 64);
+
+        try self.renderer.drawRect(x, y, w, h, panel, 0.98);
+        try self.renderer.drawRect(x, y, w, 2, accent, 0.55);
+
+        var cy = y + pad_y;
+        try self.renderer.drawText(x + pad_x, cy, "Search", fg);
+        cy += title_h;
+
+        // Mode tabs
+        const term_label = if (self.search.mode == .terminal) "[ Terminal ]" else "  Terminal  ";
+        const files_label = if (self.search.mode == .files) "[ Files ]" else "  Files  ";
+        try self.renderer.drawText(x + pad_x, cy, term_label, if (self.search.mode == .terminal) accent else muted);
+        try self.renderer.drawText(x + pad_x + cw * 14, cy, files_label, if (self.search.mode == .files) accent else muted);
+        try self.renderer.drawText(x + w - pad_x - cw * 12, cy, "Tab switch", dim);
+        cy += mode_h;
+
+        try self.renderer.drawRect(x + pad_x - 4, cy - 4, w - pad_x * 2 + 8, search_h, Color.rgb(16, 19, 26), 1.0);
+        var qbuf: [96]u8 = undefined;
+        const query = self.search.querySlice();
+        const placeholder = if (self.search.mode == .terminal)
+            "Find in terminal..."
+        else
+            "Find files in workspace...";
+        const qline = if (query.len == 0) placeholder else (std.fmt.bufPrint(&qbuf, "> {s}", .{query}) catch "> ");
+        try self.renderer.drawText(x + pad_x + 4, cy + @divTrunc(search_h - ch, 2) - 2, qline, if (query.len == 0) dim else accent);
+        cy += search_h + gap;
+
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
+
+        if (query.len == 0) {
+            const hint = if (self.search.mode == .terminal)
+                "Type to search scrollback and the visible screen"
+            else
+                "Type to search file names in the opened folder";
+            try self.renderer.drawText(x + pad_x, cy + @divTrunc(row_h - ch, 2), hint, muted);
+        } else if (hit_n == 0) {
+            try self.renderer.drawText(x + pad_x, cy + @divTrunc(row_h - ch, 2), "No matches", muted);
+        } else {
+            const label_max = @max(12, @divTrunc(w - pad_x * 2 - cw * 4, cw));
+            var i: usize = 0;
+            while (i < visible) : (i += 1) {
+                const mi = start + i;
+                const ry = cy + @as(i32, @intCast(i)) * row_h;
+                const text_y = ry + @divTrunc(row_h - ch, 2);
+                if (mi == self.search.selected) {
+                    try self.renderer.drawRect(x + 10, ry, w - 20, row_h - 2, sel_bg, 1.0);
+                    try self.renderer.drawRect(x + 10, ry, 3, row_h - 2, accent, 1.0);
+                }
+
+                var line_buf: [128]u8 = undefined;
+                const line: []const u8 = switch (self.search.mode) {
+                    .terminal => blk: {
+                        const hit = self.search.term_hits[mi];
+                        break :blk (std.fmt.bufPrint(&line_buf, "line {d}  col {d}", .{ hit.abs_row + 1, hit.col + 1 }) catch "hit");
+                    },
+                    .files => self.search.file_hits[mi],
+                };
+                const shown = line[0..@min(line.len, @as(usize, @intCast(label_max)))];
+                try self.renderer.drawText(x + pad_x + 6, text_y, shown, fg);
+            }
+        }
+
+        var foot: [80]u8 = undefined;
+        const foot_line = if (hit_n > 0)
+            (std.fmt.bufPrint(&foot, "{d} matches   Enter open   Esc close", .{hit_n}) catch "Enter open   Esc close")
+        else
+            "Up/Down move   Tab mode   Esc close";
+        try self.renderer.drawText(x + pad_x, y + h - footer_h + @divTrunc(pad_y, 2), foot_line, dim);
+    }
+
+    fn openSearch(self: *App) void {
+        // Prefer searching in a live terminal; start one if needed.
+        self.ensureShell() catch {
+            self.setStatus("failed to start shell for search");
+            return;
+        };
+        const root = self.sessionCwd();
+        self.search.open(self.allocator, root);
+        self.ui = .search;
+        self.clearStatus();
+        self.refreshSearchResults();
+    }
+
+    fn refreshSearchResults(self: *App) void {
+        switch (self.search.mode) {
+            .terminal => {
+                if (self.focused()) |s| {
+                    self.search.refreshTerminal(&s.screen);
+                    self.search.revealSelectedTerminal(&s.screen);
+                } else {
+                    self.search.term_count = 0;
+                }
+            },
+            .files => {
+                // Keep root in sync with the focused session cwd.
+                if (self.focused()) |s| {
+                    self.search.setRoot(self.allocator, s.cwd) catch {};
+                }
+                self.search.refreshFiles(self.allocator, self.io);
+            },
+        }
+    }
+
+    fn handleSearchKey(self: *App, key: c_int) void {
+        switch (key) {
+            c.GLFW_KEY_ESCAPE => {
+                self.search.close(self.allocator);
+                self.leaveOverlay();
+            },
+            c.GLFW_KEY_TAB => {
+                self.search.toggleMode();
+                self.refreshSearchResults();
+            },
+            c.GLFW_KEY_UP => {
+                self.search.moveUp();
+                if (self.search.mode == .terminal) {
+                    if (self.focused()) |s| self.search.revealSelectedTerminal(&s.screen);
+                }
+            },
+            c.GLFW_KEY_DOWN => {
+                self.search.moveDown();
+                if (self.search.mode == .terminal) {
+                    if (self.focused()) |s| self.search.revealSelectedTerminal(&s.screen);
+                }
+            },
+            c.GLFW_KEY_BACKSPACE => {
+                self.search.backspace();
+                self.refreshSearchResults();
+            },
+            c.GLFW_KEY_ENTER => self.activateSearchSelection(),
+            else => {},
+        }
+    }
+
+    fn activateSearchSelection(self: *App) void {
+        switch (self.search.mode) {
+            .terminal => {
+                if (self.search.term_count == 0) return;
+                if (self.focused()) |s| {
+                    self.search.revealSelectedTerminal(&s.screen);
+                }
+                // Keep search open so the user can jump between hits.
+                var buf: [48]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "match {d}/{d}", .{ self.search.selected + 1, self.search.term_count }) catch "match";
+                self.setStatus(msg);
+            },
+            .files => {
+                const rel = self.search.selectedFilePath() orelse {
+                    self.setStatus("no file selected");
+                    return;
+                };
+                // Insert relative path into the shell for cd/open/edit.
+                if (self.focused()) |s| {
+                    s.write(rel);
+                    s.write(" ");
+                }
+                self.search.close(self.allocator);
+                self.ui = .normal;
+                var buf: [96]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "inserted {s}", .{rel}) catch "file inserted";
+                self.setStatus(msg);
+            },
+        }
     }
 
     fn drawSshPrompt(self: *App) !void {
@@ -405,46 +904,260 @@ pub const App = struct {
     }
 
     fn drawSettings(self: *App) !void {
-        const w: i32 = 520;
-        const h: i32 = 280;
-        const x = @divTrunc(self.window.fb_width - w, 2);
-        const y = @divTrunc(self.window.fb_height - h, 2);
-        const panel = Color.rgb(24, 28, 36);
-        const fg = Color.rgb(230, 235, 240);
-        const muted = Color.rgb(160, 170, 185);
-        const accent = Color.rgb(90, 175, 220);
-        const sel = Color.rgb(40, 55, 75);
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+        const ui = ui_scale.uiScale(fb_w, fb_h);
+        const title_s = ui * 1.25;
+        const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const cw = ui_scale.scaled(base_cw, ui);
+        const ch = ui_scale.scaled(base_ch, ui);
+        const title_ch = ui_scale.scaled(base_ch, title_s);
 
-        try self.renderer.drawRect(x, y, w, h, panel, 0.97);
-        try self.renderer.drawText(x + 16, y + 14, "Appearance", fg);
-        try self.renderer.drawText(x + 16, y + 36, "How your terminal looks & which shell runs", muted);
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.48);
+
+        const pad_x = @max(cw + 10, @as(i32, @intFromFloat(@round(26.0 * ui))));
+        const pad_y = @max(@divTrunc(ch, 2) + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
+        const row_h = ch + @divTrunc(ch, 2) + @max(8, @divTrunc(ch, 4));
+        const title_h = title_ch + @divTrunc(ch, 4);
+        const subtitle_h = ch + @divTrunc(ch, 2);
+        const gap = @max(@divTrunc(ch, 2), @as(i32, @intFromFloat(@round(14.0 * ui))));
+        const footer_lines = 3;
+        const footer_h = footer_lines * (ch + @max(4, @divTrunc(ch, 5))) + pad_y;
+        const accent_h = @max(2, @divTrunc(ch, 10));
+
+        const w = ui_scale.panelWidth(fb_w, cw, 48, @as(i32, @intFromFloat(@round(540.0 * ui))));
+        const rows_n: i32 = 5;
+        const list_h = rows_n * row_h;
+        const h = pad_y + title_h + subtitle_h + gap + list_h + gap + footer_h;
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @max(ch * 2, @divTrunc(fb_h - h, 2));
+
+        const panel = Color.rgb(22, 26, 34);
+        const fg = Color.rgb(230, 235, 240);
+        const muted = Color.rgb(150, 160, 175);
+        const dim = Color.rgb(100, 110, 125);
+        const accent = Color.rgb(90, 175, 220);
+        const sel_bg = Color.rgb(36, 48, 64);
+        const rule = Color.rgb(40, 48, 60);
+
+        try self.renderer.drawRect(x, y, w, h, panel, 0.98);
+        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.65);
+
+        var cy = y + pad_y;
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Appearance", fg, title_s);
+        cy += title_h;
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Theme, text color, cursor, and shell for new tabs", muted, ui);
+        cy += subtitle_h + gap;
+
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
 
         const rows = [_]struct { label: []const u8, value: []const u8 }{
             .{ .label = "Theme", .value = self.config.theme_name },
+            .{ .label = "Text", .value = self.config.fgDisplay() },
             .{ .label = "Cursor", .value = self.config.cursor_style.name() },
             .{ .label = "Blink", .value = if (self.config.cursor_blink) "on" else "off" },
             .{ .label = "Shell", .value = self.config.shellDisplay() },
         };
 
-        var line: [96]u8 = undefined;
+        var value_buf: [96]u8 = undefined;
+        const value_col_w = @divTrunc(w * 11, 20);
         for (rows, 0..) |row, i| {
-            const ry = y + 64 + @as(i32, @intCast(i)) * 28;
-            if (i == self.settings_row) {
-                try self.renderer.drawRect(x + 10, ry - 2, w - 20, 24, sel, 1.0);
-                try self.renderer.drawRect(x + 10, ry - 2, 3, 24, accent, 1.0);
+            const ry = cy + @as(i32, @intCast(i)) * row_h;
+            const text_y = ry + @divTrunc(row_h - ch, 2);
+            const selected = i == self.settings_row;
+
+            if (selected) {
+                try self.renderer.drawRect(x + 10, ry, w - 20, row_h - 2, sel_bg, 1.0);
+                try self.renderer.drawRect(x + 10, ry, @max(3, @divTrunc(cw, 4)), row_h - 2, accent, 1.0);
             }
-            const text = std.fmt.bufPrint(&line, "{s}  {s}", .{ row.label, row.value }) catch row.label;
-            try self.renderer.drawText(x + 20, ry + 2, text, if (i == self.settings_row) fg else muted);
+
+            try self.renderer.drawTextScaled(x + pad_x + 8, text_y, row.label, if (selected) fg else muted, ui);
+
+            const value_text = if (selected)
+                (std.fmt.bufPrint(&value_buf, "< {s} >", .{row.value}) catch row.value)
+            else
+                row.value;
+            const max_val_cols = @max(8, @divTrunc(value_col_w - pad_x, cw));
+            const value_len = @min(value_text.len, @as(usize, @intCast(max_val_cols)));
+            const vx = x + w - pad_x - @as(i32, @intCast(value_len)) * cw;
+            try self.renderer.drawTextScaled(vx, text_y, value_text[0..value_len], if (selected) accent else muted, ui);
         }
 
-        const t_font = std.fmt.bufPrint(&line, "Font {d:.0}pt   padding {d}x{d}   Ctrl+=/-/0", .{
+        cy += list_h + gap;
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
+
+        var info: [96]u8 = undefined;
+        const font_line = std.fmt.bufPrint(&info, "Font  {d:.0}pt    padding  {d}x{d}", .{
             self.renderer.font_size,
             self.config.padding_x,
             self.config.padding_y,
         }) catch "";
-        try self.renderer.drawText(x + 16, y + h - 72, t_font, muted);
-        try self.renderer.drawText(x + 16, y + h - 50, "↑↓ select   ←→ change   S save to config.toml", muted);
-        try self.renderer.drawText(x + 16, y + h - 28, "Esc close   (shell applies to new tabs)", muted);
+        try self.renderer.drawTextScaled(x + pad_x, cy, font_line, muted, ui);
+        cy += ch + @max(6, @divTrunc(ch, 4));
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Up/Down select    Left/Right change    S save", dim, ui);
+        cy += ch + @max(6, @divTrunc(ch, 4));
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Esc close    Ctrl+=/-/0 font size", dim, ui);
+    }
+
+    fn drawPlugins(self: *App) !void {
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+        const ui = ui_scale.uiScale(fb_w, fb_h);
+        const title_s = ui * 1.25;
+        const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const cw = ui_scale.scaled(base_cw, ui);
+        const ch = ui_scale.scaled(base_ch, ui);
+        const title_ch = ui_scale.scaled(base_ch, title_s);
+
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.48);
+
+        const pad_x = @max(cw + 10, @as(i32, @intFromFloat(@round(26.0 * ui))));
+        const pad_y = @max(@divTrunc(ch, 2) + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
+        const row_gap = @max(4, @divTrunc(ch, 6));
+        // Two-line rows: name/version + description.
+        const row_h = ch * 2 + @divTrunc(ch, 2) + row_gap;
+        const title_h = title_ch + @divTrunc(ch, 4);
+        const subtitle_h = ch + @divTrunc(ch, 2);
+        const gap = @max(@divTrunc(ch, 2), @as(i32, @intFromFloat(@round(14.0 * ui))));
+        const footer_lines = 3;
+        const plugin_n = self.plugins.count();
+        const accent_h = @max(2, @divTrunc(ch, 10));
+
+        const w = ui_scale.panelWidth(fb_w, cw, 52, @as(i32, @intFromFloat(@round(580.0 * ui))));
+
+        const header_h = pad_y + title_h + subtitle_h + gap + (ch + @max(6, @divTrunc(ch, 4))) + gap;
+        const footer_h = footer_lines * (ch + @max(6, @divTrunc(ch, 4))) + pad_y;
+        const avail_list = @max(row_h, fb_h - header_h - footer_h - ch * 2);
+        const max_visible: usize = @max(1, @as(usize, @intCast(@divTrunc(avail_list, row_h))));
+        const list_rows = @max(@as(usize, 1), @min(@max(plugin_n, 1), max_visible));
+        const list_h = @as(i32, @intCast(list_rows)) * row_h;
+        const h = header_h + list_h + gap + footer_h;
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @max(ch, @divTrunc(fb_h - h, 2));
+
+        const panel = Color.rgb(22, 26, 34);
+        const fg = Color.rgb(230, 235, 240);
+        const muted = Color.rgb(150, 160, 175);
+        const dim = Color.rgb(100, 110, 125);
+        const accent = Color.rgb(90, 175, 220);
+        const sel_bg = Color.rgb(36, 48, 64);
+        const rule = Color.rgb(40, 48, 60);
+        const on_col = Color.rgb(120, 200, 140);
+        const off_col = Color.rgb(160, 110, 110);
+
+        try self.renderer.drawRect(x, y, w, h, panel, 0.98);
+        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.65);
+
+        var cy = y + pad_y;
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Plugins", fg, title_s);
+        cy += title_h;
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Shortcuts, themes, and commands you can edit", muted, ui);
+        cy += subtitle_h;
+
+        try self.renderer.drawRect(x + pad_x - 4, cy, w - pad_x * 2 + 8, 1, rule, 0.9);
+        cy += gap;
+
+        var count_buf: [48]u8 = undefined;
+        const count_line = if (plugin_n == 0)
+            "No plugins installed"
+        else
+            (std.fmt.bufPrint(&count_buf, "{d} installed", .{plugin_n}) catch "installed");
+        try self.renderer.drawTextScaled(x + pad_x, cy, count_line, muted, ui);
+        if (plugin_n < 6) {
+            const tip = "I  install pack";
+            const tip_x = x + w - pad_x - @as(i32, @intCast(tip.len)) * cw;
+            try self.renderer.drawTextScaled(tip_x, cy, tip, accent, ui);
+        }
+        cy += ch + @max(6, @divTrunc(ch, 4));
+
+        const list_top = cy;
+        if (plugin_n == 0) {
+            const empty_y = list_top + @divTrunc(list_h - ch * 2, 2);
+            try self.renderer.drawTextScaled(x + pad_x + 8, empty_y, "Press I to install the bundled pack", fg, ui);
+            try self.renderer.drawTextScaled(x + pad_x + 8, empty_y + ch + 4, "hello · git · devtools · themes · workflow · keys", dim, ui);
+        } else {
+            if (self.plugin_row >= plugin_n) self.plugin_row = plugin_n - 1;
+            var start: usize = 0;
+            if (self.plugin_row >= max_visible) {
+                start = self.plugin_row + 1 - max_visible;
+            }
+            const visible = @min(plugin_n - start, max_visible);
+            var i: usize = 0;
+            while (i < visible) : (i += 1) {
+                const mi = start + i;
+                const p = self.plugins.plugins.items[mi];
+                const ry = list_top + @as(i32, @intCast(i)) * row_h;
+                const selected = mi == self.plugin_row;
+
+                if (selected) {
+                    try self.renderer.drawRect(x + 10, ry, w - 20, row_h - row_gap, sel_bg, 1.0);
+                    try self.renderer.drawRect(x + 10, ry, @max(3, @divTrunc(cw, 4)), row_h - row_gap, accent, 1.0);
+                }
+
+                const name_y = ry + @divTrunc(ch, 3);
+                const desc_y = name_y + ch + 2;
+                const text_x = x + pad_x + 8;
+
+                // Name + version on the first line.
+                try self.renderer.drawTextScaled(text_x, name_y, p.name, if (selected) fg else muted, ui);
+
+                var ver_buf: [24]u8 = undefined;
+                const ver = std.fmt.bufPrint(&ver_buf, "v{s}", .{p.version}) catch "";
+                const name_w = @as(i32, @intCast(p.name.len)) * cw;
+                try self.renderer.drawTextScaled(text_x + name_w + cw, name_y, ver, dim, ui);
+
+                // Compact capability counts when selected (skip zeros).
+                if (selected) {
+                    var meta_buf: [48]u8 = undefined;
+                    var meta_len: usize = 0;
+                    const append = struct {
+                        fn go(buf: []u8, len: *usize, label: []const u8, n: usize) void {
+                            if (n == 0 or len.* >= buf.len) return;
+                            if (len.* > 0 and len.* + 2 < buf.len) {
+                                buf[len.*] = ' ';
+                                buf[len.* + 1] = ' ';
+                                len.* += 2;
+                            }
+                            const piece = std.fmt.bufPrint(buf[len.*..], "{d} {s}", .{ n, label }) catch return;
+                            len.* += piece.len;
+                        }
+                    }.go;
+                    append(&meta_buf, &meta_len, "cmd", p.commands.len);
+                    append(&meta_buf, &meta_len, "theme", p.themes.len);
+                    append(&meta_buf, &meta_len, "bind", p.bindings.len);
+                    if (meta_len > 0) {
+                        const meta_x = text_x + name_w + cw * (@as(i32, @intCast(ver.len)) + 2);
+                        const state_reserve = cw * 6;
+                        const meta_max = @max(0, (x + w - pad_x - state_reserve) - meta_x);
+                        const meta_chars = @min(meta_len, @as(usize, @intCast(@divTrunc(meta_max, cw))));
+                        if (meta_chars > 0) {
+                            try self.renderer.drawTextScaled(meta_x, name_y, meta_buf[0..meta_chars], dim, ui);
+                        }
+                    }
+                }
+
+                // Description on the second line.
+                const desc = if (p.description.len > 0) p.description else "No description";
+                const desc_max = @max(8, @divTrunc(w - pad_x * 2 - cw * 4, cw));
+                const desc_shown = desc[0..@min(desc.len, @as(usize, @intCast(desc_max)))];
+                try self.renderer.drawTextScaled(text_x, desc_y, desc_shown, if (selected) muted else dim, ui);
+
+                // Fixed-width toggle so columns stay aligned.
+                const state = if (p.enabled) "ON " else "OFF";
+                const state_x = x + w - pad_x - @as(i32, @intCast(state.len)) * cw;
+                try self.renderer.drawTextScaled(state_x, name_y, state, if (p.enabled) on_col else off_col, ui);
+            }
+        }
+
+        cy = y + h - footer_h;
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
+        try self.renderer.drawTextScaled(x + pad_x, cy, "~/.config/orbit/plugins/<name>/plugin.toml", dim, ui);
+        cy += ch + @max(6, @divTrunc(ch, 4));
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Up/Down select    Space toggle    R reload", dim, ui);
+        cy += ch + @max(6, @divTrunc(ch, 4));
+        try self.renderer.drawTextScaled(x + pad_x, cy, "I install/update pack    Esc close", dim, ui);
     }
 
     fn drawWorkspacePicker(self: *App) !void {
@@ -455,11 +1168,11 @@ pub const App = struct {
         const x = @divTrunc(self.window.fb_width - w, 2);
         const y = @divTrunc(self.window.fb_height - h, 2);
         try self.renderer.drawRect(x, y, w, h, Color.rgb(24, 28, 36), 0.97);
-        try self.renderer.drawText(x + 16, y + 12, "Open Workspace", Color.rgb(230, 235, 240));
+        try self.renderer.drawText(x + 16, y + 12, "Load Saved Workspace", Color.rgb(230, 235, 240));
         try self.renderer.drawText(x + 16, y + h - 28, "Enter open  |  Esc close  |  Del delete", Color.rgb(140, 150, 160));
 
         if (self.workspaces.names.items.len == 0) {
-            try self.renderer.drawText(x + 16, y + header + 8, "(no workspaces yet — Ctrl+Shift+S to save)", Color.rgb(160, 170, 180));
+            try self.renderer.drawText(x + 16, y + header + 8, "(none saved yet — Ctrl+Shift+S to save)", Color.rgb(160, 170, 180));
             return;
         }
         for (self.workspaces.names.items, 0..) |name, i| {
@@ -490,8 +1203,7 @@ pub const App = struct {
 
     fn sessionCwd(self: *App) []const u8 {
         if (self.focused()) |s| return s.cwd;
-        if (std.c.getenv("HOME")) |h| return std.mem.span(h);
-        return "/";
+        return @import("../platform/paths.zig").defaultCwd();
     }
 
     fn onChar(ptr: *anyopaque, codepoint: u32) void {
@@ -503,7 +1215,7 @@ pub const App = struct {
             },
             .search => {
                 self.search.inputChar(codepoint);
-                if (self.focused()) |s| self.search.findNext(&s.screen);
+                self.refreshSearchResults();
                 return;
             },
             .palette => {
@@ -513,7 +1225,14 @@ pub const App = struct {
             .ssh_prompt => {
                 if (codepoint < 32 or codepoint > 126) return;
                 if (self.ssh_host_len + 1 >= self.ssh_host.len) return;
-                self.ssh_host[self.ssh_host_len] = @intCast(codepoint);
+                const ch: u8 = @intCast(codepoint);
+                // Only hostname / user@host / :port characters (no shell metacharacters).
+                const ok = (ch >= 'a' and ch <= 'z') or
+                    (ch >= 'A' and ch <= 'Z') or
+                    (ch >= '0' and ch <= '9') or
+                    ch == '.' or ch == '-' or ch == '_' or ch == '@' or ch == ':';
+                if (!ok) return;
+                self.ssh_host[self.ssh_host_len] = ch;
                 self.ssh_host_len += 1;
                 return;
             },
@@ -521,12 +1240,13 @@ pub const App = struct {
                 if (codepoint < 32 or codepoint > 126) return;
                 if (self.save_name_len + 1 >= self.save_name.len) return;
                 const ch: u8 = @intCast(codepoint);
-                if (ch == '/' or ch == '\\' or ch == '"' or ch == ' ') return;
+                // Keep workspace names as a single path segment (no traversal / shell meta).
+                if (ch == '/' or ch == '\\' or ch == '"' or ch == ' ' or ch == ';') return;
                 self.save_name[self.save_name_len] = ch;
                 self.save_name_len += 1;
                 return;
             },
-            .ws_picker, .settings => return,
+            .ws_picker, .settings, .plugins => return,
             .normal => {},
         }
         const session = self.focused() orelse return;
@@ -542,20 +1262,26 @@ pub const App = struct {
         const ctrl = (mods & c.GLFW_MOD_CONTROL) != 0;
         const shift = (mods & c.GLFW_MOD_SHIFT) != 0;
         const super = (mods & c.GLFW_MOD_SUPER) != 0;
+        const alt = (mods & c.GLFW_MOD_ALT) != 0;
+        const bmods: bindings.Mods = .{ .ctrl = ctrl, .shift = shift, .super = super, .alt = alt };
 
-        // Quit anywhere: Cmd+Q (macOS) / Ctrl+Q
-        if ((super or ctrl) and !shift and key == c.GLFW_KEY_Q) {
-            self.requestQuit();
-            return;
-        }
-        // Close tab / quit from home: Cmd+W or Ctrl+Shift+W
-        if ((super and !shift and key == c.GLFW_KEY_W) or (ctrl and shift and key == c.GLFW_KEY_W)) {
-            self.closeTabOrQuit();
-            return;
+        // Global: quit / close tab — must match the *actual* key, not only modifiers.
+        // (Matching "w" while Ctrl is held used to close on every Ctrl chord.)
+        if (glfwKeyName(key)) |name| {
+            if (bindings.match(name, bmods)) |act| {
+                if (act == .quit) {
+                    self.requestQuit();
+                    return;
+                }
+                if (act == .close_tab) {
+                    self.closeTabOrQuit();
+                    return;
+                }
+            }
         }
 
         if (self.ui == .home) {
-            self.handleHomeKey(key, ctrl, shift);
+            self.handleHomeKey(key, ctrl, shift, super);
             return;
         }
         if (self.ui == .palette) {
@@ -570,6 +1296,10 @@ pub const App = struct {
             self.handleSettingsKey(key);
             return;
         }
+        if (self.ui == .plugins) {
+            self.handlePluginsKey(key);
+            return;
+        }
         if (self.ui == .ws_picker) {
             self.handlePickerKey(key);
             return;
@@ -579,111 +1309,108 @@ pub const App = struct {
             return;
         }
         if (self.ui == .search) {
-            if (key == c.GLFW_KEY_ESCAPE) {
-                self.search.close();
-                self.ui = .normal;
-                return;
-            }
-            if (key == c.GLFW_KEY_BACKSPACE) {
-                self.search.backspace();
-                return;
-            }
-            if (key == c.GLFW_KEY_ENTER) {
-                if (self.focused()) |s| self.search.findNext(&s.screen);
-                return;
-            }
+            self.handleSearchKey(key);
             return;
         }
 
-        if (ctrl and shift) {
-            switch (key) {
-                c.GLFW_KEY_H => {
-                    self.goHome();
-                    return;
-                },
-                c.GLFW_KEY_P => {
-                    self.rebuildPalette();
-                    self.palette.open();
-                    self.ui = .palette;
-                    self.status_len = 0;
-                    return;
-                },
-                c.GLFW_KEY_T => {
-                    self.newTab() catch {};
-                    return;
-                },
-                c.GLFW_KEY_D => {
-                    self.splitPane(.horizontal) catch {};
-                    return;
-                },
-                c.GLFW_KEY_E => {
-                    self.splitPane(.vertical) catch {};
-                    return;
-                },
-                c.GLFW_KEY_RIGHT_BRACKET => {
-                    self.tabs.next();
-                    return;
-                },
-                c.GLFW_KEY_LEFT_BRACKET => {
-                    self.tabs.prev();
-                    return;
-                },
-                c.GLFW_KEY_F => {
-                    self.search.open();
-                    self.ui = .search;
-                    return;
-                },
-                c.GLFW_KEY_O => {
-                    self.openPicker();
-                    return;
-                },
-                c.GLFW_KEY_S => {
-                    self.openSavePrompt();
-                    return;
-                },
-                else => {},
-            }
-        }
-
-        if (ctrl and key == c.GLFW_KEY_TAB) {
-            if (shift) self.tabs.prev() else self.tabs.next();
+        // Palette open is not a palette Action enum member.
+        if (ctrl and shift and key == c.GLFW_KEY_P) {
+            self.rebuildPalette();
+            self.palette.open();
+            self.ui = .palette;
+            self.clearStatus();
             return;
         }
 
-        // Font size: Ctrl/Cmd + = / - / 0  (also keypad +/-)
-        if ((ctrl or super) and !shift) {
-            switch (key) {
-                c.GLFW_KEY_EQUAL, c.GLFW_KEY_KP_ADD => {
-                    self.adjustFont(1.0);
-                    return;
-                },
-                c.GLFW_KEY_MINUS, c.GLFW_KEY_KP_SUBTRACT => {
-                    self.adjustFont(-1.0);
-                    return;
-                },
-                c.GLFW_KEY_0, c.GLFW_KEY_KP_0 => {
-                    self.resetFont();
-                    return;
-                },
-                else => {},
-            }
+        // Context menu: Esc closes without sending to the shell.
+        if (self.context_menu != null and key == c.GLFW_KEY_ESCAPE) {
+            self.closeContextMenu();
+            return;
         }
 
-        if ((ctrl or super) and key == c.GLFW_KEY_C and shift) {
+        // Clipboard — works the same idea on every OS:
+        //   macOS:           Cmd+C / Cmd+V
+        //   Windows / Linux: Ctrl+V always pastes; Ctrl+C copies when text is
+        //                    selected, otherwise still interrupts the shell.
+        //   All platforms:   Ctrl/Cmd+Shift+C / V (never conflicts with ^C)
+        if (super and !ctrl and !alt and key == c.GLFW_KEY_C) {
+            self.closeContextMenu();
             self.copySelection();
             return;
         }
-        if ((ctrl or super) and key == c.GLFW_KEY_V and shift) {
+        if (super and !ctrl and !alt and key == c.GLFW_KEY_V) {
+            self.closeContextMenu();
             self.pasteClipboard();
             return;
         }
-
-        if (ctrl and key == c.GLFW_KEY_PAGE_DOWN) {
-            if (self.tabs.current()) |tab| tab.layout.focusNext();
+        if ((ctrl or super) and shift and key == c.GLFW_KEY_C) {
+            self.closeContextMenu();
+            self.copySelection();
             return;
         }
+        if ((ctrl or super) and shift and key == c.GLFW_KEY_V) {
+            self.closeContextMenu();
+            self.pasteClipboard();
+            return;
+        }
+        // Primary Ctrl chords on Windows/Linux (and other non-macOS).
+        if (builtin.os.tag != .macos and ctrl and !shift and !super and !alt) {
+            if (key == c.GLFW_KEY_V) {
+                self.closeContextMenu();
+                self.pasteClipboard();
+                return;
+            }
+            if (key == c.GLFW_KEY_C) {
+                if (self.focused()) |s| {
+                    if (s.selection.active) {
+                        self.closeContextMenu();
+                        self.copySelection();
+                        return;
+                    }
+                }
+                // No selection → fall through so ^C still interrupts.
+            }
+        }
+
+        // Built-in chords from the shared bindings table (palette hints stay in sync).
+        if (glfwKeyName(key)) |name| {
+            if (bindings.match(name, bmods)) |act| {
+                self.runAction(act);
+                return;
+            }
+        }
+        // Keypad font shortcuts share equal/minus/0 actions.
+        if ((ctrl or super) and !shift) {
+            switch (key) {
+                c.GLFW_KEY_KP_ADD => {
+                    self.runAction(.font_larger);
+                    return;
+                },
+                c.GLFW_KEY_KP_SUBTRACT => {
+                    self.runAction(.font_smaller);
+                    return;
+                },
+                c.GLFW_KEY_KP_0 => {
+                    self.runAction(.font_reset);
+                    return;
+                },
+                else => {},
+            }
+        }
+
+        // Plugin shortcuts (after built-ins so Ctrl+Shift+P etc. stay reserved)
+        if (self.tryPluginBinding(key, ctrl, shift, super, alt)) return;
 
         const session = self.focused() orelse return;
+
+        // Forward Ctrl+A…Z to the PTY so the shell stays responsive (interrupt, EOF, …).
+        if (glfwKeyName(key)) |name| {
+            if (bindings.ctrlLetterToPty(name, bmods)) |byte| {
+                session.write(&.{byte});
+                return;
+            }
+        }
+
         switch (key) {
             c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER => session.write("\r"),
             c.GLFW_KEY_BACKSPACE => session.write(&.{0x7F}),
@@ -705,7 +1432,8 @@ pub const App = struct {
     fn goHome(self: *App) void {
         self.home = .{};
         self.ui = .home;
-        self.search.close();
+        self.closeContextMenu();
+        self.search.close(self.allocator);
         self.palette.close();
     }
 
@@ -742,13 +1470,14 @@ pub const App = struct {
             'O' => self.runHomeAction(.open_workspace),
             'P' => self.runHomeAction(.command_palette),
             'S' => self.runHomeAction(.settings),
+            'L' => self.runHomeAction(.plugins),
             'H' => self.runHomeAction(.help),
             'Q' => self.runHomeAction(.quit),
             else => {},
         }
     }
 
-    fn handleHomeKey(self: *App, key: c_int, ctrl: bool, shift: bool) void {
+    fn handleHomeKey(self: *App, key: c_int, ctrl: bool, shift: bool, super: bool) void {
         if (self.home.show_help) {
             switch (key) {
                 c.GLFW_KEY_ESCAPE, c.GLFW_KEY_H => self.home.closeHelp(),
@@ -768,6 +1497,10 @@ pub const App = struct {
             self.runHomeAction(.command_palette);
             return;
         }
+        if ((ctrl or super) and shift and key == c.GLFW_KEY_F) {
+            self.openSearch();
+            return;
+        }
         switch (key) {
             c.GLFW_KEY_UP => self.home.moveUp(),
             c.GLFW_KEY_DOWN => self.home.moveDown(),
@@ -776,11 +1509,13 @@ pub const App = struct {
             c.GLFW_KEY_2 => self.runHomeAction(.open_workspace),
             c.GLFW_KEY_3 => self.runHomeAction(.command_palette),
             c.GLFW_KEY_4 => self.runHomeAction(.settings),
-            c.GLFW_KEY_5 => self.runHomeAction(.help),
-            c.GLFW_KEY_6 => self.runHomeAction(.quit),
+            c.GLFW_KEY_5 => self.runHomeAction(.plugins),
+            c.GLFW_KEY_6 => self.runHomeAction(.help),
+            c.GLFW_KEY_7 => self.runHomeAction(.quit),
             c.GLFW_KEY_O => self.runHomeAction(.open_workspace),
             c.GLFW_KEY_P => self.runHomeAction(.command_palette),
             c.GLFW_KEY_S => self.runHomeAction(.settings),
+            c.GLFW_KEY_L => self.runHomeAction(.plugins),
             c.GLFW_KEY_H => self.runHomeAction(.help),
             c.GLFW_KEY_Q => self.runHomeAction(.quit),
             else => {},
@@ -797,7 +1532,7 @@ pub const App = struct {
                 self.ui = .normal;
             },
             .open_workspace => {
-                self.openPicker();
+                self.openFolderWorkspace();
             },
             .command_palette => {
                 self.rebuildPalette();
@@ -807,6 +1542,10 @@ pub const App = struct {
             .settings => {
                 self.settings_row = 0;
                 self.ui = .settings;
+            },
+            .plugins => {
+                self.plugin_row = 0;
+                self.ui = .plugins;
             },
             .help => self.home.openHelp(),
             .quit => self.requestQuit(),
@@ -894,11 +1633,11 @@ pub const App = struct {
             .focus_next_pane => {
                 if (self.tabs.current()) |tab| tab.layout.focusNext();
             },
-            .open_workspace => self.openPicker(),
+            .open_workspace => self.openFolderWorkspace(),
+            .load_saved_workspace => self.openPicker(),
             .save_workspace => self.openSavePrompt(),
             .search => {
-                self.search.open();
-                self.ui = .search;
+                self.openSearch();
             },
             .ssh => {
                 self.ssh_host_len = 0;
@@ -944,8 +1683,405 @@ pub const App = struct {
                 const msg = std.fmt.bufPrint(&buf, "plugins: {d} loaded", .{self.plugins.count()}) catch "plugins reloaded";
                 self.setStatus(msg);
             },
-            .list_plugins => self.showPluginList(),
+            .list_plugins => {
+                self.plugin_row = 0;
+                self.ui = .plugins;
+            },
         }
+    }
+
+    fn handlePluginsKey(self: *App, key: c_int) void {
+        switch (key) {
+            c.GLFW_KEY_ESCAPE => self.leaveOverlay(),
+            c.GLFW_KEY_UP => {
+                if (self.plugin_row > 0) self.plugin_row -= 1;
+            },
+            c.GLFW_KEY_DOWN => {
+                const n = self.plugins.count();
+                if (n > 0 and self.plugin_row + 1 < n) self.plugin_row += 1;
+            },
+            c.GLFW_KEY_ENTER, c.GLFW_KEY_SPACE => self.toggleSelectedPlugin(),
+            c.GLFW_KEY_R => self.reloadPluginsFromPanel(),
+            c.GLFW_KEY_I => self.installBundledPlugins(),
+            else => {},
+        }
+    }
+
+    fn toggleSelectedPlugin(self: *App) void {
+        if (self.plugin_row >= self.plugins.plugins.items.len) {
+            self.setStatus("no plugin selected");
+            return;
+        }
+        const p = &self.plugins.plugins.items[self.plugin_row];
+        p.enabled = !p.enabled;
+        self.rebuildPalette();
+        self.applyRendererHooks();
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "{s} {s}", .{ p.name, if (p.enabled) "enabled" else "disabled" }) catch "plugin toggled";
+        self.setStatus(msg);
+    }
+
+    fn reloadPluginsFromPanel(self: *App) void {
+        self.plugins.reload() catch {
+            self.setStatus("plugin reload failed");
+            return;
+        };
+        self.fireHooks(.on_load);
+        self.applyRendererHooks();
+        self.rebuildPalette();
+        if (self.plugin_row >= self.plugins.count() and self.plugins.count() > 0) {
+            self.plugin_row = self.plugins.count() - 1;
+        } else if (self.plugins.count() == 0) {
+            self.plugin_row = 0;
+        }
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "plugins: {d} loaded", .{self.plugins.count()}) catch "plugins reloaded";
+        self.setStatus(msg);
+    }
+
+    /// Install the bundled plugin pack (hello, git, devtools, themes, workflow, keys).
+    fn installBundledPlugins(self: *App) void {
+        const Bundle = struct { name: []const u8, toml: []const u8 };
+        const pack = [_]Bundle{
+            .{
+                .name = "hello",
+                .toml =
+                \\name = "hello"
+                \\version = "0.1.0"
+                \\description = "Demo Orbit plugin — commands, theme, and lifecycle hooks"
+                \\
+                \\[[commands]]
+                \\id = "hello.greet"
+                \\label = "Plugin: Hello"
+                \\hint = "status"
+                \\action = "status"
+                \\payload = "Hello from the hello plugin"
+                \\
+                \\[[commands]]
+                \\id = "hello.date"
+                \\label = "Plugin: Insert date"
+                \\hint = "insert"
+                \\action = "insert"
+                \\payload = "date\r"
+                \\
+                \\[[commands]]
+                \\id = "hello.new_tab"
+                \\label = "Plugin: New Tab"
+                \\hint = "host"
+                \\action = "host"
+                \\payload = "new_tab"
+                \\
+                \\[[themes]]
+                \\name = "amber"
+                \\foreground = "#f5e6c8"
+                \\background = "#2a2010"
+                \\cursor = "#ffb000"
+                \\selection = "#5a4020"
+                \\
+                \\[hooks]
+                \\on_load = "status:hello plugin loaded"
+                \\on_workspace_open = "status:hello: workspace opened"
+                \\on_workspace_save = "status:hello: workspace saved"
+                \\
+                ,
+            },
+            .{
+                .name = "git",
+                .toml =
+                \\name = "git"
+                \\version = "0.1.0"
+                \\description = "Git shortcuts — status, diff, log, branch, pull, push"
+                \\
+                \\[[commands]]
+                \\id = "git.status"
+                \\label = "Git: Status"
+                \\hint = "git status"
+                \\action = "insert"
+                \\payload = "git status\r"
+                \\
+                \\[[commands]]
+                \\id = "git.diff"
+                \\label = "Git: Diff"
+                \\hint = "git diff"
+                \\action = "insert"
+                \\payload = "git diff\r"
+                \\
+                \\[[commands]]
+                \\id = "git.log"
+                \\label = "Git: Log"
+                \\hint = "oneline"
+                \\action = "insert"
+                \\payload = "git log --oneline -20\r"
+                \\
+                \\[[commands]]
+                \\id = "git.branch"
+                \\label = "Git: Branches"
+                \\hint = "git branch"
+                \\action = "insert"
+                \\payload = "git branch -vv\r"
+                \\
+                \\[[commands]]
+                \\id = "git.pull"
+                \\label = "Git: Pull"
+                \\hint = "git pull"
+                \\action = "insert"
+                \\payload = "git pull\r"
+                \\
+                \\[[commands]]
+                \\id = "git.push"
+                \\label = "Git: Push"
+                \\hint = "git push"
+                \\action = "insert"
+                \\payload = "git push\r"
+                \\
+                \\[[commands]]
+                \\id = "git.stash"
+                \\label = "Git: Stash"
+                \\hint = "git stash"
+                \\action = "insert"
+                \\payload = "git stash push -u\r"
+                \\
+                \\[hooks]
+                \\on_load = "status:git plugin ready"
+                \\on_workspace_open = "status:git: workspace opened"
+                \\
+                ,
+            },
+            .{
+                .name = "devtools",
+                .toml =
+                \\name = "devtools"
+                \\version = "0.1.0"
+                \\description = "Everyday shell utilities for navigating and inspecting projects"
+                \\
+                \\[[commands]]
+                \\id = "dev.pwd"
+                \\label = "Dev: Print cwd"
+                \\hint = "pwd"
+                \\action = "insert"
+                \\payload = "pwd\r"
+                \\
+                \\[[commands]]
+                \\id = "dev.ls"
+                \\label = "Dev: List files"
+                \\hint = "ls -la"
+                \\action = "insert"
+                \\payload = "ls -la\r"
+                \\
+                \\[[commands]]
+                \\id = "dev.tree"
+                \\label = "Dev: Tree (depth 2)"
+                \\hint = "find"
+                \\action = "insert"
+                \\payload = "find . -maxdepth 2 -not -path '*/.*' | head -80\r"
+                \\
+                \\[[commands]]
+                \\id = "dev.clear"
+                \\label = "Dev: Clear screen"
+                \\hint = "clear"
+                \\action = "insert"
+                \\payload = "clear\r"
+                \\
+                \\[[commands]]
+                \\id = "dev.disk"
+                \\label = "Dev: Disk usage here"
+                \\hint = "du"
+                \\action = "insert"
+                \\payload = "du -sh ./* 2>/dev/null | sort -h | tail -20\r"
+                \\
+                \\[[commands]]
+                \\id = "dev.ports"
+                \\label = "Dev: Listening ports"
+                \\hint = "lsof"
+                \\action = "insert"
+                \\payload = "lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | head -30\r"
+                \\
+                \\[[commands]]
+                \\id = "dev.env"
+                \\label = "Dev: Path & shell"
+                \\hint = "echo"
+                \\action = "insert"
+                \\payload = "echo \"SHELL=$SHELL\" && echo \"PATH=$PATH\" | tr ':' '\\n' | head -20\r"
+                \\
+                \\[hooks]
+                \\on_load = "status:devtools ready"
+                \\
+                ,
+            },
+            .{
+                .name = "themes",
+                .toml =
+                \\name = "themes"
+                \\version = "0.1.0"
+                \\description = "Extra color themes — ocean, forest, midnight, rose"
+                \\
+                \\[[themes]]
+                \\name = "ocean"
+                \\foreground = "#d8eef8"
+                \\background = "#0b1c28"
+                \\cursor = "#5ec8f0"
+                \\selection = "#1e4a62"
+                \\
+                \\[[themes]]
+                \\name = "forest"
+                \\foreground = "#e4efd8"
+                \\background = "#142018"
+                \\cursor = "#8fbf5a"
+                \\selection = "#2a4030"
+                \\
+                \\[[themes]]
+                \\name = "midnight"
+                \\foreground = "#e8e6f5"
+                \\background = "#12101c"
+                \\cursor = "#a090ff"
+                \\selection = "#2a2440"
+                \\
+                \\[[themes]]
+                \\name = "rose"
+                \\foreground = "#ffe8ee"
+                \\background = "#1c1014"
+                \\cursor = "#ff8aab"
+                \\selection = "#4a2030"
+                \\
+                \\[hooks]
+                \\on_load = "status:themes plugin ready"
+                \\
+                ,
+            },
+            .{
+                .name = "workflow",
+                .toml =
+                \\name = "workflow"
+                \\version = "0.1.0"
+                \\description = "Workflow helpers — tabs, splits, search, workspace shortcuts"
+                \\
+                \\[[commands]]
+                \\id = "wf.new_tab"
+                \\label = "Workflow: New Tab"
+                \\hint = "host"
+                \\action = "host"
+                \\payload = "new_tab"
+                \\
+                \\[[commands]]
+                \\id = "wf.split_right"
+                \\label = "Workflow: Split Right"
+                \\hint = "host"
+                \\action = "host"
+                \\payload = "split_right"
+                \\
+                \\[[commands]]
+                \\id = "wf.open_workspace"
+                \\label = "Workflow: Open Workspace"
+                \\hint = "host"
+                \\action = "host"
+                \\payload = "open_workspace"
+                \\
+                \\[[commands]]
+                \\id = "wf.save_workspace"
+                \\label = "Workflow: Save Workspace"
+                \\hint = "host"
+                \\action = "host"
+                \\payload = "save_workspace"
+                \\
+                \\[[commands]]
+                \\id = "wf.search"
+                \\label = "Workflow: Search"
+                \\hint = "host"
+                \\action = "host"
+                \\payload = "search"
+                \\
+                \\[[commands]]
+                \\id = "wf.tip"
+                \\label = "Workflow: Tip"
+                \\hint = "status"
+                \\action = "status"
+                \\payload = "Tip: Ctrl+Shift+P for palette · L for Plugins · edit keys plugin for shortcuts"
+                \\
+                \\[hooks]
+                \\on_load = "status:workflow helpers ready"
+                \\on_workspace_save = "status:workflow: workspace saved"
+                \\
+                ,
+            },
+            .{
+                .name = "keys",
+                .toml =
+                \\name = "keys"
+                \\version = "0.1.0"
+                \\description = "Custom shortcuts starter — edit keys to make Orbit yours"
+                \\
+                \\[[commands]]
+                \\id = "keys.git_status"
+                \\label = "Keys: Git Status"
+                \\hint = "ctrl+shift+g"
+                \\action = "insert"
+                \\payload = "git status\r"
+                \\shortcut = "ctrl+shift+g"
+                \\
+                \\[[commands]]
+                \\id = "keys.ls"
+                \\label = "Keys: List files"
+                \\hint = "ctrl+alt+l"
+                \\action = "insert"
+                \\payload = "ls -la\r"
+                \\shortcut = "ctrl+alt+l"
+                \\
+                \\[[commands]]
+                \\id = "keys.clear"
+                \\label = "Keys: Clear"
+                \\hint = "ctrl+alt+k"
+                \\action = "insert"
+                \\payload = "clear\r"
+                \\shortcut = "ctrl+alt+k"
+                \\
+                \\[[commands]]
+                \\id = "keys.tip"
+                \\label = "Keys: Tip"
+                \\hint = "status"
+                \\action = "status"
+                \\payload = "Edit ~/.config/orbit/plugins/keys/plugin.toml — then press R in Plugins"
+                \\
+                \\[[bindings]]
+                \\keys = "ctrl+alt+t"
+                \\command = "keys.tip"
+                \\
+                \\[[themes]]
+                \\name = "keys-slate"
+                \\foreground = "#e2e8f0"
+                \\background = "#0f172a"
+                \\cursor = "#38bdf8"
+                \\selection = "#1e3a5f"
+                \\
+                \\[hooks]
+                \\on_load = "status:keys plugin — customize shortcuts in plugin.toml"
+                \\
+                ,
+            },
+        };
+
+        var installed: usize = 0;
+        for (pack) |item| {
+            if (self.writePluginToml(item.name, item.toml)) installed += 1;
+        }
+        self.reloadPluginsFromPanel();
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "installed {d} plugins", .{installed}) catch "plugins installed";
+        self.setStatus(msg);
+    }
+
+    fn writePluginToml(self: *App, name: []const u8, toml: []const u8) bool {
+        const plugin_dir = std.fmt.allocPrint(self.allocator, "{s}{c}{s}", .{ self.plugins.dir_path, std.fs.path.sep, name }) catch return false;
+        defer self.allocator.free(plugin_dir);
+
+        @import("../platform/paths.zig").ensureDir(plugin_dir);
+
+        const toml_path = std.fmt.allocPrint(self.allocator, "{s}{c}plugin.toml", .{ plugin_dir, std.fs.path.sep }) catch return false;
+        defer self.allocator.free(toml_path);
+
+        const file = std.Io.Dir.createFileAbsolute(self.io, toml_path, .{}) catch return false;
+        defer file.close(self.io);
+        file.writeStreamingAll(self.io, toml) catch return false;
+        return true;
     }
 
     fn handleSettingsKey(self: *App, key: c_int) void {
@@ -955,7 +2091,7 @@ pub const App = struct {
                 if (self.settings_row > 0) self.settings_row -= 1;
             },
             c.GLFW_KEY_DOWN => {
-                if (self.settings_row + 1 < 4) self.settings_row += 1;
+                if (self.settings_row + 1 < 5) self.settings_row += 1;
             },
             c.GLFW_KEY_LEFT => self.nudgeSettings(-1),
             c.GLFW_KEY_RIGHT, c.GLFW_KEY_ENTER => self.nudgeSettings(1),
@@ -971,6 +2107,16 @@ pub const App = struct {
                 self.applyTheme(next);
             },
             1 => {
+                self.config.cycleFgPreset(self.allocator, delta) catch {
+                    self.setStatus("text color failed");
+                    return;
+                };
+                self.refreshThemeColors();
+                var buf: [64]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "text {s}", .{self.config.fgDisplay()}) catch "text color";
+                self.setStatus(msg);
+            },
+            2 => {
                 self.config.cursor_style = if (delta >= 0)
                     self.config.cursor_style.next()
                 else
@@ -978,8 +2124,8 @@ pub const App = struct {
                 self.renderer.cursor_style = self.config.cursor_style;
                 self.setStatus("cursor style");
             },
-            2 => self.toggleCursorBlink(),
-            3 => {
+            3 => self.toggleCursorBlink(),
+            4 => {
                 self.config.cycleShell(self.allocator, delta) catch {
                     self.setStatus("shell change failed");
                     return;
@@ -1029,15 +2175,7 @@ pub const App = struct {
 
     fn runPluginCommand(self: *App, plugin_name: []const u8, command_id: []const u8) void {
         if (self.plugins.findCommand(plugin_name, command_id)) |cmd| {
-            switch (cmd.kind) {
-                .insert => {
-                    if (self.focused()) |s| s.write(cmd.payload);
-                    self.setStatus("plugin insert");
-                },
-                .status => self.setStatus(cmd.payload),
-                .theme => self.applyTheme(cmd.payload),
-                .host => self.runHostPayload(cmd.payload),
-            }
+            self.executePluginCommand(cmd);
             return;
         }
         if (self.plugins.findTheme(command_id) != null) {
@@ -1045,6 +2183,99 @@ pub const App = struct {
             return;
         }
         self.setStatus("plugin command missing");
+    }
+
+    fn executePluginCommand(self: *App, cmd: *const PluginCommand) void {
+        switch (cmd.kind) {
+            .insert => {
+                if (plugin_audit.auditInsertPayload(cmd.payload)) |hit| {
+                    var buf: [192]u8 = undefined;
+                    if (plugin_audit.shouldBlock(hit)) {
+                        const msg = std.fmt.bufPrint(&buf, "security blocked [{s}]: {s}", .{
+                            hit.severity.label(),
+                            hit.message,
+                        }) catch "security blocked: risky plugin insert";
+                        self.setStatus(msg);
+                        std.log.warn("security: blocked insert `{s}`: {s}", .{ cmd.id, hit.message });
+                        return;
+                    }
+                    const msg = std.fmt.bufPrint(&buf, "security warning [{s}]: {s}", .{
+                        hit.severity.label(),
+                        hit.message,
+                    }) catch "security warning: risky plugin insert";
+                    self.setStatus(msg);
+                    std.log.warn("security: executing warned insert `{s}`: {s}", .{ cmd.id, hit.message });
+                } else {
+                    self.setStatus("plugin insert");
+                }
+                if (self.focused()) |s| s.write(cmd.payload);
+            },
+            .status => self.setStatus(cmd.payload),
+            .theme => self.applyTheme(cmd.payload),
+            .host => self.runHostPayload(cmd.payload),
+        }
+    }
+
+    /// Run a plugin keybinding if one matches. Prefer chords with modifiers.
+    fn tryPluginBinding(self: *App, key: c_int, ctrl: bool, shift: bool, super: bool, alt: bool) bool {
+        // Plain typing must reach the shell — only chords with a modifier (or F-keys).
+        const is_fn = key >= c.GLFW_KEY_F1 and key <= c.GLFW_KEY_F12;
+        if (!ctrl and !shift and !super and !alt and !is_fn) return false;
+
+        const name = glfwKeyName(key) orelse return false;
+        const command_id = self.plugins.matchBinding(name, ctrl, shift, super, alt) orelse return false;
+        if (self.plugins.findCommandById(command_id)) |cmd| {
+            self.executePluginCommand(cmd);
+            return true;
+        }
+        if (self.plugins.findTheme(command_id) != null) {
+            self.applyTheme(command_id);
+            return true;
+        }
+        return false;
+    }
+
+    fn glfwKeyName(key: c_int) ?[]const u8 {
+        if (key >= c.GLFW_KEY_A and key <= c.GLFW_KEY_Z) {
+            const names = [_][]const u8{ "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z" };
+            return names[@intCast(key - c.GLFW_KEY_A)];
+        }
+        if (key >= c.GLFW_KEY_0 and key <= c.GLFW_KEY_9) {
+            const names = [_][]const u8{ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
+            return names[@intCast(key - c.GLFW_KEY_0)];
+        }
+        if (key >= c.GLFW_KEY_F1 and key <= c.GLFW_KEY_F12) {
+            const names = [_][]const u8{ "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12" };
+            return names[@intCast(key - c.GLFW_KEY_F1)];
+        }
+        return switch (key) {
+            c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER => "enter",
+            c.GLFW_KEY_ESCAPE => "escape",
+            c.GLFW_KEY_SPACE => "space",
+            c.GLFW_KEY_TAB => "tab",
+            c.GLFW_KEY_BACKSPACE => "backspace",
+            c.GLFW_KEY_DELETE => "delete",
+            c.GLFW_KEY_UP => "up",
+            c.GLFW_KEY_DOWN => "down",
+            c.GLFW_KEY_LEFT => "left",
+            c.GLFW_KEY_RIGHT => "right",
+            c.GLFW_KEY_HOME => "home",
+            c.GLFW_KEY_END => "end",
+            c.GLFW_KEY_PAGE_UP => "pageup",
+            c.GLFW_KEY_PAGE_DOWN => "pagedown",
+            c.GLFW_KEY_MINUS, c.GLFW_KEY_KP_SUBTRACT => "minus",
+            c.GLFW_KEY_EQUAL, c.GLFW_KEY_KP_ADD => "equal",
+            c.GLFW_KEY_LEFT_BRACKET => "[",
+            c.GLFW_KEY_RIGHT_BRACKET => "]",
+            c.GLFW_KEY_SEMICOLON => ";",
+            c.GLFW_KEY_APOSTROPHE => "'",
+            c.GLFW_KEY_COMMA => ",",
+            c.GLFW_KEY_PERIOD => ".",
+            c.GLFW_KEY_SLASH => "/",
+            c.GLFW_KEY_BACKSLASH => "\\",
+            c.GLFW_KEY_GRAVE_ACCENT => "`",
+            else => null,
+        };
     }
 
     fn runHostPayload(self: *App, payload: []const u8) void {
@@ -1103,7 +2334,20 @@ pub const App = struct {
         if (std.mem.startsWith(u8, payload, "status:")) {
             self.setStatus(payload["status:".len..]);
         } else if (std.mem.startsWith(u8, payload, "insert:")) {
-            if (self.focused()) |s| s.write(payload["insert:".len..]);
+            const text = payload["insert:".len..];
+            if (plugin_audit.auditInsertPayload(text)) |hit| {
+                if (plugin_audit.shouldBlock(hit)) {
+                    var buf: [192]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "security blocked hook [{s}]: {s}", .{
+                        hit.severity.label(),
+                        hit.message,
+                    }) catch "security blocked: risky plugin hook";
+                    self.setStatus(msg);
+                    std.log.warn("security: blocked hook insert: {s}", .{hit.message});
+                    return;
+                }
+            }
+            if (self.focused()) |s| s.write(text);
         } else if (std.mem.startsWith(u8, payload, "theme:")) {
             self.applyTheme(payload["theme:".len..]);
         } else {
@@ -1119,12 +2363,17 @@ pub const App = struct {
         }
     }
 
-    fn applyTheme(self: *App, name: []const u8) void {
-        self.config.setThemeName(self.allocator, name) catch {
-            self.setStatus("theme failed");
-            return;
-        };
-        const theme = if (self.plugins.findTheme(name)) |t| t else theme_mod.byName(name);
+    /// Active theme (builtin or plugin) with the configured text-color override.
+    fn resolvedTheme(self: *App) theme_mod.Theme {
+        const base = if (self.plugins.findTheme(self.config.theme_name)) |t|
+            t
+        else
+            theme_mod.byName(self.config.theme_name);
+        return theme_mod.withFgOverride(base, self.config.fg_preset);
+    }
+
+    fn refreshThemeColors(self: *App) void {
+        const theme = self.resolvedTheme();
         self.renderer.setTheme(theme);
         for (self.tabs.items.items) |*tab| {
             var list: std.ArrayList(*Session) = .empty;
@@ -1135,23 +2384,91 @@ pub const App = struct {
             }
         }
         self.applyRendererHooks();
+    }
+
+    fn applyTheme(self: *App, name: []const u8) void {
+        self.config.setThemeName(self.allocator, name) catch {
+            self.setStatus("theme failed");
+            return;
+        };
+        self.refreshThemeColors();
         self.setStatus("theme applied");
     }
 
     fn connectSsh(self: *App, host: []const u8) !void {
+        if (!isSafeSshTarget(host)) {
+            self.setStatus("invalid ssh host");
+            return;
+        }
         try self.newTab();
         const session = self.focused() orelse return;
         var cmd: [192]u8 = undefined;
-        const line = try std.fmt.bufPrint(&cmd, "ssh {s}\r", .{host});
+        const line = try std.fmt.bufPrint(&cmd, "ssh -- {s}\r", .{host});
         session.write(line);
         self.setStatus("ssh started");
+    }
+
+    /// Allow `user@host`, hostnames, IPv4, and optional `:port` — reject shell metacharacters.
+    fn isSafeSshTarget(host: []const u8) bool {
+        if (host.len == 0 or host.len > 180) return false;
+        var saw_at = false;
+        var saw_colon = false;
+        for (host) |ch| {
+            switch (ch) {
+                'a'...'z', 'A'...'Z', '0'...'9', '.', '-', '_' => {},
+                '@' => {
+                    if (saw_at) return false;
+                    saw_at = true;
+                },
+                ':' => {
+                    if (saw_colon) return false;
+                    saw_colon = true;
+                },
+                else => return false,
+            }
+        }
+        return true;
+    }
+
+    fn openFolderWorkspace(self: *App) void {
+        const path = folder_picker.pickFolder(self.allocator, self.io, struct {
+            fn pump() void {
+                Window.poll();
+            }
+        }.pump) catch {
+            self.setStatus("folder picker failed");
+            return;
+        } orelse {
+            // User cancelled — stay on current UI.
+            return;
+        };
+        defer self.allocator.free(path);
+
+        self.openFolderAsWorkspace(path) catch {
+            self.setStatus("failed to open folder");
+            return;
+        };
+    }
+
+    fn openFolderAsWorkspace(self: *App, path: []const u8) !void {
+        // Confirm the path is a readable directory before spawning a shell.
+        const dir = std.Io.Dir.openDirAbsolute(self.io, path, .{}) catch return error.NotADirectory;
+        dir.close(self.io);
+
+        const name = folder_picker.folderBasename(path);
+        try self.newTabInDir(path, name);
+        self.workspaces.setCurrent(name) catch {};
+        self.updateWindowTitle();
+        self.fireHooks(.on_workspace_open);
+        self.ui = .normal;
+        self.setStatus("workspace opened");
     }
 
     fn openPicker(self: *App) void {
         self.workspaces.refresh() catch {};
         self.picker_index = 0;
         self.ui = .ws_picker;
-        self.status_len = 0;
+        self.clearStatus();
     }
 
     fn openSavePrompt(self: *App) void {
@@ -1162,7 +2479,7 @@ pub const App = struct {
             self.save_name_len = len;
         }
         self.ui = .ws_save;
-        self.status_len = 0;
+        self.clearStatus();
     }
 
     fn handlePickerKey(self: *App, key: c_int) void {
@@ -1205,6 +2522,10 @@ pub const App = struct {
             c.GLFW_KEY_ENTER => {
                 if (self.save_name_len == 0) return;
                 const name = self.save_name[0..self.save_name_len];
+                if (!WsManager.isValidName(name)) {
+                    self.setStatus("invalid workspace name");
+                    return;
+                }
                 self.workspaces.saveTabs(name, &self.tabs) catch {
                     self.setStatus("save failed");
                     self.ui = .normal;
@@ -1242,11 +2563,19 @@ pub const App = struct {
     }
 
     fn newTab(self: *App) !void {
+        try self.newTabInDir(self.sessionCwd(), null);
+    }
+
+    fn newTabInDir(self: *App, cwd: []const u8, title_opt: ?[]const u8) !void {
         const bounds = self.contentRect();
         const cols, const rows = self.gridSize(bounds.w, bounds.h);
         const theme = self.config.theme();
-        var title_buf: [32]u8 = undefined;
-        const title = std.fmt.bufPrint(&title_buf, "Shell {d}", .{self.tabs.items.items.len + 1}) catch "Shell";
+
+        var title_buf: [64]u8 = undefined;
+        const title = if (title_opt) |t|
+            t
+        else
+            (std.fmt.bufPrint(&title_buf, "Shell {d}", .{self.tabs.items.items.len + 1}) catch "Shell");
 
         const launch = self.config.resolveLaunchShell();
         if (self.config.shellPath()) |configured| {
@@ -1261,7 +2590,7 @@ pub const App = struct {
             .cols = cols,
             .rows = rows,
             .title = title,
-            .cwd = self.sessionCwd(),
+            .cwd = cwd,
             .shell = launch,
         });
         session.setTheme(theme.foreground, theme.background);
@@ -1301,42 +2630,78 @@ pub const App = struct {
     fn pasteClipboard(self: *App) void {
         const session = self.focused() orelse return;
         const text = clipboard.get(self.window.handle) orelse return;
-        session.write(text);
+        if (text.len == 0) return;
+        // Cap paste size (matches copy buffer) to limit paste-jacking / DoS.
+        const capped = text[0..@min(text.len, 64 * 1024)];
+        const has_newline = std.mem.indexOfScalar(u8, capped, '\n') != null or
+            std.mem.indexOfScalar(u8, capped, '\r') != null;
+        if (has_newline) {
+            // Bracketed paste so shells that support it treat the blob as literal text.
+            session.write("\x1b[200~");
+            session.write(capped);
+            session.write("\x1b[201~");
+        } else {
+            session.write(capped);
+        }
+    }
+
+    /// Focus the pane under framebuffer coords; returns session + leaf rect if any.
+    fn focusSessionAt(self: *App, fb_x: i32, fb_y: i32) ?struct { session: *Session, rect: Rect } {
+        const tab = self.tabs.current() orelse return null;
+        const bounds = self.contentRect();
+        const Hit = struct {
+            px: i32,
+            py: i32,
+            session: ?*Session = null,
+            rect: Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+            fn cb(ctx: *@This(), s: *Session, r: Rect) void {
+                if (ctx.px >= r.x and ctx.px < r.x + r.w and ctx.py >= r.y and ctx.py < r.y + r.h) {
+                    ctx.session = s;
+                    ctx.rect = r;
+                }
+            }
+        };
+        var hit: Hit = .{ .px = fb_x, .py = fb_y };
+        tab.layout.forEachLeaf(bounds, *Hit, &hit, Hit.cb);
+        if (hit.session) |s| {
+            tab.layout.focused = s;
+            return .{ .session = s, .rect = hit.rect };
+        }
+        return null;
     }
 
     fn onMouseButton(ptr: *anyopaque, button: c_int, action: c_int, mods: c_int) void {
         _ = mods;
         const self: *App = @ptrCast(@alignCast(ptr));
         if (self.ui != .normal) return;
-        const tab = self.tabs.current() orelse return;
-        const bounds = self.contentRect();
         const fb = self.window.windowToFb(self.mouse_x, self.mouse_y);
+
+        // Context menu interaction (open on right-click; activate / dismiss on left-click).
+        if (button == c.GLFW_MOUSE_BUTTON_RIGHT and action == c.GLFW_PRESS) {
+            if (self.focusSessionAt(fb.x, fb.y) != null) {
+                self.openContextMenu(fb.x, fb.y);
+            }
+            return;
+        }
 
         if (button == c.GLFW_MOUSE_BUTTON_LEFT) {
             if (action == c.GLFW_PRESS) {
-                if (tab.layout.sessionAt(bounds, fb.x, fb.y)) |_| {
-                    const Hit = struct {
-                        px: i32,
-                        py: i32,
-                        session: ?*Session = null,
-                        rect: Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-                        fn cb(ctx: *@This(), s: *Session, r: Rect) void {
-                            if (ctx.px >= r.x and ctx.px < r.x + r.w and ctx.py >= r.y and ctx.py < r.y + r.h) {
-                                ctx.session = s;
-                                ctx.rect = r;
-                            }
-                        }
-                    };
-                    var hit: Hit = .{ .px = fb.x, .py = fb.y };
-                    tab.layout.forEachLeaf(bounds, *Hit, &hit, Hit.cb);
-                    if (hit.session) |s| {
-                        tab.layout.focused = s;
-                        const cw: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
-                        const ch: i32 = @intFromFloat(@max(1.0, self.renderer.cell_h));
-                        const col: u16 = @intCast(@max(0, @divTrunc(fb.x - hit.rect.x, cw)));
-                        const row: u16 = @intCast(@max(0, @divTrunc(fb.y - hit.rect.y, ch)));
-                        s.selection.begin(@min(col, s.screen.cols -| 1), @min(row, s.screen.rows -| 1));
+                if (self.context_menu) |menu| {
+                    if (self.contextMenuHit(menu, fb.x, fb.y)) |idx| {
+                        const can_copy = if (self.focused()) |s| s.selection.active else false;
+                        if (idx == 0 and !can_copy) return;
+                        self.runContextMenuItem(idx);
+                        return;
                     }
+                    self.closeContextMenu();
+                    // Fall through so a click outside still starts selection.
+                }
+                if (self.focusSessionAt(fb.x, fb.y)) |hit| {
+                    const cw: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
+                    const ch: i32 = @intFromFloat(@max(1.0, self.renderer.cell_h));
+                    const col: u16 = @intCast(@max(0, @divTrunc(fb.x - hit.rect.x, cw)));
+                    const row: u16 = @intCast(@max(0, @divTrunc(fb.y - hit.rect.y, ch)));
+                    hit.session.selection.begin(@min(col, hit.session.screen.cols -| 1), @min(row, hit.session.screen.rows -| 1));
                 }
             } else if (action == c.GLFW_RELEASE) {
                 if (self.focused()) |s| {
@@ -1352,12 +2717,20 @@ pub const App = struct {
         self.mouse_x = x;
         self.mouse_y = y;
         if (self.ui != .normal) return;
+
+        const fb = self.window.windowToFb(x, y);
+        if (self.context_menu) |*menu| {
+            if (self.contextMenuHit(menu.*, fb.x, fb.y)) |idx| {
+                menu.hover = idx;
+            }
+            return;
+        }
+
         const session = self.focused() orelse return;
         if (!session.selection.selecting) return;
 
         const tab = self.tabs.current() orelse return;
         const bounds = self.contentRect();
-        const fb = self.window.windowToFb(x, y);
 
         const Hit = struct {
             px: i32,

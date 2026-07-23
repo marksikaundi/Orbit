@@ -1,5 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const c = @import("../c.zig").c;
+const app_icon = @import("../platform/app_icon.zig");
 
 pub const Window = struct {
     handle: ?*c.GLFWwindow = null,
@@ -32,10 +34,20 @@ pub const Window = struct {
         if (handle == null) return error.WindowCreateFailed;
 
         c.glfwMakeContextCurrent(handle);
+
+        if (builtin.os.tag == .windows) {
+            if (c.orbitGladLoadGL(@ptrCast(&c.glfwGetProcAddress)) == 0) {
+                return error.GladLoadFailed;
+            }
+        }
+
         c.glfwSwapInterval(1);
         if (opacity < 0.999) {
             c.glfwSetWindowOpacity(handle, opacity);
         }
+
+        // Replace the generic macOS "exec" Dock icon with Orbit's.
+        app_icon.apply(handle);
 
         var self: Window = .{
             .handle = handle,

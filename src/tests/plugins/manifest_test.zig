@@ -58,3 +58,31 @@ test "parse insert and host action kinds" {
     defer plugin.deinit();
     try std.testing.expectEqual(@as(usize, 2), plugin.commands.len);
 }
+
+test "parse command shortcut and [[bindings]]" {
+    const data =
+        \\name = "keys"
+        \\version = "0.1.0"
+        \\description = "demo"
+        \\
+        \\[[commands]]
+        \\id = "keys.git"
+        \\label = "Git"
+        \\action = "insert"
+        \\payload = "git status\r"
+        \\shortcut = "ctrl+shift+g"
+        \\
+        \\[[bindings]]
+        \\keys = "ctrl+alt+t"
+        \\command = "keys.git"
+    ;
+    var plugin = try manifest.parsePlugin(std.testing.allocator, "/tmp/keys", data);
+    defer plugin.deinit();
+    try std.testing.expectEqual(@as(usize, 2), plugin.bindings.len);
+    try std.testing.expect(plugin.bindings[0].ctrl);
+    try std.testing.expect(plugin.bindings[0].shift);
+    try std.testing.expectEqualStrings("g", plugin.bindings[0].key_name);
+    try std.testing.expectEqualStrings("keys.git", plugin.bindings[0].command_id);
+    try std.testing.expect(plugin.bindings[1].alt);
+    try std.testing.expectEqualStrings("t", plugin.bindings[1].key_name);
+}

@@ -212,3 +212,56 @@ pub fn nextName(current: []const u8, delta: i32) []const u8 {
     if (idx < 0) idx += n;
     return builtin_names[@intCast(idx)];
 }
+
+/// Independent text (foreground) colors — cycle in Appearance Settings.
+/// `"theme"` keeps the theme’s default foreground.
+pub const FgPreset = struct {
+    id: []const u8,
+    label: []const u8,
+    /// `null` = use the active theme’s foreground.
+    color: ?Color,
+};
+
+pub const fg_presets = [_]FgPreset{
+    .{ .id = "theme", .label = "theme", .color = null },
+    .{ .id = "soft-white", .label = "soft white", .color = Color.rgb(232, 236, 242) },
+    .{ .id = "bright", .label = "bright", .color = Color.rgb(255, 255, 255) },
+    .{ .id = "cool-gray", .label = "cool gray", .color = Color.rgb(176, 188, 200) },
+    .{ .id = "warm-gray", .label = "warm gray", .color = Color.rgb(200, 188, 170) },
+    .{ .id = "mint", .label = "mint", .color = Color.rgb(160, 220, 190) },
+    .{ .id = "green", .label = "green", .color = Color.rgb(120, 200, 140) },
+    .{ .id = "amber", .label = "amber", .color = Color.rgb(240, 200, 120) },
+    .{ .id = "sky", .label = "sky", .color = Color.rgb(140, 190, 230) },
+    .{ .id = "lavender", .label = "lavender", .color = Color.rgb(200, 170, 230) },
+    .{ .id = "rose", .label = "rose", .color = Color.rgb(230, 160, 180) },
+};
+
+pub fn indexOfFgPreset(id: []const u8) usize {
+    for (fg_presets, 0..) |p, i| {
+        if (std.mem.eql(u8, p.id, id)) return i;
+    }
+    return 0;
+}
+
+pub fn fgPresetById(id: []const u8) FgPreset {
+    return fg_presets[indexOfFgPreset(id)];
+}
+
+pub fn nextFgPresetId(current: []const u8, delta: i32) []const u8 {
+    const n: i32 = @intCast(fg_presets.len);
+    var idx: i32 = @intCast(indexOfFgPreset(current));
+    idx = @mod(idx + delta, n);
+    if (idx < 0) idx += n;
+    return fg_presets[@intCast(idx)].id;
+}
+
+/// Apply a text-color override onto a theme copy (cursor follows text for consistency).
+pub fn withFgOverride(base: Theme, fg_id: []const u8) Theme {
+    var t = base;
+    const preset = fgPresetById(fg_id);
+    if (preset.color) |c| {
+        t.foreground = c;
+        t.cursor = c;
+    }
+    return t;
+}

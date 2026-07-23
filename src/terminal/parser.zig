@@ -12,6 +12,9 @@ pub const Parser = struct {
     param_idx: u8 = 0,
     osc_buf: [256]u8 = undefined,
     osc_len: u16 = 0,
+    /// Last OSC 9 / OSC 99 notify payload (for status toast).
+    notify_msg: [96]u8 = undefined,
+    notify_len: u16 = 0,
     utf8_buf: [4]u8 = undefined,
     utf8_len: u8 = 0,
     utf8_need: u8 = 0,
@@ -371,7 +374,21 @@ pub const Parser = struct {
 
     fn finishOsc(self: *Parser, screen: *Screen) void {
         _ = screen;
-        // OSC 0/2 set title — ignored for now (could set window title later)
-        _ = self.osc_len;
+        const data = self.osc_buf[0..self.osc_len];
+        // OSC 0/2 — window title (ignored for now).
+        // OSC 9 ; message — iTerm2-style notification → status toast.
+        // OSC 99 ; message — Orbit status toast.
+        if (std.mem.startsWith(u8, data, "9;") or std.mem.startsWith(u8, data, "99;")) {
+            const msg = if (std.mem.startsWith(u8, data, "99;"))
+                data["99;".len..]
+            else
+                data["9;".len..];
+            const n = @min(msg.len, self.notify_msg.len);
+            if (n > 0) {
+                @memcpy(self.notify_msg[0..n], msg[0..n]);
+                self.notify_len = @intCast(n);
+            }
+        }
+        self.osc_len = 0;
     }
 };

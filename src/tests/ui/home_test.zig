@@ -8,8 +8,10 @@ test "version constant present" {
 }
 
 test "entries cover core actions" {
-    try std.testing.expectEqual(@as(usize, 6), home.entries.len);
+    try std.testing.expectEqual(@as(usize, 7), home.entries.len);
     try std.testing.expectEqual(home.Action.new_terminal, home.entries[0].action);
+    try std.testing.expectEqual(home.Action.settings, home.entries[3].action);
+    try std.testing.expectEqual(home.Action.plugins, home.entries[4].action);
     try std.testing.expectEqual(home.Action.quit, home.entries[home.entries.len - 1].action);
 }
 

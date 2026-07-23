@@ -1,13 +1,26 @@
-//! stb_truetype atlas builder — loads SF Mono / Menlo from disk (Ghostty-like AA).
+//! stb_truetype atlas builder — loads a system monospace font from disk.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const atlas_root = @import("atlas.zig");
 
 const c = @cImport({
     @cInclude("stb_truetype.h");
 });
 
-const font_paths = [_][:0]const u8{
+const font_paths = if (builtin.os.tag == .windows) [_][:0]const u8{
+    "C:\\Windows\\Fonts\\consola.ttf",
+    "C:\\Windows\\Fonts\\CascadiaMono.ttf",
+    "C:\\Windows\\Fonts\\cascadiamono.ttf",
+    "C:\\Windows\\Fonts\\lucon.ttf",
+    "C:\\Windows\\Fonts\\cour.ttf",
+} else if (builtin.os.tag == .linux) [_][:0]const u8{
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+    "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf",
+    "/usr/local/share/fonts/JetBrainsMono-Regular.ttf",
+} else [_][:0]const u8{
     "/System/Library/Fonts/SFNSMono.ttf",
     "/System/Library/Fonts/Menlo.ttc",
     "/System/Library/Fonts/Supplemental/Andale Mono.ttf",
@@ -100,24 +113,63 @@ pub fn build(allocator: std.mem.Allocator, pixel_size: u32) !atlas_root.Atlas {
 }
 
 fn readAbsolute(allocator: std.mem.Allocator, path: [:0]const u8) ![]u8 {
+    if (builtin.os.tag == .windows) {
+        const w = struct {
+            extern "kernel32" fn CreateFileA(
+                lpFileName: [*:0]const u8,
+                dwDesiredAccess: u32,
+                dwShareMode: u32,
+                lpSecurityAttributes: ?*anyopaque,
+                dwCreationDisposition: u32,
+                dwFlagsAndAttributes: u32,
+                hTemplateFile: ?*anyopaque,
+            ) callconv(.winapi) ?*anyopaque;
+            extern "kernel32" fn ReadFile(
+                hFile: *anyopaque,
+                lpBuffer: [*]u8,
+                nNumberOfBytesToRead: u32,
+                lpNumberOfBytesRead: ?*u32,
+                lpOverlapped: ?*anyopaque,
+            ) callconv(.winapi) std.os.windows.BOOL;
+            extern "kernel32" fn CloseHandle(hObject: *anyopaque) callconv(.winapi) std.os.windows.BOOL;
+            const GENERIC_READ: u32 = 0x80000000;
+            const FILE_SHARE_READ: u32 = 0x00000001;
+            const OPEN_EXISTING: u32 = 3;
+            const INVALID: usize = std.math.maxInt(usize);
+        };
+        const handle = w.CreateFileA(path.ptr, w.GENERIC_READ, w.FILE_SHARE_READ, null, w.OPEN_EXISTING, 0, null);
+        if (handle == null or @intFromPtr(handle) == w.INVALID) return error.OpenFailed;
+        defer _ = w.CloseHandle(handle.?);
+
+        var list: std.ArrayList(u8) = .empty;
+        errdefer list.deinit(allocator);
+        var chunk: [16 * 1024]u8 = undefined;
+        while (true) {
+            var got: u32 = 0;
+            if (!w.ReadFile(handle.?, &chunk, chunk.len, &got, null).toBool()) return error.ReadFailed;
+            if (got == 0) break;
+            try list.appendSlice(allocator, chunk[0..got]);
+            if (list.items.len > 32 * 1024 * 1024) return error.BadSize;
+        }
+        if (list.items.len == 0) return error.BadSize;
+        return try list.toOwnedSlice(allocator);
+    }
+
     const fd = std.c.open(path.ptr, @bitCast(@as(c_uint, 0))); // O_RDONLY
     if (fd < 0) return error.OpenFailed;
     defer _ = std.c.close(fd);
 
-    var st: std.c.Stat = undefined;
-    if (std.c.fstat(fd, &st) != 0) return error.StatFailed;
-    const size: usize = @intCast(st.size);
-    if (size == 0 or size > 32 * 1024 * 1024) return error.BadSize;
+    var list: std.ArrayList(u8) = .empty;
+    errdefer list.deinit(allocator);
 
-    const buf = try allocator.alloc(u8, size);
-    errdefer allocator.free(buf);
-    var off: usize = 0;
-    while (off < buf.len) {
-        const n = std.c.read(fd, buf.ptr + off, buf.len - off);
+    var chunk: [16 * 1024]u8 = undefined;
+    while (true) {
+        const n = std.c.read(fd, &chunk, chunk.len);
         if (n < 0) return error.ReadFailed;
         if (n == 0) break;
-        off += @intCast(n);
+        try list.appendSlice(allocator, chunk[0..@intCast(n)]);
+        if (list.items.len > 32 * 1024 * 1024) return error.BadSize;
     }
-    if (off != buf.len) return error.ShortRead;
-    return buf;
+    if (list.items.len == 0) return error.BadSize;
+    return try list.toOwnedSlice(allocator);
 }

@@ -1,0 +1,56 @@
+name = "git"
+version = "0.1.0"
+description = "Git shortcuts — status, diff, log, branch, pull, push"
+
+[[commands]]
+id = "git.status"
+label = "Git: Status"
+hint = "git status"
+action = "insert"
+payload = "git status\r"
+
+[[commands]]
+id = "git.diff"
+label = "Git: Diff"
+hint = "git diff"
+action = "insert"
+payload = "git diff\r"
+
+[[commands]]
+id = "git.log"
+label = "Git: Log"
+hint = "oneline"
+action = "insert"
+payload = "git log --oneline -20\r"
+
+[[commands]]
+id = "git.branch"
+label = "Git: Branches"
+hint = "git branch -a"
+action = "insert"
+payload = "git branch -vv\r"
+
+[[commands]]
+id = "git.pull"
+label = "Git: Pull"
+hint = "git pull"
+action = "insert"
+payload = "git pull\r"
+
+[[commands]]
+id = "git.push"
+label = "Git: Push"
+hint = "git push"
+action = "insert"
+payload = "git push\r"
+
+[[commands]]
+id = "git.stash"
+label = "Git: Stash"
+hint = "git stash"
+action = "insert"
+payload = "git stash push -u\r"
+
+[hooks]
+on_load = "status:git plugin ready"
+on_workspace_open = "status:git: workspace opened — try Git: Status"
