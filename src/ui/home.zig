@@ -89,10 +89,11 @@ pub const help_rows = [_]HelpRow{
     .{ .spacer = {} },
 
     .{ .heading = "Clipboard & search" },
-    .{ .item = .{ .keys = "Cmd+Shift+C", .desc = "Copy selection" } },
+    .{ .item = .{ .keys = "Cmd+C / Cmd+Shift+C", .desc = "Copy selection" } },
     .{ .item = .{ .keys = "Ctrl+Shift+C", .desc = "Copy selection" } },
-    .{ .item = .{ .keys = "Cmd+Shift+V", .desc = "Paste from clipboard" } },
+    .{ .item = .{ .keys = "Cmd+V / Cmd+Shift+V", .desc = "Paste from clipboard" } },
     .{ .item = .{ .keys = "Ctrl+Shift+V", .desc = "Paste from clipboard" } },
+    .{ .item = .{ .keys = "Right-click", .desc = "Copy / Paste context menu" } },
     .{ .item = .{ .keys = "Cmd/Ctrl+Shift+F", .desc = "Search terminal text or workspace files" } },
     .{ .item = .{ .keys = "Tab", .desc = "Switch Terminal / Files mode in search" } },
     .{ .item = .{ .keys = "Up/Down Enter", .desc = "Move hits / jump or insert file path" } },

@@ -28,6 +28,16 @@ const UiMode = enum { home, normal, search, ws_picker, ws_save, palette, ssh_pro
 
 const StatusKind = enum { info, success, err };
 
+/// Right-click terminal menu (Copy / Paste).
+const ContextMenu = struct {
+    x: i32,
+    y: i32,
+    /// 0 = Copy, 1 = Paste
+    hover: usize = 1,
+};
+
+const context_menu_items = [_][]const u8{ "Copy", "Paste" };
+
 /// How long the bottom-left toast stays visible (seconds).
 const status_ttl_s: f64 = 2.8;
 const status_ttl_error_s: f64 = 4.2;
@@ -58,6 +68,8 @@ pub const App = struct {
     status_kind: StatusKind = .info,
     mouse_x: f64 = 0,
     mouse_y: f64 = 0,
+    /// Right-click Copy/Paste menu over the terminal (null = closed).
+    context_menu: ?ContextMenu = null,
     /// Settings row: 0 theme, 1 text, 2 cursor, 3 blink, 4 shell
     settings_row: usize = 0,
     /// Selected plugin index in the Plugins panel.
@@ -477,10 +489,86 @@ pub const App = struct {
         if (self.ui == .plugins) {
             try self.drawPlugins();
         }
+        if (self.context_menu != null) {
+            try self.drawContextMenu();
+        }
         // Always on top of overlays so "saved" / theme notes stay readable.
         if (self.status_len > 0) {
             try self.drawStatusBar();
         }
+    }
+
+    fn contextMenuRect(self: *const App, menu: ContextMenu) Rect {
+        const cw = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_w)));
+        const ch = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_h)));
+        const pad_x: i32 = 12;
+        const pad_y: i32 = 6;
+        const row_h = ch + 8;
+        const w = cw * 10 + pad_x * 2;
+        const h = pad_y * 2 + row_h * @as(i32, @intCast(context_menu_items.len));
+        var x = menu.x;
+        var y = menu.y;
+        if (x + w > self.window.fb_width) x = @max(0, self.window.fb_width - w);
+        if (y + h > self.window.fb_height) y = @max(0, self.window.fb_height - h);
+        return .{ .x = x, .y = y, .w = w, .h = h };
+    }
+
+    fn contextMenuHit(self: *const App, menu: ContextMenu, px: i32, py: i32) ?usize {
+        const r = self.contextMenuRect(menu);
+        if (px < r.x or px >= r.x + r.w or py < r.y or py >= r.y + r.h) return null;
+        const ch = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_h)));
+        const pad_y: i32 = 6;
+        const row_h = ch + 8;
+        const rel = py - r.y - pad_y;
+        if (rel < 0) return null;
+        const idx: usize = @intCast(@divTrunc(rel, row_h));
+        if (idx >= context_menu_items.len) return null;
+        return idx;
+    }
+
+    fn drawContextMenu(self: *App) !void {
+        const menu = self.context_menu orelse return;
+        const r = self.contextMenuRect(menu);
+        const ch = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_h)));
+        const pad_x: i32 = 12;
+        const pad_y: i32 = 6;
+        const row_h = ch + 8;
+        const panel = Color.rgb(24, 28, 36);
+        const accent = Color.rgb(90, 175, 220);
+        const fg = Color.rgb(220, 228, 236);
+        const muted = Color.rgb(110, 120, 132);
+        const sel_bg = Color.rgb(40, 52, 68);
+
+        try self.renderer.drawRect(r.x, r.y, r.w, r.h, panel, 0.98);
+        try self.renderer.drawRect(r.x, r.y, 2, r.h, accent, 0.7);
+
+        const can_copy = if (self.focused()) |s| s.selection.active else false;
+        for (context_menu_items, 0..) |label, i| {
+            const ry = r.y + pad_y + @as(i32, @intCast(i)) * row_h;
+            const enabled = i != 0 or can_copy;
+            if (menu.hover == i and enabled) {
+                try self.renderer.drawRect(r.x + 4, ry, r.w - 8, row_h - 2, sel_bg, 1.0);
+            }
+            const color = if (enabled) fg else muted;
+            try self.renderer.drawText(r.x + pad_x, ry + 4, label, color);
+        }
+    }
+
+    fn closeContextMenu(self: *App) void {
+        self.context_menu = null;
+    }
+
+    fn openContextMenu(self: *App, fb_x: i32, fb_y: i32) void {
+        self.context_menu = .{ .x = fb_x, .y = fb_y, .hover = 1 };
+    }
+
+    fn runContextMenuItem(self: *App, index: usize) void {
+        switch (index) {
+            0 => self.copySelection(),
+            1 => self.pasteClipboard(),
+            else => {},
+        }
+        self.closeContextMenu();
     }
 
     fn drawPalette(self: *App) !void {
@@ -1202,12 +1290,31 @@ pub const App = struct {
             return;
         }
 
-        // Clipboard (Shift required so plain Ctrl+C still interrupts the shell).
+        // Context menu: Esc closes without sending to the shell.
+        if (self.context_menu != null and key == c.GLFW_KEY_ESCAPE) {
+            self.closeContextMenu();
+            return;
+        }
+
+        // Clipboard — Cmd+C/V (macOS) plus Ctrl/Cmd+Shift+C/V (terminal-safe).
+        // Plain Ctrl+C stays with the shell (interrupt); plain Ctrl+V stays as ^V.
+        if (super and !ctrl and !alt and key == c.GLFW_KEY_C) {
+            self.closeContextMenu();
+            self.copySelection();
+            return;
+        }
+        if (super and !ctrl and !alt and key == c.GLFW_KEY_V) {
+            self.closeContextMenu();
+            self.pasteClipboard();
+            return;
+        }
         if ((ctrl or super) and shift and key == c.GLFW_KEY_C) {
+            self.closeContextMenu();
             self.copySelection();
             return;
         }
         if ((ctrl or super) and shift and key == c.GLFW_KEY_V) {
+            self.closeContextMenu();
             self.pasteClipboard();
             return;
         }
@@ -1272,6 +1379,7 @@ pub const App = struct {
     fn goHome(self: *App) void {
         self.home = .{};
         self.ui = .home;
+        self.closeContextMenu();
         self.search.close(self.allocator);
         self.palette.close();
     }
@@ -2417,42 +2525,67 @@ pub const App = struct {
     fn pasteClipboard(self: *App) void {
         const session = self.focused() orelse return;
         const text = clipboard.get(self.window.handle) orelse return;
+        if (text.len == 0) return;
         session.write(text);
+    }
+
+    /// Focus the pane under framebuffer coords; returns session + leaf rect if any.
+    fn focusSessionAt(self: *App, fb_x: i32, fb_y: i32) ?struct { session: *Session, rect: Rect } {
+        const tab = self.tabs.current() orelse return null;
+        const bounds = self.contentRect();
+        const Hit = struct {
+            px: i32,
+            py: i32,
+            session: ?*Session = null,
+            rect: Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+            fn cb(ctx: *@This(), s: *Session, r: Rect) void {
+                if (ctx.px >= r.x and ctx.px < r.x + r.w and ctx.py >= r.y and ctx.py < r.y + r.h) {
+                    ctx.session = s;
+                    ctx.rect = r;
+                }
+            }
+        };
+        var hit: Hit = .{ .px = fb_x, .py = fb_y };
+        tab.layout.forEachLeaf(bounds, *Hit, &hit, Hit.cb);
+        if (hit.session) |s| {
+            tab.layout.focused = s;
+            return .{ .session = s, .rect = hit.rect };
+        }
+        return null;
     }
 
     fn onMouseButton(ptr: *anyopaque, button: c_int, action: c_int, mods: c_int) void {
         _ = mods;
         const self: *App = @ptrCast(@alignCast(ptr));
         if (self.ui != .normal) return;
-        const tab = self.tabs.current() orelse return;
-        const bounds = self.contentRect();
         const fb = self.window.windowToFb(self.mouse_x, self.mouse_y);
+
+        // Context menu interaction (open on right-click; activate / dismiss on left-click).
+        if (button == c.GLFW_MOUSE_BUTTON_RIGHT and action == c.GLFW_PRESS) {
+            if (self.focusSessionAt(fb.x, fb.y) != null) {
+                self.openContextMenu(fb.x, fb.y);
+            }
+            return;
+        }
 
         if (button == c.GLFW_MOUSE_BUTTON_LEFT) {
             if (action == c.GLFW_PRESS) {
-                if (tab.layout.sessionAt(bounds, fb.x, fb.y)) |_| {
-                    const Hit = struct {
-                        px: i32,
-                        py: i32,
-                        session: ?*Session = null,
-                        rect: Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-                        fn cb(ctx: *@This(), s: *Session, r: Rect) void {
-                            if (ctx.px >= r.x and ctx.px < r.x + r.w and ctx.py >= r.y and ctx.py < r.y + r.h) {
-                                ctx.session = s;
-                                ctx.rect = r;
-                            }
-                        }
-                    };
-                    var hit: Hit = .{ .px = fb.x, .py = fb.y };
-                    tab.layout.forEachLeaf(bounds, *Hit, &hit, Hit.cb);
-                    if (hit.session) |s| {
-                        tab.layout.focused = s;
-                        const cw: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
-                        const ch: i32 = @intFromFloat(@max(1.0, self.renderer.cell_h));
-                        const col: u16 = @intCast(@max(0, @divTrunc(fb.x - hit.rect.x, cw)));
-                        const row: u16 = @intCast(@max(0, @divTrunc(fb.y - hit.rect.y, ch)));
-                        s.selection.begin(@min(col, s.screen.cols -| 1), @min(row, s.screen.rows -| 1));
+                if (self.context_menu) |menu| {
+                    if (self.contextMenuHit(menu, fb.x, fb.y)) |idx| {
+                        const can_copy = if (self.focused()) |s| s.selection.active else false;
+                        if (idx == 0 and !can_copy) return;
+                        self.runContextMenuItem(idx);
+                        return;
                     }
+                    self.closeContextMenu();
+                    // Fall through so a click outside still starts selection.
+                }
+                if (self.focusSessionAt(fb.x, fb.y)) |hit| {
+                    const cw: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
+                    const ch: i32 = @intFromFloat(@max(1.0, self.renderer.cell_h));
+                    const col: u16 = @intCast(@max(0, @divTrunc(fb.x - hit.rect.x, cw)));
+                    const row: u16 = @intCast(@max(0, @divTrunc(fb.y - hit.rect.y, ch)));
+                    hit.session.selection.begin(@min(col, hit.session.screen.cols -| 1), @min(row, hit.session.screen.rows -| 1));
                 }
             } else if (action == c.GLFW_RELEASE) {
                 if (self.focused()) |s| {
@@ -2468,12 +2601,20 @@ pub const App = struct {
         self.mouse_x = x;
         self.mouse_y = y;
         if (self.ui != .normal) return;
+
+        const fb = self.window.windowToFb(x, y);
+        if (self.context_menu) |*menu| {
+            if (self.contextMenuHit(menu.*, fb.x, fb.y)) |idx| {
+                menu.hover = idx;
+            }
+            return;
+        }
+
         const session = self.focused() orelse return;
         if (!session.selection.selecting) return;
 
         const tab = self.tabs.current() orelse return;
         const bounds = self.contentRect();
-        const fb = self.window.windowToFb(x, y);
 
         const Hit = struct {
             px: i32,
