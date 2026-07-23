@@ -188,7 +188,7 @@ fn scanLines(
     }
 }
 
-/// Lightweight plugin.toml pass: audit `insert` payloads without importing the plugin module.
+/// Lightweight plugin.toml pass: audit `insert` payloads and hook inserts.
 fn scanPluginToml(
     allocator: std.mem.Allocator,
     path: []const u8,
@@ -198,6 +198,7 @@ fn scanPluginToml(
 ) !void {
     var line_no: u32 = 1;
     var in_command = false;
+    var in_hooks = false;
     var is_insert = false;
     var cmd_id: []const u8 = "";
     var cmd_id_line: u32 = 1;
@@ -210,22 +211,38 @@ fn scanPluginToml(
 
         if (std.mem.eql(u8, line, "[[commands]]")) {
             in_command = true;
+            in_hooks = false;
             is_insert = false;
             cmd_id = "";
             cmd_id_line = line_no;
             continue;
         }
-        if (line[0] == '[') {
+        if (std.mem.eql(u8, line, "[hooks]")) {
             in_command = false;
+            in_hooks = true;
             is_insert = false;
             continue;
         }
-        if (!in_command) continue;
+        if (line[0] == '[') {
+            in_command = false;
+            in_hooks = false;
+            is_insert = false;
+            continue;
+        }
 
         const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
         const key = std.mem.trim(u8, line[0..eq], " \t");
         const val_raw = std.mem.trim(u8, line[eq + 1 ..], " \t");
         const val = unquoteView(val_raw);
+
+        if (in_hooks) {
+            if (!std.mem.startsWith(u8, val, "insert:")) continue;
+            const payload = val["insert:".len..];
+            try reportPayloadHits(allocator, path, line_no, key, payload, min_severity, report);
+            continue;
+        }
+
+        if (!in_command) continue;
 
         if (std.mem.eql(u8, key, "id")) {
             cmd_id = val;
@@ -233,23 +250,36 @@ fn scanPluginToml(
         } else if (std.mem.eql(u8, key, "action")) {
             is_insert = std.mem.eql(u8, val, "insert");
         } else if (std.mem.eql(u8, key, "payload") and is_insert) {
-            var hits: std.ArrayList(plugin_audit.PayloadHit) = .empty;
-            defer hits.deinit(allocator);
-            try plugin_audit.auditInsertPayloadAll(val, &hits, allocator);
-            for (hits.items) |hit| {
-                if (hit.severity.rank() < min_severity.rank()) continue;
-                const id_part = if (cmd_id.len > 0) cmd_id else "(unnamed)";
-                const msg = try std.fmt.allocPrint(allocator, "command `{s}`: {s}", .{ id_part, hit.message });
-                try appendFindingOwnedMessage(allocator, report, .{
-                    .severity = hit.severity,
-                    .rule_id = hit.rule_id,
-                    .path = path,
-                    .line = if (cmd_id.len > 0) cmd_id_line else line_no,
-                    .message = msg,
-                    .snippet = trimSnippet(val),
-                });
-            }
+            const id_part = if (cmd_id.len > 0) cmd_id else "(unnamed)";
+            const report_line = if (cmd_id.len > 0) cmd_id_line else line_no;
+            try reportPayloadHits(allocator, path, report_line, id_part, val, min_severity, report);
         }
+    }
+}
+
+fn reportPayloadHits(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    line: u32,
+    id_part: []const u8,
+    payload: []const u8,
+    min_severity: finding.Severity,
+    report: *Report,
+) !void {
+    var hits: std.ArrayList(plugin_audit.PayloadHit) = .empty;
+    defer hits.deinit(allocator);
+    try plugin_audit.auditInsertPayloadAll(payload, &hits, allocator);
+    for (hits.items) |hit| {
+        if (hit.severity.rank() < min_severity.rank()) continue;
+        const msg = try std.fmt.allocPrint(allocator, "command `{s}`: {s}", .{ id_part, hit.message });
+        try appendFindingOwnedMessage(allocator, report, .{
+            .severity = hit.severity,
+            .rule_id = hit.rule_id,
+            .path = path,
+            .line = line,
+            .message = msg,
+            .snippet = trimSnippet(payload),
+        });
     }
 }
 

@@ -340,6 +340,11 @@ pub const Pty = struct {
 };
 
 fn buildCommandLine(buf: []u8, shell: []const u8) ![]const u8 {
+    // Quotes in the shell path break CreateProcess command-line parsing.
+    if (std.mem.indexOfScalar(u8, shell, '"') != null) return error.InvalidShellPath;
+    if (std.mem.indexOfScalar(u8, shell, '\n') != null or std.mem.indexOfScalar(u8, shell, '\r') != null) {
+        return error.InvalidShellPath;
+    }
     // Prefer PowerShell / pwsh as login-like interactive shells.
     if (std.ascii.endsWithIgnoreCase(shell, "powershell.exe") or
         std.ascii.endsWithIgnoreCase(shell, "pwsh.exe") or
@@ -356,5 +361,28 @@ fn buildCommandLine(buf: []u8, shell: []const u8) ![]const u8 {
 
 fn applyEnvEntry(entry: []const u8) void {
     const eq = std.mem.indexOfScalar(u8, entry, '=') orelse return;
-    paths.setEnv(entry[0..eq], entry[eq + 1 ..]);
+    const key = entry[0..eq];
+    if (isUnsafeEnvKey(key)) return;
+    paths.setEnv(key, entry[eq + 1 ..]);
+}
+
+fn isUnsafeEnvKey(key: []const u8) bool {
+    const blocked = [_][]const u8{
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "PATH",
+        "PATHEXT",
+        "ComSpec",
+        "PSModulePath",
+        "BASH_ENV",
+        "ENV",
+        "NODE_OPTIONS",
+        "PYTHONPATH",
+    };
+    for (blocked) |b| {
+        if (std.ascii.eqlIgnoreCase(key, b)) return true;
+    }
+    return false;
 }

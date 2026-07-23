@@ -47,11 +47,17 @@ pub const Registry = struct {
 
         var it = dir.iterate();
         while (it.next(self.io) catch null) |entry| {
-            if (entry.kind != .directory and entry.kind != .sym_link) continue;
+            // Refuse symlinks so a planted link cannot pull plugins from outside the config tree.
+            if (entry.kind != .directory) continue;
             if (entry.name.len == 0 or entry.name[0] == '.') continue;
+            if (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, "..")) continue;
 
             const plugin_dir = try std.fmt.allocPrint(self.allocator, "{s}{c}{s}", .{ self.dir_path, std.fs.path.sep, entry.name });
             defer self.allocator.free(plugin_dir);
+            if (!pluginDirIsContained(self.dir_path, plugin_dir)) {
+                std.log.warn("security: skipped plugin `{s}` (path escapes plugins directory)", .{entry.name});
+                continue;
+            }
             const toml_path = try std.fmt.allocPrint(self.allocator, "{s}{c}plugin.toml", .{ plugin_dir, std.fs.path.sep });
             defer self.allocator.free(toml_path);
 
@@ -144,9 +150,35 @@ fn warnRiskyPlugin(plugin: *const types.Plugin) void {
     for (plugin.commands) |cmd| {
         if (cmd.kind != .insert) continue;
         const hit = plugin_audit.auditInsertPayload(cmd.payload) orelse continue;
+        const action = if (plugin_audit.shouldBlock(hit)) "blocked" else "warning";
         std.log.warn(
-            "security: plugin `{s}` command `{s}` [{s}] {s}",
-            .{ plugin.name, cmd.id, hit.severity.label(), hit.message },
+            "security: plugin `{s}` command `{s}` [{s}/{s}] {s}",
+            .{ plugin.name, cmd.id, hit.severity.label(), action, hit.message },
         );
     }
+    warnRiskyHook(plugin, "on_load", plugin.hooks.on_load);
+    warnRiskyHook(plugin, "on_unload", plugin.hooks.on_unload);
+    warnRiskyHook(plugin, "on_workspace_open", plugin.hooks.on_workspace_open);
+    warnRiskyHook(plugin, "on_workspace_save", plugin.hooks.on_workspace_save);
+}
+
+fn warnRiskyHook(plugin: *const types.Plugin, which: []const u8, hook: ?[]const u8) void {
+    const raw = hook orelse return;
+    if (!std.mem.startsWith(u8, raw, "insert:")) return;
+    const payload = raw["insert:".len..];
+    const hit = plugin_audit.auditInsertPayload(payload) orelse return;
+    const action = if (plugin_audit.shouldBlock(hit)) "blocked" else "warning";
+    std.log.warn(
+        "security: plugin `{s}` hook `{s}` [{s}/{s}] {s}",
+        .{ plugin.name, which, hit.severity.label(), action, hit.message },
+    );
+}
+
+/// True when `plugin_dir` is exactly under `plugins_root` (no `..` escape).
+fn pluginDirIsContained(plugins_root: []const u8, plugin_dir: []const u8) bool {
+    if (std.mem.indexOf(u8, plugin_dir, "..") != null) return false;
+    if (!std.mem.startsWith(u8, plugin_dir, plugins_root)) return false;
+    if (plugin_dir.len <= plugins_root.len) return false;
+    const sep = plugin_dir[plugins_root.len];
+    return sep == std.fs.path.sep or sep == '/' or sep == '\\';
 }

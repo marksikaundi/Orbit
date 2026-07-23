@@ -202,9 +202,10 @@ fn resolveShell(shell: ?[]const u8) [*:0]const u8 {
 
 fn setEnvEntry(entry: []const u8) void {
     const eq = std.mem.indexOfScalar(u8, entry, '=') orelse return;
+    const key = entry[0..eq];
+    if (isUnsafeEnvKey(key)) return;
     var key_buf: [256:0]u8 = undefined;
     var val_buf: [1024:0]u8 = undefined;
-    const key = entry[0..eq];
     const val = entry[eq + 1 ..];
     if (key.len >= key_buf.len or val.len >= val_buf.len) return;
     @memcpy(key_buf[0..key.len], key);
@@ -212,6 +213,28 @@ fn setEnvEntry(entry: []const u8) void {
     @memcpy(val_buf[0..val.len], val);
     val_buf[val.len] = 0;
     _ = c.setenv(key_buf[0..key.len :0], val_buf[0..val.len :0], 1);
+}
+
+fn isUnsafeEnvKey(key: []const u8) bool {
+    const blocked = [_][]const u8{
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FORCE_FLAT_NAMESPACE",
+        "BASH_ENV",
+        "ENV",
+        "SHELLOPTS",
+        "GCONV_PATH",
+        "TERMINFO",
+        "PERL5OPT",
+        "PYTHONPATH",
+        "NODE_OPTIONS",
+    };
+    for (blocked) |b| {
+        if (std.ascii.eqlIgnoreCase(key, b)) return true;
+    }
+    return false;
 }
 
 fn setNonBlocking(fd: c_int) !void {

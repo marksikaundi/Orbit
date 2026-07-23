@@ -37,6 +37,18 @@ const payload_rules = [_]PayloadRule{
         .message = "Plugin insert payload pipes into zsh",
     },
     .{
+        .id = "plugin.pipe-shell",
+        .severity = .critical,
+        .pattern = "|/bin/sh",
+        .message = "Plugin insert payload pipes into /bin/sh",
+    },
+    .{
+        .id = "plugin.pipe-shell",
+        .severity = .critical,
+        .pattern = "|/bin/bash",
+        .message = "Plugin insert payload pipes into /bin/bash",
+    },
+    .{
         .id = "plugin.curl-remote",
         .severity = .high,
         .pattern = "curl ",
@@ -98,6 +110,24 @@ const payload_rules = [_]PayloadRule{
         .message = "Plugin insert payload uses /dev/tcp (possible reverse shell)",
     },
     .{
+        .id = "plugin.powershell-iex",
+        .severity = .critical,
+        .pattern = "iex(",
+        .message = "Plugin insert payload uses PowerShell IEX",
+    },
+    .{
+        .id = "plugin.powershell-enc",
+        .severity = .high,
+        .pattern = "-encodedcommand",
+        .message = "Plugin insert payload uses PowerShell -EncodedCommand",
+    },
+    .{
+        .id = "plugin.bash-c",
+        .severity = .high,
+        .pattern = "bash -c",
+        .message = "Plugin insert payload runs bash -c",
+    },
+    .{
         .id = "plugin.chmod-777",
         .severity = .warning,
         .pattern = "chmod -R 777",
@@ -111,9 +141,23 @@ const payload_rules = [_]PayloadRule{
     },
 };
 
+/// HIGH and CRITICAL payloads must never be typed into the PTY.
+pub fn shouldBlock(hit: PayloadHit) bool {
+    return hit.severity.rank() >= finding.Severity.high.rank();
+}
+
 /// Scan a single plugin `insert` payload. Returns the highest-severity hit, if any.
 pub fn auditInsertPayload(payload: []const u8) ?PayloadHit {
     var best: ?PayloadHit = null;
+
+    if (looksLikePipeToShell(payload)) {
+        best = .{
+            .severity = .critical,
+            .rule_id = "plugin.pipe-shell",
+            .message = "Plugin insert payload pipes into a shell",
+        };
+    }
+
     for (payload_rules) |rule| {
         const matched = if (rule.ignore_case)
             indexOfIgnoreCase(payload, rule.pattern) != null
@@ -134,6 +178,13 @@ pub fn auditInsertPayload(payload: []const u8) ?PayloadHit {
 
 /// Collect every matching hit (for static scans that want full reporting).
 pub fn auditInsertPayloadAll(payload: []const u8, out: *std.ArrayList(PayloadHit), allocator: std.mem.Allocator) !void {
+    if (looksLikePipeToShell(payload)) {
+        try out.append(allocator, .{
+            .severity = .critical,
+            .rule_id = "plugin.pipe-shell",
+            .message = "Plugin insert payload pipes into a shell",
+        });
+    }
     for (payload_rules) |rule| {
         const matched = if (rule.ignore_case)
             indexOfIgnoreCase(payload, rule.pattern) != null
@@ -146,6 +197,26 @@ pub fn auditInsertPayloadAll(payload: []const u8, out: *std.ArrayList(PayloadHit
             .message = rule.message,
         });
     }
+}
+
+/// Detect `|sh` / `| bash` / `|/bin/sh` even when spacing varies.
+fn looksLikePipeToShell(payload: []const u8) bool {
+    var i: usize = 0;
+    while (i < payload.len) : (i += 1) {
+        if (payload[i] != '|') continue;
+        var j = i + 1;
+        while (j < payload.len and (payload[j] == ' ' or payload[j] == '\t')) : (j += 1) {}
+        const rest = payload[j..];
+        const shells = [_][]const u8{ "sh", "bash", "zsh", "/bin/sh", "/bin/bash", "/bin/zsh", "/usr/bin/bash", "/usr/bin/zsh" };
+        for (shells) |shell| {
+            if (rest.len < shell.len) continue;
+            if (!std.ascii.eqlIgnoreCase(rest[0..shell.len], shell)) continue;
+            if (rest.len == shell.len) return true;
+            const next = rest[shell.len];
+            if (next == ' ' or next == '\t' or next == '\r' or next == '\n' or next == ';' or next == '&') return true;
+        }
+    }
+    return false;
 }
 
 fn indexOfIgnoreCase(haystack: []const u8, needle: []const u8) ?usize {

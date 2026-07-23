@@ -1202,7 +1202,14 @@ pub const App = struct {
             .ssh_prompt => {
                 if (codepoint < 32 or codepoint > 126) return;
                 if (self.ssh_host_len + 1 >= self.ssh_host.len) return;
-                self.ssh_host[self.ssh_host_len] = @intCast(codepoint);
+                const ch: u8 = @intCast(codepoint);
+                // Only hostname / user@host / :port characters (no shell metacharacters).
+                const ok = (ch >= 'a' and ch <= 'z') or
+                    (ch >= 'A' and ch <= 'Z') or
+                    (ch >= '0' and ch <= '9') or
+                    ch == '.' or ch == '-' or ch == '_' or ch == '@' or ch == ':';
+                if (!ok) return;
+                self.ssh_host[self.ssh_host_len] = ch;
                 self.ssh_host_len += 1;
                 return;
             },
@@ -1210,7 +1217,8 @@ pub const App = struct {
                 if (codepoint < 32 or codepoint > 126) return;
                 if (self.save_name_len + 1 >= self.save_name.len) return;
                 const ch: u8 = @intCast(codepoint);
-                if (ch == '/' or ch == '\\' or ch == '"' or ch == ' ') return;
+                // Keep workspace names as a single path segment (no traversal / shell meta).
+                if (ch == '/' or ch == '\\' or ch == '"' or ch == ' ' or ch == ';') return;
                 self.save_name[self.save_name_len] = ch;
                 self.save_name_len += 1;
                 return;
@@ -2159,12 +2167,21 @@ pub const App = struct {
             .insert => {
                 if (plugin_audit.auditInsertPayload(cmd.payload)) |hit| {
                     var buf: [192]u8 = undefined;
+                    if (plugin_audit.shouldBlock(hit)) {
+                        const msg = std.fmt.bufPrint(&buf, "security blocked [{s}]: {s}", .{
+                            hit.severity.label(),
+                            hit.message,
+                        }) catch "security blocked: risky plugin insert";
+                        self.setStatus(msg);
+                        std.log.warn("security: blocked insert `{s}`: {s}", .{ cmd.id, hit.message });
+                        return;
+                    }
                     const msg = std.fmt.bufPrint(&buf, "security warning [{s}]: {s}", .{
                         hit.severity.label(),
                         hit.message,
                     }) catch "security warning: risky plugin insert";
                     self.setStatus(msg);
-                    std.log.warn("security: executing risky insert `{s}`: {s}", .{ cmd.id, hit.message });
+                    std.log.warn("security: executing warned insert `{s}`: {s}", .{ cmd.id, hit.message });
                 } else {
                     self.setStatus("plugin insert");
                 }
@@ -2294,7 +2311,20 @@ pub const App = struct {
         if (std.mem.startsWith(u8, payload, "status:")) {
             self.setStatus(payload["status:".len..]);
         } else if (std.mem.startsWith(u8, payload, "insert:")) {
-            if (self.focused()) |s| s.write(payload["insert:".len..]);
+            const text = payload["insert:".len..];
+            if (plugin_audit.auditInsertPayload(text)) |hit| {
+                if (plugin_audit.shouldBlock(hit)) {
+                    var buf: [192]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "security blocked hook [{s}]: {s}", .{
+                        hit.severity.label(),
+                        hit.message,
+                    }) catch "security blocked: risky plugin hook";
+                    self.setStatus(msg);
+                    std.log.warn("security: blocked hook insert: {s}", .{hit.message});
+                    return;
+                }
+            }
+            if (self.focused()) |s| s.write(text);
         } else if (std.mem.startsWith(u8, payload, "theme:")) {
             self.applyTheme(payload["theme:".len..]);
         } else {
@@ -2343,12 +2373,38 @@ pub const App = struct {
     }
 
     fn connectSsh(self: *App, host: []const u8) !void {
+        if (!isSafeSshTarget(host)) {
+            self.setStatus("invalid ssh host");
+            return;
+        }
         try self.newTab();
         const session = self.focused() orelse return;
         var cmd: [192]u8 = undefined;
-        const line = try std.fmt.bufPrint(&cmd, "ssh {s}\r", .{host});
+        const line = try std.fmt.bufPrint(&cmd, "ssh -- {s}\r", .{host});
         session.write(line);
         self.setStatus("ssh started");
+    }
+
+    /// Allow `user@host`, hostnames, IPv4, and optional `:port` — reject shell metacharacters.
+    fn isSafeSshTarget(host: []const u8) bool {
+        if (host.len == 0 or host.len > 180) return false;
+        var saw_at = false;
+        var saw_colon = false;
+        for (host) |ch| {
+            switch (ch) {
+                'a'...'z', 'A'...'Z', '0'...'9', '.', '-', '_' => {},
+                '@' => {
+                    if (saw_at) return false;
+                    saw_at = true;
+                },
+                ':' => {
+                    if (saw_colon) return false;
+                    saw_colon = true;
+                },
+                else => return false,
+            }
+        }
+        return true;
     }
 
     fn openFolderWorkspace(self: *App) void {
@@ -2443,6 +2499,10 @@ pub const App = struct {
             c.GLFW_KEY_ENTER => {
                 if (self.save_name_len == 0) return;
                 const name = self.save_name[0..self.save_name_len];
+                if (!WsManager.isValidName(name)) {
+                    self.setStatus("invalid workspace name");
+                    return;
+                }
                 self.workspaces.saveTabs(name, &self.tabs) catch {
                     self.setStatus("save failed");
                     self.ui = .normal;
@@ -2548,7 +2608,18 @@ pub const App = struct {
         const session = self.focused() orelse return;
         const text = clipboard.get(self.window.handle) orelse return;
         if (text.len == 0) return;
-        session.write(text);
+        // Cap paste size (matches copy buffer) to limit paste-jacking / DoS.
+        const capped = text[0..@min(text.len, 64 * 1024)];
+        const has_newline = std.mem.indexOfScalar(u8, capped, '\n') != null or
+            std.mem.indexOfScalar(u8, capped, '\r') != null;
+        if (has_newline) {
+            // Bracketed paste so shells that support it treat the blob as literal text.
+            session.write("\x1b[200~");
+            session.write(capped);
+            session.write("\x1b[201~");
+        } else {
+            session.write(capped);
+        }
     }
 
     /// Focus the pane under framebuffer coords; returns session + leaf rect if any.
