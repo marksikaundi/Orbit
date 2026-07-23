@@ -366,11 +366,6 @@ pub const App = struct {
         const tfg = self.renderer.theme.foreground;
         const accent = self.renderer.theme.ansi[4]; // theme blue
         try self.renderer.drawRect(0, 0, self.window.fb_width, Tabs.bar_height, tbg, 1.0);
-        try self.renderer.drawRect(0, Tabs.bar_height - 1, self.window.fb_width, 1, Color.rgb(
-            @intCast(@min(255, @as(i32, tbg.r) + 22)),
-            @intCast(@min(255, @as(i32, tbg.g) + 22)),
-            @intCast(@min(255, @as(i32, tbg.b) + 26)),
-        ), 1.0);
         const cell_w_i: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
         const cell_h_i: i32 = @intFromFloat(@max(1.0, self.renderer.cell_h));
         const slant: i32 = 10;
@@ -456,10 +451,6 @@ pub const App = struct {
                     hl_col,
                     hl_len,
                 ) catch {};
-
-                if (session == ctx.app.tabs.focusedSession()) {
-                    ctx.app.renderer.drawRect(r.x, r.y, r.w, 2, Color.rgb(80, 140, 220), 0.8) catch {};
-                }
             }
         };
         var dctx: DrawCtx = .{ .app = self };
