@@ -62,6 +62,9 @@ pub const App = struct {
     save_name_len: usize = 0,
     ssh_host: [128]u8 = undefined,
     ssh_host_len: usize = 0,
+    /// Inject `ssh -- host` only after the new tab's shell has printed a prompt.
+    pending_ssh_len: usize = 0,
+    pending_ssh_host: [128]u8 = undefined,
     status_msg: [96]u8 = undefined,
     status_len: usize = 0,
     /// Seconds (glfwGetTime) when the toast should disappear (0 = hidden).
@@ -164,6 +167,7 @@ pub const App = struct {
             Window.poll();
             self.handleResize();
             self.tabs.tickAll();
+            self.flushPendingSsh();
             self.pollTerminalStatus();
             self.tickStatus();
             self.reapExitedSessions();
@@ -375,7 +379,7 @@ pub const App = struct {
 
         self.renderer.clearBackground();
 
-        // Quiet tab strip — theme neutrals only (no saturated accent fills).
+        // Quiet tab strip — lift from background only (no theme-accent / cyan underlines).
         const tbg = self.renderer.theme.background;
         const tfg = self.renderer.theme.foreground;
         const bar_bg = Color.rgb(
@@ -389,17 +393,17 @@ pub const App = struct {
             @intCast(@min(255, @as(i32, tbg.b) + 16)),
         );
         const rule = Color.rgb(
-            @intCast(@min(255, @as(i32, tbg.r) + 22)),
-            @intCast(@min(255, @as(i32, tbg.g) + 22)),
-            @intCast(@min(255, @as(i32, tbg.b) + 26)),
+            @intCast(@min(255, @as(i32, tbg.r) + 28)),
+            @intCast(@min(255, @as(i32, tbg.g) + 28)),
+            @intCast(@min(255, @as(i32, tbg.b) + 28)),
         );
-        const muted_fg = Color.rgb(
-            @intCast(@divTrunc(@as(i32, tfg.r) + @as(i32, tbg.r) * 2, 3)),
-            @intCast(@divTrunc(@as(i32, tfg.g) + @as(i32, tbg.g) * 2, 3)),
-            @intCast(@divTrunc(@as(i32, tfg.b) + @as(i32, tbg.b) * 2, 3)),
-        );
+        // Desaturate inactive labels toward gray so Solarized/Nord don't tint the chrome.
+        const avg_fg = @divTrunc(@as(i32, tfg.r) + @as(i32, tfg.g) + @as(i32, tfg.b), 3);
+        const avg_bg = @divTrunc(@as(i32, tbg.r) + @as(i32, tbg.g) + @as(i32, tbg.b), 3);
+        const muted_v = @divTrunc(avg_fg + avg_bg * 2, 3);
+        const muted_fg = Color.rgb(@intCast(muted_v), @intCast(muted_v), @intCast(muted_v));
         try self.renderer.drawRect(0, 0, self.window.fb_width, Tabs.bar_height, bar_bg, 1.0);
-        try self.renderer.drawRect(0, Tabs.bar_height - 1, self.window.fb_width, 1, rule, 0.7);
+        try self.renderer.drawRect(0, Tabs.bar_height - 1, self.window.fb_width, 1, rule, 0.55);
         const cell_w_i: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
         const cell_h_i: i32 = @intFromFloat(@max(1.0, self.renderer.cell_h));
         const tab_h: i32 = Tabs.bar_height - 2;
@@ -412,8 +416,7 @@ pub const App = struct {
             const label_w: i32 = text_w + 28;
             if (active) {
                 try self.renderer.drawRect(x, tab_y, label_w, tab_h, active_bg, 1.0);
-                // Hairline under the active title — same family as the bar rule.
-                try self.renderer.drawRect(x + 8, Tabs.bar_height - 2, label_w - 16, 2, muted_fg, 0.85);
+                try self.renderer.drawRect(x + 8, Tabs.bar_height - 2, label_w - 16, 2, rule, 0.95);
             }
             const fg = if (active) tfg else muted_fg;
             const text_x = x + @divTrunc(label_w - text_w, 2);
@@ -2409,11 +2412,38 @@ pub const App = struct {
             self.setStatus("invalid ssh host");
             return;
         }
-        try self.newTab();
-        const session = self.focused() orelse return;
+        // Open a tab titled with the host; inject the command only after the prompt appears
+        // so we don't get a ghost echoed line + weird highlight before the shell is ready.
+        var title_buf: [64]u8 = undefined;
+        const title = std.fmt.bufPrint(&title_buf, "ssh {s}", .{host}) catch "ssh";
+        try self.newTabInDir(self.sessionCwd(), title[0..@min(title.len, 32)]);
+        if (self.focused()) |s| s.selection.clear();
+        const n = @min(host.len, self.pending_ssh_host.len);
+        @memcpy(self.pending_ssh_host[0..n], host[0..n]);
+        self.pending_ssh_len = n;
+        self.setStatus("ssh starting…");
+    }
+
+    fn flushPendingSsh(self: *App) void {
+        if (self.pending_ssh_len == 0) return;
+        const session = self.focused() orelse {
+            self.pending_ssh_len = 0;
+            return;
+        };
+        if (!session.alive or !session.output_seen) return;
+
         var cmd: [192]u8 = undefined;
-        const line = try std.fmt.bufPrint(&cmd, "ssh -- {s}\r", .{host});
+        const line = std.fmt.bufPrint(
+            &cmd,
+            "ssh -- {s}\r",
+            .{self.pending_ssh_host[0..self.pending_ssh_len]},
+        ) catch {
+            self.pending_ssh_len = 0;
+            self.setStatus("ssh failed");
+            return;
+        };
         session.write(line);
+        self.pending_ssh_len = 0;
         self.setStatus("ssh started");
     }
 

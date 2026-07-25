@@ -31,6 +31,8 @@ pub const Session = struct {
     read_buf: [8192]u8 = undefined,
     /// False after the shell exits (`exit`, Ctrl+D, crash).
     alive: bool = true,
+    /// True after the PTY has produced any output (prompt / MOTD). Used to defer injected commands.
+    output_seen: bool = false,
     /// Pending status toast from OSC notify or notable terminal lines.
     pending_status: [96]u8 = undefined,
     pending_status_len: usize = 0,
@@ -143,6 +145,7 @@ pub const Session = struct {
         while (true) {
             const result = self.pty.read(&self.read_buf);
             if (result.len > 0) {
+                self.output_seen = true;
                 const chunk = self.read_buf[0..result.len];
                 self.parser.feed(&self.screen, chunk);
                 self.ingestForStatus(chunk);
