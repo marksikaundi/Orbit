@@ -375,50 +375,59 @@ pub const App = struct {
 
         self.renderer.clearBackground();
 
-        // Tab strip with Powerline-style slanted active label
+        // Quiet tab strip — theme neutrals only (no saturated accent fills).
         const tbg = self.renderer.theme.background;
         const tfg = self.renderer.theme.foreground;
-        const accent = self.renderer.theme.ansi[4]; // theme blue
-        try self.renderer.drawRect(0, 0, self.window.fb_width, Tabs.bar_height, tbg, 1.0);
+        const bar_bg = Color.rgb(
+            @intCast(@max(0, @as(i32, tbg.r) - 4)),
+            @intCast(@max(0, @as(i32, tbg.g) - 4)),
+            @intCast(@max(0, @as(i32, tbg.b) - 4)),
+        );
+        const active_bg = Color.rgb(
+            @intCast(@min(255, @as(i32, tbg.r) + 14)),
+            @intCast(@min(255, @as(i32, tbg.g) + 14)),
+            @intCast(@min(255, @as(i32, tbg.b) + 16)),
+        );
+        const rule = Color.rgb(
+            @intCast(@min(255, @as(i32, tbg.r) + 22)),
+            @intCast(@min(255, @as(i32, tbg.g) + 22)),
+            @intCast(@min(255, @as(i32, tbg.b) + 26)),
+        );
+        const muted_fg = Color.rgb(
+            @intCast(@divTrunc(@as(i32, tfg.r) + @as(i32, tbg.r) * 2, 3)),
+            @intCast(@divTrunc(@as(i32, tfg.g) + @as(i32, tbg.g) * 2, 3)),
+            @intCast(@divTrunc(@as(i32, tfg.b) + @as(i32, tbg.b) * 2, 3)),
+        );
+        try self.renderer.drawRect(0, 0, self.window.fb_width, Tabs.bar_height, bar_bg, 1.0);
+        try self.renderer.drawRect(0, Tabs.bar_height - 1, self.window.fb_width, 1, rule, 0.7);
         const cell_w_i: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
         const cell_h_i: i32 = @intFromFloat(@max(1.0, self.renderer.cell_h));
-        const slant: i32 = 10;
-        const tab_h: i32 = Tabs.bar_height - 10;
-        const tab_y: i32 = 5;
-        var x: i32 = 8;
+        const tab_h: i32 = Tabs.bar_height - 2;
+        const tab_y: i32 = 0;
+        var x: i32 = 6;
         for (self.tabs.items.items, 0..) |tab, i| {
             const active = i == self.tabs.active;
             const title = tab.title[0..@min(tab.title.len, 16)];
             const text_w: i32 = @as(i32, @intCast(title.len)) * cell_w_i;
             const label_w: i32 = text_w + 28;
             if (active) {
-                try self.renderer.drawSlantRect(x, tab_y, label_w, tab_h, slant, accent, 1.0);
-            } else {
-                const muted = Color.rgb(
-                    @intCast(@divTrunc(@as(i32, tbg.r) * 2 + @as(i32, accent.r), 3)),
-                    @intCast(@divTrunc(@as(i32, tbg.g) * 2 + @as(i32, accent.g), 3)),
-                    @intCast(@divTrunc(@as(i32, tbg.b) * 2 + @as(i32, accent.b), 3)),
-                );
-                try self.renderer.drawSlantRect(x, tab_y, label_w, tab_h, slant, muted, 0.55);
+                try self.renderer.drawRect(x, tab_y, label_w, tab_h, active_bg, 1.0);
+                // Hairline under the active title — same family as the bar rule.
+                try self.renderer.drawRect(x + 8, Tabs.bar_height - 2, label_w - 16, 2, muted_fg, 0.85);
             }
-            const fg = if (active) Color.rgb(255, 255, 255) else Color.rgb(
-                @intCast(@divTrunc(@as(i32, tfg.r) + @as(i32, tbg.r), 2)),
-                @intCast(@divTrunc(@as(i32, tfg.g) + @as(i32, tbg.g), 2)),
-                @intCast(@divTrunc(@as(i32, tfg.b) + @as(i32, tbg.b), 2)),
-            );
-            // Center label in the parallelogram (centroid is at x+w/2, y+h/2)
+            const fg = if (active) tfg else muted_fg;
             const text_x = x + @divTrunc(label_w - text_w, 2);
             const text_y = tab_y + @divTrunc(tab_h - cell_h_i, 2);
             try self.renderer.drawText(text_x, text_y, title, fg);
-            x += label_w + 4;
+            x += label_w + 2;
         }
 
-        // Workspace badge on the right
+        // Workspace name on the right (muted, same tone as inactive tabs)
         if (self.workspaces.current_name) |wn| {
             const label = wn[0..@min(wn.len, 20)];
             const lw: i32 = @as(i32, @intCast(label.len)) * cell_w_i + 20;
             const bx = self.window.fb_width - lw - 10;
-            try self.renderer.drawText(bx + 8, 10, label, Color.rgb(140, 180, 160));
+            try self.renderer.drawText(bx + 8, 10, label, muted_fg);
         }
 
         const tab = self.tabs.current() orelse {
