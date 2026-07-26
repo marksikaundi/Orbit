@@ -14,6 +14,7 @@ const bindings = @import("../ui/bindings.zig");
 const home_mod = @import("../ui/home.zig");
 const Home = home_mod.Home;
 const ui_scale = @import("../ui/scale.zig");
+const ui_chrome = @import("../ui/chrome.zig");
 const Config = @import("../config/config.zig").Config;
 const CursorStyle = @import("../config/config.zig").CursorStyle;
 const theme_mod = @import("../config/theme.zig");
@@ -540,6 +541,10 @@ pub const App = struct {
         return idx;
     }
 
+    fn overlayChrome(self: *const App) ui_chrome.Chrome {
+        return ui_chrome.fromTheme(self.renderer.theme);
+    }
+
     fn drawContextMenu(self: *App) !void {
         const menu = self.context_menu orelse return;
         const r = self.contextMenuRect(menu);
@@ -547,11 +552,12 @@ pub const App = struct {
         const pad_x: i32 = 12;
         const pad_y: i32 = 6;
         const row_h = ch + 8;
-        const panel = Color.rgb(24, 28, 36);
-        const accent = Color.rgb(90, 175, 220);
-        const fg = Color.rgb(220, 228, 236);
-        const muted = Color.rgb(110, 120, 132);
-        const sel_bg = Color.rgb(40, 52, 68);
+        const chrome = self.overlayChrome();
+        const panel = chrome.panel;
+        const accent = chrome.accent;
+        const fg = chrome.fg;
+        const muted = chrome.muted;
+        const sel_bg = chrome.sel_bg;
 
         try self.renderer.drawRect(r.x, r.y, r.w, r.h, panel, 0.98);
         try self.renderer.drawRect(r.x, r.y, 2, r.h, accent, 0.7);
@@ -596,8 +602,10 @@ pub const App = struct {
         const ch = ui_scale.scaled(base_ch, ui);
         const title_ch = ui_scale.scaled(base_ch, title_s);
 
-        // Dim the scene so the palette reads as a focused overlay.
-        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.48);
+        const chrome = self.overlayChrome();
+
+        // Dim with theme background so overlays stay uniform with Help / the active theme.
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
 
         const pad_x = @max(cw + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
         const pad_y = @max(@divTrunc(ch, 2) + 6, @as(i32, @intFromFloat(@round(18.0 * ui))));
@@ -609,8 +617,8 @@ pub const App = struct {
         const accent_h = @max(2, @divTrunc(ch, 10));
 
         const w = ui_scale.panelWidth(fb_w, cw, 52, @as(i32, @intFromFloat(@round(560.0 * ui))));
-        const chrome = title_h + search_h + footer_h + gap * 3 + pad_y * 2;
-        const max_rows_by_height = @max(1, @divTrunc(fb_h - chrome - ch * 2, row_h));
+        const chrome_h = title_h + search_h + footer_h + gap * 3 + pad_y * 2;
+        const max_rows_by_height = @max(1, @divTrunc(fb_h - chrome_h - ch * 2, row_h));
         const max_visible: usize = @min(16, @as(usize, @intCast(max_rows_by_height)));
 
         var start: usize = 0;
@@ -627,17 +635,17 @@ pub const App = struct {
         const x = @divTrunc(fb_w - w, 2);
         const y = @max(ch * 2, @divTrunc(fb_h - h, 6));
 
-        const panel = Color.rgb(22, 26, 34);
-        const field = Color.rgb(14, 17, 24);
-        const fg = Color.rgb(230, 235, 240);
-        const muted = Color.rgb(140, 150, 165);
-        const dim = Color.rgb(100, 110, 125);
-        const accent = Color.rgb(90, 175, 220);
-        const sel_bg = Color.rgb(36, 48, 64);
-        const rule = Color.rgb(40, 48, 60);
+        const panel = chrome.panel;
+        const field = chrome.field;
+        const fg = chrome.fg;
+        const muted = chrome.muted;
+        const dim = chrome.dim;
+        const accent = chrome.accent;
+        const sel_bg = chrome.sel_bg;
+        const rule = chrome.rule;
 
         try self.renderer.drawRect(x, y, w, h, panel, 0.98);
-        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.65);
+        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.55);
 
         var cy = y + pad_y;
         try self.renderer.drawTextScaled(x + pad_x, cy, "Command Palette", fg, title_s);
@@ -703,8 +711,9 @@ pub const App = struct {
         const ch = @as(i32, @intFromFloat(self.renderer.cell_h));
         const fb_w = self.window.fb_width;
         const fb_h = self.window.fb_height;
+        const chrome = self.overlayChrome();
 
-        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.45);
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
 
         const pad_x = @max(20, cw + 8);
         const pad_y = @max(16, @divTrunc(ch, 2) + 6);
@@ -731,12 +740,12 @@ pub const App = struct {
         const x = @divTrunc(fb_w - w, 2);
         const y = @max(ch * 2, @divTrunc(fb_h - h, 5));
 
-        const panel = Color.rgb(22, 26, 34);
-        const fg = Color.rgb(230, 235, 240);
-        const muted = Color.rgb(140, 150, 165);
-        const dim = Color.rgb(100, 110, 125);
-        const accent = Color.rgb(90, 175, 220);
-        const sel_bg = Color.rgb(36, 48, 64);
+        const panel = chrome.panel;
+        const fg = chrome.fg;
+        const muted = chrome.muted;
+        const dim = chrome.dim;
+        const accent = chrome.accent;
+        const sel_bg = chrome.sel_bg;
 
         try self.renderer.drawRect(x, y, w, h, panel, 0.98);
         try self.renderer.drawRect(x, y, w, 2, accent, 0.55);
@@ -753,7 +762,7 @@ pub const App = struct {
         try self.renderer.drawText(x + w - pad_x - cw * 12, cy, "Tab switch", dim);
         cy += mode_h;
 
-        try self.renderer.drawRect(x + pad_x - 4, cy - 4, w - pad_x * 2 + 8, search_h, Color.rgb(16, 19, 26), 1.0);
+        try self.renderer.drawRect(x + pad_x - 4, cy - 4, w - pad_x * 2 + 8, search_h, chrome.field, 1.0);
         var qbuf: [96]u8 = undefined;
         const query = self.search.querySlice();
         const placeholder = if (self.search.mode == .terminal)
@@ -764,7 +773,7 @@ pub const App = struct {
         try self.renderer.drawText(x + pad_x + 4, cy + @divTrunc(search_h - ch, 2) - 2, qline, if (query.len == 0) dim else accent);
         cy += search_h + gap;
 
-        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, chrome.rule, 0.9);
 
         if (query.len == 0) {
             const hint = if (self.search.mode == .terminal)
@@ -903,16 +912,21 @@ pub const App = struct {
     }
 
     fn drawSshPrompt(self: *App) !void {
+        const chrome = self.overlayChrome();
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
         const w: i32 = 440;
         const h: i32 = 90;
-        const x = @divTrunc(self.window.fb_width - w, 2);
-        const y = @divTrunc(self.window.fb_height - h, 2);
-        try self.renderer.drawRect(x, y, w, h, Color.rgb(24, 28, 36), 0.97);
-        try self.renderer.drawText(x + 16, y + 14, "SSH", Color.rgb(230, 235, 240));
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @divTrunc(fb_h - h, 2);
+        try self.renderer.drawRect(x, y, w, h, chrome.panel, 0.98);
+        try self.renderer.drawRect(x, y, w, 2, chrome.accent, 0.55);
+        try self.renderer.drawText(x + 16, y + 14, "SSH", chrome.fg);
         var buf: [160]u8 = undefined;
         const label = std.fmt.bufPrint(&buf, "Host: {s}", .{self.ssh_host[0..self.ssh_host_len]}) catch "Host:";
-        try self.renderer.drawText(x + 16, y + 42, label, Color.rgb(200, 210, 220));
-        try self.renderer.drawText(x + 16, y + 66, "Enter connect  |  Esc cancel", Color.rgb(140, 150, 160));
+        try self.renderer.drawText(x + 16, y + 42, label, chrome.muted);
+        try self.renderer.drawText(x + 16, y + 66, "Enter connect  |  Esc cancel", chrome.dim);
     }
 
     fn drawSettings(self: *App) !void {
@@ -926,7 +940,8 @@ pub const App = struct {
         const ch = ui_scale.scaled(base_ch, ui);
         const title_ch = ui_scale.scaled(base_ch, title_s);
 
-        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.48);
+        const chrome = self.overlayChrome();
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
 
         const pad_x = @max(cw + 10, @as(i32, @intFromFloat(@round(26.0 * ui))));
         const pad_y = @max(@divTrunc(ch, 2) + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
@@ -945,16 +960,16 @@ pub const App = struct {
         const x = @divTrunc(fb_w - w, 2);
         const y = @max(ch * 2, @divTrunc(fb_h - h, 2));
 
-        const panel = Color.rgb(22, 26, 34);
-        const fg = Color.rgb(230, 235, 240);
-        const muted = Color.rgb(150, 160, 175);
-        const dim = Color.rgb(100, 110, 125);
-        const accent = Color.rgb(90, 175, 220);
-        const sel_bg = Color.rgb(36, 48, 64);
-        const rule = Color.rgb(40, 48, 60);
+        const panel = chrome.panel;
+        const fg = chrome.fg;
+        const muted = chrome.muted;
+        const dim = chrome.dim;
+        const accent = chrome.accent;
+        const sel_bg = chrome.sel_bg;
+        const rule = chrome.rule;
 
         try self.renderer.drawRect(x, y, w, h, panel, 0.98);
-        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.65);
+        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.55);
 
         var cy = y + pad_y;
         try self.renderer.drawTextScaled(x + pad_x, cy, "Appearance", fg, title_s);
@@ -1023,7 +1038,8 @@ pub const App = struct {
         const ch = ui_scale.scaled(base_ch, ui);
         const title_ch = ui_scale.scaled(base_ch, title_s);
 
-        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.48);
+        const chrome = self.overlayChrome();
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
 
         const pad_x = @max(cw + 10, @as(i32, @intFromFloat(@round(26.0 * ui))));
         const pad_y = @max(@divTrunc(ch, 2) + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
@@ -1049,18 +1065,18 @@ pub const App = struct {
         const x = @divTrunc(fb_w - w, 2);
         const y = @max(ch, @divTrunc(fb_h - h, 2));
 
-        const panel = Color.rgb(22, 26, 34);
-        const fg = Color.rgb(230, 235, 240);
-        const muted = Color.rgb(150, 160, 175);
-        const dim = Color.rgb(100, 110, 125);
-        const accent = Color.rgb(90, 175, 220);
-        const sel_bg = Color.rgb(36, 48, 64);
-        const rule = Color.rgb(40, 48, 60);
-        const on_col = Color.rgb(120, 200, 140);
-        const off_col = Color.rgb(160, 110, 110);
+        const panel = chrome.panel;
+        const fg = chrome.fg;
+        const muted = chrome.muted;
+        const dim = chrome.dim;
+        const accent = chrome.accent;
+        const sel_bg = chrome.sel_bg;
+        const rule = chrome.rule;
+        const on_col = chrome.on_col;
+        const off_col = chrome.off_col;
 
         try self.renderer.drawRect(x, y, w, h, panel, 0.98);
-        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.65);
+        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.55);
 
         var cy = y + pad_y;
         try self.renderer.drawTextScaled(x + pad_x, cy, "Plugins", fg, title_s);
@@ -1183,7 +1199,8 @@ pub const App = struct {
         const ch = ui_scale.scaled(base_ch, ui);
         const title_ch = ui_scale.scaled(base_ch, title_s);
 
-        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.48);
+        const chrome = self.overlayChrome();
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
 
         const pad_x = @max(cw + 10, @as(i32, @intFromFloat(@round(26.0 * ui))));
         const pad_y = @max(@divTrunc(ch, 2) + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
@@ -1196,8 +1213,8 @@ pub const App = struct {
         const name_n = self.workspaces.names.items.len;
 
         const w = ui_scale.panelWidth(fb_w, cw, 44, @as(i32, @intFromFloat(@round(480.0 * ui))));
-        const chrome = pad_y + title_h + subtitle_h + gap + footer_h + gap + ch;
-        const max_rows_by_height = @max(1, @divTrunc(fb_h - chrome - ch * 2, row_h));
+        const chrome_h = pad_y + title_h + subtitle_h + gap + footer_h + gap + ch;
+        const max_rows_by_height = @max(1, @divTrunc(fb_h - chrome_h - ch * 2, row_h));
         const max_visible: usize = @min(10, @as(usize, @intCast(max_rows_by_height)));
         const list_rows = @max(@as(usize, 1), @min(@max(name_n, 1), max_visible));
         const list_h = @as(i32, @intCast(list_rows)) * row_h;
@@ -1205,13 +1222,13 @@ pub const App = struct {
         const x = @divTrunc(fb_w - w, 2);
         const y = @max(ch * 2, @divTrunc(fb_h - h, 2));
 
-        const panel = Color.rgb(22, 26, 34);
-        const fg = Color.rgb(230, 235, 240);
-        const muted = Color.rgb(150, 160, 175);
-        const dim = Color.rgb(100, 110, 125);
-        const accent = Color.rgb(90, 175, 220);
-        const sel_bg = Color.rgb(36, 48, 64);
-        const rule = Color.rgb(40, 48, 60);
+        const panel = chrome.panel;
+        const fg = chrome.fg;
+        const muted = chrome.muted;
+        const dim = chrome.dim;
+        const accent = chrome.accent;
+        const sel_bg = chrome.sel_bg;
+        const rule = chrome.rule;
 
         try self.renderer.drawRect(x, y, w, h, panel, 0.98);
         try self.renderer.drawRect(x, y, w, accent_h, accent, 0.55);
@@ -1269,16 +1286,21 @@ pub const App = struct {
     }
 
     fn drawSavePrompt(self: *App) !void {
+        const chrome = self.overlayChrome();
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
         const w: i32 = 400;
         const h: i32 = 90;
-        const x = @divTrunc(self.window.fb_width - w, 2);
-        const y = @divTrunc(self.window.fb_height - h, 2);
-        try self.renderer.drawRect(x, y, w, h, Color.rgb(24, 28, 36), 0.97);
-        try self.renderer.drawText(x + 16, y + 14, "Save Workspace", Color.rgb(230, 235, 240));
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @divTrunc(fb_h - h, 2);
+        try self.renderer.drawRect(x, y, w, h, chrome.panel, 0.98);
+        try self.renderer.drawRect(x, y, w, 2, chrome.accent, 0.55);
+        try self.renderer.drawText(x + 16, y + 14, "Save Workspace", chrome.fg);
         var buf: [80]u8 = undefined;
         const label = std.fmt.bufPrint(&buf, "Name: {s}", .{self.save_name[0..self.save_name_len]}) catch "Name:";
-        try self.renderer.drawText(x + 16, y + 42, label, Color.rgb(200, 210, 220));
-        try self.renderer.drawText(x + 16, y + 66, "Enter save  |  Esc cancel", Color.rgb(140, 150, 160));
+        try self.renderer.drawText(x + 16, y + 42, label, chrome.muted);
+        try self.renderer.drawText(x + 16, y + 66, "Enter save  |  Esc cancel", chrome.dim);
     }
 
     fn focused(self: *App) ?*Session {

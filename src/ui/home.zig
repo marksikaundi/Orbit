@@ -5,6 +5,7 @@ const Renderer = @import("../renderer/renderer.zig").Renderer;
 const Color = @import("../terminal/cell.zig").Color;
 const app_version = @import("../version.zig");
 const ui_scale = @import("scale.zig");
+const ui_chrome = @import("chrome.zig");
 
 pub const version = app_version.string;
 
@@ -212,19 +213,12 @@ pub fn draw(
     font_size: f32,
     plugin_count: usize,
 ) !void {
-    const bg = renderer.theme.background;
-    const fg = renderer.theme.foreground;
-    const muted = Color.rgb(
-        @intCast(@divTrunc(@as(i32, fg.r) + @as(i32, bg.r) * 2, 3)),
-        @intCast(@divTrunc(@as(i32, fg.g) + @as(i32, bg.g) * 2, 3)),
-        @intCast(@divTrunc(@as(i32, fg.b) + @as(i32, bg.b) * 2, 3)),
-    );
-    const dim = Color.rgb(
-        @intCast(@divTrunc(@as(i32, fg.r) + @as(i32, bg.r) * 4, 5)),
-        @intCast(@divTrunc(@as(i32, fg.g) + @as(i32, bg.g) * 4, 5)),
-        @intCast(@divTrunc(@as(i32, fg.b) + @as(i32, bg.b) * 4, 5)),
-    );
-    const accent = Color.rgb(90, 175, 220);
+    const chrome = ui_chrome.fromTheme(renderer.theme);
+    const bg = chrome.bg;
+    const fg = chrome.fg;
+    const muted = chrome.muted;
+    const dim = chrome.dim;
+    const accent = chrome.accent;
 
     try renderer.drawRect(0, 0, fb_w, fb_h, bg, 1.0);
 
@@ -244,7 +238,7 @@ pub fn draw(
     const cx = @divTrunc(fb_w, 2);
 
     if (home.show_help) {
-        try drawHelp(renderer, fb_w, fb_h, cx, home.help_scroll, bg, fg, muted, dim, body);
+        try drawHelp(renderer, fb_w, fb_h, cx, home.help_scroll, fg, muted, dim, body);
         return;
     }
 
@@ -290,11 +284,7 @@ pub fn draw(
     for (entries, 0..) |entry, i| {
         const ry = y + @as(i32, @intCast(i)) * row_h;
         if (i == home.selected) {
-            try renderer.drawRect(list_x - 10, ry - 4, list_w + 20, row_h - 2, Color.rgb(
-                @intCast(@min(255, @as(i32, bg.r) + 18)),
-                @intCast(@min(255, @as(i32, bg.g) + 22)),
-                @intCast(@min(255, @as(i32, bg.b) + 28)),
-            ), 1.0);
+            try renderer.drawRect(list_x - 10, ry - 4, list_w + 20, row_h - 2, chrome.sel_bg, 1.0);
             try renderer.drawRect(list_x - 10, ry - 4, @max(3, @divTrunc(cw, 3)), row_h - 2, accent, 1.0);
         }
         try renderer.drawTextScaled(list_x + 10, ry + 2, entry.label, fg, body);
@@ -327,7 +317,6 @@ fn drawHelp(
     fb_h: i32,
     cx: i32,
     scroll: usize,
-    bg: Color,
     fg: Color,
     muted: Color,
     dim: Color,
@@ -337,7 +326,8 @@ fn drawHelp(
     const base_ch = @as(i32, @intFromFloat(renderer.cell_h));
     const cw = ui_scale.scaled(base_cw, ui);
     const ch = ui_scale.scaled(base_ch, ui);
-    const accent = Color.rgb(90, 175, 220);
+    const chrome = ui_chrome.fromTheme(renderer.theme);
+    const accent = chrome.accent;
     const panel_w = ui_scale.panelWidth(fb_w, cw, 52, 560);
     const panel_x = cx - @divTrunc(panel_w, 2);
     const panel_y = @max(ch, @divTrunc(fb_h, 14));
@@ -352,11 +342,7 @@ fn drawHelp(
     const start = @min(scroll, max_scroll);
     const end = @min(start + visible, help_rows.len);
 
-    try renderer.drawRect(panel_x, panel_y, panel_w, panel_h, Color.rgb(
-        @intCast(@min(255, @as(i32, bg.r) + 8)),
-        @intCast(@min(255, @as(i32, bg.g) + 8)),
-        @intCast(@min(255, @as(i32, bg.b) + 10)),
-    ), 1.0);
+    try renderer.drawRect(panel_x, panel_y, panel_w, panel_h, chrome.panel, 1.0);
 
     try renderer.drawTextScaled(panel_x + cw, panel_y + @divTrunc(ch, 2), "Help & Shortcuts", fg, ui);
     var hint_buf: [48]u8 = undefined;
