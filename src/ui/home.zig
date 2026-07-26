@@ -133,6 +133,10 @@ pub const help_rows = [_]HelpRow{
 
     .{ .heading = "Config & plugins" },
     .{ .item = .{ .keys = "L / Plugins", .desc = "Manage plugins, install pack, reload" } },
+    .{ .item = .{ .keys = "I", .desc = "Install / update the bundled plugin pack" } },
+    .{ .item = .{ .keys = "U / Delete", .desc = "Uninstall the selected plugin from disk" } },
+    .{ .item = .{ .keys = "Space", .desc = "Enable / disable selected plugin" } },
+    .{ .item = .{ .keys = "R", .desc = "Reload plugins from ~/.config/orbit/plugins/" } },
     .{ .item = .{ .keys = "config.toml", .desc = "~/.config/orbit/config.toml" } },
     .{ .item = .{ .keys = "shortcut=", .desc = "In plugin.toml: your own key chords" } },
     .{ .item = .{ .keys = "plugins/", .desc = "~/.config/orbit/plugins/<name>/" } },

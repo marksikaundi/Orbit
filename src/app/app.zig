@@ -1185,7 +1185,7 @@ pub const App = struct {
         cy += ch + @max(6, @divTrunc(ch, 4));
         try self.renderer.drawTextScaled(x + pad_x, cy, "Up/Down select    Space toggle    R reload", dim, ui);
         cy += ch + @max(6, @divTrunc(ch, 4));
-        try self.renderer.drawTextScaled(x + pad_x, cy, "I install/update pack    Esc close", dim, ui);
+        try self.renderer.drawTextScaled(x + pad_x, cy, "I install pack    U uninstall    Esc close", dim, ui);
     }
 
     fn drawWorkspacePicker(self: *App) !void {
@@ -1809,6 +1809,7 @@ pub const App = struct {
             c.GLFW_KEY_ENTER, c.GLFW_KEY_SPACE => self.toggleSelectedPlugin(),
             c.GLFW_KEY_R => self.reloadPluginsFromPanel(),
             c.GLFW_KEY_I => self.installBundledPlugins(),
+            c.GLFW_KEY_U, c.GLFW_KEY_DELETE, c.GLFW_KEY_BACKSPACE => self.uninstallSelectedPlugin(),
             else => {},
         }
     }
@@ -2187,6 +2188,51 @@ pub const App = struct {
         const file = std.Io.Dir.createFileAbsolute(self.io, toml_path, .{}) catch return false;
         defer file.close(self.io);
         file.writeStreamingAll(self.io, toml) catch return false;
+        return true;
+    }
+
+    /// Remove the selected plugin folder from `~/.config/orbit/plugins/<name>/`.
+    fn uninstallSelectedPlugin(self: *App) void {
+        if (self.plugin_row >= self.plugins.plugins.items.len) {
+            self.setStatus("no plugin selected");
+            return;
+        }
+        const name = self.plugins.plugins.items[self.plugin_row].name;
+        if (!isSafePluginFolderName(name)) {
+            self.setStatus("invalid plugin name");
+            return;
+        }
+
+        var name_buf: [64]u8 = undefined;
+        const n = @min(name.len, name_buf.len);
+        @memcpy(name_buf[0..n], name[0..n]);
+        const saved = name_buf[0..n];
+
+        const parent = std.Io.Dir.openDirAbsolute(self.io, self.plugins.dir_path, .{}) catch {
+            self.setStatus("uninstall failed");
+            return;
+        };
+        defer parent.close(self.io);
+        parent.deleteTree(self.io, saved) catch {
+            self.setStatus("uninstall failed");
+            return;
+        };
+
+        self.reloadPluginsFromPanel();
+        var buf: [80]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "uninstalled {s}", .{saved}) catch "plugin uninstalled";
+        self.setStatus(msg);
+    }
+
+    fn isSafePluginFolderName(name: []const u8) bool {
+        if (name.len == 0 or name.len > 64) return false;
+        if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
+        for (name) |ch| {
+            switch (ch) {
+                'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
+                else => return false,
+            }
+        }
         return true;
     }
 
