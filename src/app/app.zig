@@ -1173,27 +1173,99 @@ pub const App = struct {
     }
 
     fn drawWorkspacePicker(self: *App) !void {
-        const w: i32 = 420;
-        const row_h: i32 = 22;
-        const header: i32 = 36;
-        const h: i32 = header + @as(i32, @intCast(@max(1, self.workspaces.names.items.len))) * row_h + 48;
-        const x = @divTrunc(self.window.fb_width - w, 2);
-        const y = @divTrunc(self.window.fb_height - h, 2);
-        try self.renderer.drawRect(x, y, w, h, Color.rgb(24, 28, 36), 0.97);
-        try self.renderer.drawText(x + 16, y + 12, "Load Saved Workspace", Color.rgb(230, 235, 240));
-        try self.renderer.drawText(x + 16, y + h - 28, "Enter open  |  Esc close  |  Del delete", Color.rgb(140, 150, 160));
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+        const ui = ui_scale.uiScale(fb_w, fb_h);
+        const title_s = ui * 1.2;
+        const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const cw = ui_scale.scaled(base_cw, ui);
+        const ch = ui_scale.scaled(base_ch, ui);
+        const title_ch = ui_scale.scaled(base_ch, title_s);
 
-        if (self.workspaces.names.items.len == 0) {
-            try self.renderer.drawText(x + 16, y + header + 8, "(none saved yet — Ctrl+Shift+S to save)", Color.rgb(160, 170, 180));
-            return;
-        }
-        for (self.workspaces.names.items, 0..) |name, i| {
-            const ry = y + header + @as(i32, @intCast(i)) * row_h;
-            if (i == self.picker_index) {
-                try self.renderer.drawRect(x + 8, ry, w - 16, row_h, Color.rgb(50, 80, 120), 1.0);
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.48);
+
+        const pad_x = @max(cw + 10, @as(i32, @intFromFloat(@round(26.0 * ui))));
+        const pad_y = @max(@divTrunc(ch, 2) + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
+        const row_h = ch + @divTrunc(ch, 2) + @max(6, @divTrunc(ch, 5));
+        const title_h = title_ch + @divTrunc(ch, 4);
+        const subtitle_h = ch + @divTrunc(ch, 3);
+        const gap = @max(@divTrunc(ch, 2), @as(i32, @intFromFloat(@round(12.0 * ui))));
+        const footer_h = ch + pad_y;
+        const accent_h = @max(2, @divTrunc(ch, 10));
+        const name_n = self.workspaces.names.items.len;
+
+        const w = ui_scale.panelWidth(fb_w, cw, 44, @as(i32, @intFromFloat(@round(480.0 * ui))));
+        const chrome = pad_y + title_h + subtitle_h + gap + footer_h + gap + ch;
+        const max_rows_by_height = @max(1, @divTrunc(fb_h - chrome - ch * 2, row_h));
+        const max_visible: usize = @min(10, @as(usize, @intCast(max_rows_by_height)));
+        const list_rows = @max(@as(usize, 1), @min(@max(name_n, 1), max_visible));
+        const list_h = @as(i32, @intCast(list_rows)) * row_h;
+        const h = pad_y + title_h + subtitle_h + gap + list_h + gap + footer_h;
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @max(ch * 2, @divTrunc(fb_h - h, 2));
+
+        const panel = Color.rgb(22, 26, 34);
+        const fg = Color.rgb(230, 235, 240);
+        const muted = Color.rgb(150, 160, 175);
+        const dim = Color.rgb(100, 110, 125);
+        const accent = Color.rgb(90, 175, 220);
+        const sel_bg = Color.rgb(36, 48, 64);
+        const rule = Color.rgb(40, 48, 60);
+
+        try self.renderer.drawRect(x, y, w, h, panel, 0.98);
+        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.55);
+
+        var cy = y + pad_y;
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Load Saved Workspace", fg, title_s);
+        cy += title_h;
+
+        var count_buf: [48]u8 = undefined;
+        const subtitle = if (name_n == 0)
+            "No saved layouts yet"
+        else
+            (std.fmt.bufPrint(&count_buf, "{d} saved", .{name_n}) catch "saved");
+        try self.renderer.drawTextScaled(x + pad_x, cy, subtitle, muted, ui);
+        cy += subtitle_h + gap;
+
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
+
+        if (name_n == 0) {
+            const empty_y = cy + @divTrunc(list_h - ch * 2, 2);
+            try self.renderer.drawTextScaled(x + pad_x + 4, empty_y, "Save a layout with Ctrl+Shift+S", fg, ui);
+            try self.renderer.drawTextScaled(x + pad_x + 4, empty_y + ch + 4, "Then open it again from here", dim, ui);
+        } else {
+            if (self.picker_index >= name_n) self.picker_index = name_n - 1;
+            var start: usize = 0;
+            if (self.picker_index >= max_visible) {
+                start = self.picker_index + 1 - max_visible;
             }
-            try self.renderer.drawText(x + 20, ry + 4, name[0..@min(name.len, 40)], Color.rgb(220, 225, 230));
+            const visible = @min(name_n - start, max_visible);
+            const label_max = @max(8, @divTrunc(w - pad_x * 2 - cw * 2, cw));
+
+            var i: usize = 0;
+            while (i < visible) : (i += 1) {
+                const mi = start + i;
+                const name = self.workspaces.names.items[mi];
+                const ry = cy + @as(i32, @intCast(i)) * row_h;
+                const text_y = ry + @divTrunc(row_h - ch, 2);
+                const selected = mi == self.picker_index;
+
+                if (selected) {
+                    try self.renderer.drawRect(x + 10, ry, w - 20, row_h - 2, sel_bg, 1.0);
+                    try self.renderer.drawRect(x + 10, ry, @max(3, @divTrunc(cw, 4)), row_h - 2, accent, 1.0);
+                }
+
+                const shown = name[0..@min(name.len, @as(usize, @intCast(label_max)))];
+                try self.renderer.drawTextScaled(x + pad_x + 8, text_y, shown, if (selected) fg else muted, ui);
+            }
         }
+
+        const foot = if (name_n == 0)
+            "Ctrl+Shift+S save    Esc close"
+        else
+            "Enter open    Del delete    Esc close";
+        try self.renderer.drawTextScaled(x + pad_x, y + h - footer_h + @divTrunc(pad_y, 2), foot, dim, ui);
     }
 
     fn drawSavePrompt(self: *App) !void {
