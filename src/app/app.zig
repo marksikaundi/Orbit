@@ -76,7 +76,7 @@ pub const App = struct {
     mouse_y: f64 = 0,
     /// Right-click Copy/Paste menu over the terminal (null = closed).
     context_menu: ?ContextMenu = null,
-    /// Settings row: 0 theme, 1 text, 2 cursor, 3 blink, 4 shell
+    /// Settings row: 0 theme, 1 text, 2 font, 3 face, 4 cursor, 5 blink, 6 shell
     settings_row: usize = 0,
     /// Selected plugin index in the Plugins panel.
     plugin_row: usize = 0,
@@ -97,6 +97,7 @@ pub const App = struct {
         renderer.setTheme(theme);
         renderer.opacity = config.opacity;
         renderer.setContentScale(window.contentScale());
+        renderer.setFontFace(config.font_face);
         renderer.setFontSize(config.font_size);
         renderer.cursor_style = config.cursor_style;
         renderer.cursor_blink = config.cursor_blink;
@@ -594,8 +595,8 @@ pub const App = struct {
     fn drawPalette(self: *App) !void {
         const fb_w = self.window.fb_width;
         const fb_h = self.window.fb_height;
-        const ui = ui_scale.uiScale(fb_w, fb_h);
-        const title_s = ui * 1.2;
+        const ui = ui_scale.uiScale(fb_w, fb_h, self.renderer.content_scale);
+        const title_s = ui * 1.12;
         const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
         const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
         const cw = ui_scale.scaled(base_cw, ui);
@@ -932,8 +933,8 @@ pub const App = struct {
     fn drawSettings(self: *App) !void {
         const fb_w = self.window.fb_width;
         const fb_h = self.window.fb_height;
-        const ui = ui_scale.uiScale(fb_w, fb_h);
-        const title_s = ui * 1.25;
+        const ui = ui_scale.uiScale(fb_w, fb_h, self.renderer.content_scale);
+        const title_s = ui * 1.12;
         const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
         const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
         const cw = ui_scale.scaled(base_cw, ui);
@@ -954,7 +955,7 @@ pub const App = struct {
         const accent_h = @max(2, @divTrunc(ch, 10));
 
         const w = ui_scale.panelWidth(fb_w, cw, 48, @as(i32, @intFromFloat(@round(540.0 * ui))));
-        const rows_n: i32 = 5;
+        const rows_n: i32 = 7;
         const list_h = rows_n * row_h;
         const h = pad_y + title_h + subtitle_h + gap + list_h + gap + footer_h;
         const x = @divTrunc(fb_w - w, 2);
@@ -974,14 +975,18 @@ pub const App = struct {
         var cy = y + pad_y;
         try self.renderer.drawTextScaled(x + pad_x, cy, "Appearance", fg, title_s);
         cy += title_h;
-        try self.renderer.drawTextScaled(x + pad_x, cy, "Theme, text color, cursor, and shell for new tabs", muted, ui);
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Theme, text, font, face, cursor, and shell", muted, ui);
         cy += subtitle_h + gap;
 
         try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
 
+        var size_buf: [16]u8 = undefined;
+        const size_str = std.fmt.bufPrint(&size_buf, "{d:.0}pt", .{self.renderer.font_size}) catch "14pt";
         const rows = [_]struct { label: []const u8, value: []const u8 }{
             .{ .label = "Theme", .value = self.config.theme_name },
             .{ .label = "Text", .value = self.config.fgDisplay() },
+            .{ .label = "Font", .value = size_str },
+            .{ .label = "Face", .value = self.config.fontFaceDisplay() },
             .{ .label = "Cursor", .value = self.config.cursor_style.name() },
             .{ .label = "Blink", .value = if (self.config.cursor_blink) "on" else "off" },
             .{ .label = "Shell", .value = self.config.shellDisplay() },
@@ -1015,12 +1020,11 @@ pub const App = struct {
         try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
 
         var info: [96]u8 = undefined;
-        const font_line = std.fmt.bufPrint(&info, "Font  {d:.0}pt    padding  {d}x{d}", .{
-            self.renderer.font_size,
+        const pad_line = std.fmt.bufPrint(&info, "Applies to terminal + UI    padding  {d}x{d}", .{
             self.config.padding_x,
             self.config.padding_y,
         }) catch "";
-        try self.renderer.drawTextScaled(x + pad_x, cy, font_line, muted, ui);
+        try self.renderer.drawTextScaled(x + pad_x, cy, pad_line, muted, ui);
         cy += ch + @max(6, @divTrunc(ch, 4));
         try self.renderer.drawTextScaled(x + pad_x, cy, "Up/Down select    Left/Right change    S save", dim, ui);
         cy += ch + @max(6, @divTrunc(ch, 4));
@@ -1030,8 +1034,8 @@ pub const App = struct {
     fn drawPlugins(self: *App) !void {
         const fb_w = self.window.fb_width;
         const fb_h = self.window.fb_height;
-        const ui = ui_scale.uiScale(fb_w, fb_h);
-        const title_s = ui * 1.25;
+        const ui = ui_scale.uiScale(fb_w, fb_h, self.renderer.content_scale);
+        const title_s = ui * 1.12;
         const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
         const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
         const cw = ui_scale.scaled(base_cw, ui);
@@ -1191,8 +1195,8 @@ pub const App = struct {
     fn drawWorkspacePicker(self: *App) !void {
         const fb_w = self.window.fb_width;
         const fb_h = self.window.fb_height;
-        const ui = ui_scale.uiScale(fb_w, fb_h);
-        const title_s = ui * 1.2;
+        const ui = ui_scale.uiScale(fb_w, fb_h, self.renderer.content_scale);
+        const title_s = ui * 1.12;
         const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
         const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
         const cw = ui_scale.scaled(base_cw, ui);
@@ -2243,7 +2247,7 @@ pub const App = struct {
                 if (self.settings_row > 0) self.settings_row -= 1;
             },
             c.GLFW_KEY_DOWN => {
-                if (self.settings_row + 1 < 5) self.settings_row += 1;
+                if (self.settings_row + 1 < 7) self.settings_row += 1;
             },
             c.GLFW_KEY_LEFT => self.nudgeSettings(-1),
             c.GLFW_KEY_RIGHT, c.GLFW_KEY_ENTER => self.nudgeSettings(1),
@@ -2269,6 +2273,20 @@ pub const App = struct {
                 self.setStatus(msg);
             },
             2 => {
+                self.adjustFont(if (delta >= 0) 1.0 else -1.0);
+            },
+            3 => {
+                self.config.cycleFontFace(self.allocator, delta) catch {
+                    self.setStatus("font face failed");
+                    return;
+                };
+                self.renderer.setFontFace(self.config.font_face);
+                self.resizeAllSessions();
+                var buf: [80]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "face {s}", .{self.config.fontFaceDisplay()}) catch "font face";
+                self.setStatus(msg);
+            },
+            4 => {
                 self.config.cursor_style = if (delta >= 0)
                     self.config.cursor_style.next()
                 else
@@ -2276,8 +2294,8 @@ pub const App = struct {
                 self.renderer.cursor_style = self.config.cursor_style;
                 self.setStatus("cursor style");
             },
-            3 => self.toggleCursorBlink(),
-            4 => {
+            5 => self.toggleCursorBlink(),
+            6 => {
                 self.config.cycleShell(self.allocator, delta) catch {
                     self.setStatus("shell change failed");
                     return;
@@ -2304,6 +2322,7 @@ pub const App = struct {
 
     fn persistAppearance(self: *App) void {
         self.config.font_size = self.renderer.font_size;
+        self.config.setFontFace(self.allocator, self.renderer.font_face) catch {};
         self.config.save(self.allocator, self.io) catch {
             self.setStatus("could not save config.toml");
             return;

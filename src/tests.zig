@@ -40,6 +40,7 @@ comptime {
     _ = @import("ui/home.zig");
     _ = @import("ui/scale.zig");
     _ = @import("ui/chrome.zig");
+    _ = @import("font/faces.zig");
 }
 
 test "suite boots" {

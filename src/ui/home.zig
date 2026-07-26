@@ -126,9 +126,11 @@ pub const help_rows = [_]HelpRow{
     .{ .spacer = {} },
 
     .{ .heading = "Appearance" },
-    .{ .item = .{ .keys = "S / Settings", .desc = "Theme, text color, cursor, shell (Left/Right to change)" } },
+    .{ .item = .{ .keys = "S / Settings", .desc = "Theme, text, font size, face, cursor, shell" } },
+    .{ .item = .{ .keys = "Left/Right", .desc = "Change the selected Appearance value" } },
+    .{ .item = .{ .keys = "Ctrl+=/-/0", .desc = "Font size up / down / reset (everywhere)" } },
     .{ .item = .{ .keys = "Ctrl+Shift+P", .desc = "Palette -> Theme: ... / Cursor: ..." } },
-    .{ .note = "Prompt text (zsh/bash) comes from your shell rc " },
+    .{ .note = "Font + Face apply to the terminal and all Orbit UI" },
     .{ .spacer = {} },
 
     .{ .heading = "Config & plugins" },
@@ -227,12 +229,13 @@ pub fn draw(
     try renderer.drawRect(0, 0, fb_w, fb_h, bg, 1.0);
 
     // Grow with framebuffer so fullscreen isn't a tiny island of terminal-sized text.
-    const ui = ui_scale.uiScale(fb_w, fb_h);
+    const ui = ui_scale.uiScale(fb_w, fb_h, renderer.content_scale);
     const base_cw = @as(i32, @intFromFloat(renderer.cell_w));
     const base_ch = @as(i32, @intFromFloat(renderer.cell_h));
     const body: f32 = ui;
-    const brand_s: f32 = ui * 1.85;
-    const tag_s: f32 = ui * 1.2;
+    // Keep brand close to body size — heavy stretch looked soft/warped on Retina.
+    const brand_s: f32 = ui * 1.35;
+    const tag_s: f32 = ui * 1.1;
     const cw = ui_scale.scaled(base_cw, body);
     const ch = ui_scale.scaled(base_ch, body);
     const brand_cw = ui_scale.scaled(base_cw, brand_s);

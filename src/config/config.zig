@@ -3,6 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const theme_mod = @import("theme.zig");
+const faces = @import("../font/faces.zig");
 const paths = @import("../platform/paths.zig");
 const shell_guard = @import("../platform/shell.zig");
 
@@ -69,6 +70,8 @@ pub const Config = struct {
     scrollback: usize = 2000,
     /// Font size in points (Ghostty-style). Scaled for Retina automatically.
     font_size: f32 = 14.0,
+    /// Monospace face id (`sf-mono`, `menlo`, …). See `font/faces.zig`.
+    font_face: []const u8 = faces.catalog[0].id,
     /// Interior padding in logical pixels (Ghostty window-padding).
     padding_x: i32 = 10,
     padding_y: i32 = 6,
@@ -79,16 +82,35 @@ pub const Config = struct {
     /// Owned theme name buffer when loaded from file.
     theme_name_owned: ?[]u8 = null,
     fg_preset_owned: ?[]u8 = null,
+    font_face_owned: ?[]u8 = null,
     shell_owned: ?[]u8 = null,
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         if (self.theme_name_owned) |t| allocator.free(t);
         if (self.fg_preset_owned) |f| allocator.free(f);
+        if (self.font_face_owned) |f| allocator.free(f);
         if (self.shell_owned) |s| allocator.free(s);
         self.theme_name_owned = null;
         self.fg_preset_owned = null;
+        self.font_face_owned = null;
         self.shell_owned = null;
         self.shell = null;
+    }
+
+    pub fn fontFaceDisplay(self: *const Config) []const u8 {
+        return faces.labelForId(self.font_face);
+    }
+
+    pub fn setFontFace(self: *Config, allocator: std.mem.Allocator, id: []const u8) !void {
+        if (self.font_face_owned) |old| allocator.free(old);
+        const owned = try allocator.dupe(u8, id);
+        self.font_face_owned = owned;
+        self.font_face = owned;
+    }
+
+    pub fn cycleFontFace(self: *Config, allocator: std.mem.Allocator, delta: i32) !void {
+        const next = faces.nextInstalledId(self.font_face, delta);
+        try self.setFontFace(allocator, next);
     }
 
     pub fn theme(self: *const Config) theme_mod.Theme {
@@ -240,6 +262,7 @@ pub const Config = struct {
         );
         try appendFmt(&body, allocator, "scrollback = {d}\n", .{self.scrollback});
         try appendFmt(&body, allocator, "font_size = {d:.0}\n", .{self.font_size});
+        try appendFmt(&body, allocator, "font_face = \"{s}\"\n", .{self.font_face});
         try appendFmt(&body, allocator, "padding_x = {d}\n", .{self.padding_x});
         try appendFmt(&body, allocator, "padding_y = {d}\n", .{self.padding_y});
         try appendFmt(&body, allocator, "cursor_style = \"{s}\"\n", .{self.cursor_style.name()});
@@ -315,6 +338,13 @@ pub const Config = struct {
                         cfg.font_size = parseF32(val) orelse cfg.font_size;
                         cfg.font_size = @min(28.0, @max(9.0, cfg.font_size));
                     }
+                    if (std.mem.eql(u8, key, "font_face") or std.mem.eql(u8, key, "font_family") or std.mem.eql(u8, key, "font")) {
+                        const id = if (faces.byId(val) != null) val else faces.defaultId();
+                        if (cfg.font_face_owned) |old| allocator.free(old);
+                        const owned = allocator.dupe(u8, id) catch continue;
+                        cfg.font_face_owned = owned;
+                        cfg.font_face = owned;
+                    }
                     if (std.mem.eql(u8, key, "font_scale")) {
                         const scale = parseF32(val) orelse 2.0;
                         cfg.font_size = @min(28.0, @max(9.0, 14.0 * scale / 2.0));
@@ -352,6 +382,19 @@ pub const Config = struct {
                 if (cfg.shell_owned) |old| allocator.free(old);
                 cfg.shell_owned = null;
                 cfg.shell = null;
+            }
+        }
+
+        // Fall back if the chosen face isn't installed.
+        if (faces.pathForId(cfg.font_face) == null) {
+            const fallback = faces.defaultId();
+            if (cfg.font_face_owned) |old| allocator.free(old);
+            if (allocator.dupe(u8, fallback)) |owned| {
+                cfg.font_face_owned = owned;
+                cfg.font_face = owned;
+            } else |_| {
+                cfg.font_face_owned = null;
+                cfg.font_face = fallback;
             }
         }
     }

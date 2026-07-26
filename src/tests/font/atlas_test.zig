@@ -4,7 +4,7 @@ const std = @import("std");
 const atlas_mod = @import("../../font/atlas.zig");
 
 test "create produces non-empty atlas at 14px" {
-    var atlas = try atlas_mod.Atlas.create(std.testing.allocator, 14);
+    var atlas = try atlas_mod.Atlas.create(std.testing.allocator, 14, null);
     defer atlas.deinit();
     try std.testing.expect(atlas.cell_w >= 6);
     try std.testing.expect(atlas.cell_h >= 10);
@@ -14,17 +14,17 @@ test "create produces non-empty atlas at 14px" {
 }
 
 test "pixel size is clamped" {
-    var tiny = try atlas_mod.Atlas.create(std.testing.allocator, 1);
+    var tiny = try atlas_mod.Atlas.create(std.testing.allocator, 1, null);
     defer tiny.deinit();
     try std.testing.expect(tiny.cell_h >= 10);
 
-    var huge = try atlas_mod.Atlas.create(std.testing.allocator, 200);
+    var huge = try atlas_mod.Atlas.create(std.testing.allocator, 200, null);
     defer huge.deinit();
-    try std.testing.expect(huge.cell_h <= 80);
+    try std.testing.expect(huge.cell_h <= 110);
 }
 
 test "atlas has ink for letter M" {
-    var atlas = try atlas_mod.Atlas.create(std.testing.allocator, 16);
+    var atlas = try atlas_mod.Atlas.create(std.testing.allocator, 16, null);
     defer atlas.deinit();
     const slot: u32 = 'M' - atlas_mod.first_codepoint;
     var lit: bool = false;

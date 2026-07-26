@@ -101,6 +101,17 @@ test "font_size is clamped" {
     try std.testing.expectEqual(@as(f32, 28.0), cfg.font_size);
 }
 
+test "font_face is parsed" {
+    var cfg: Config = .{};
+    defer cfg.deinit(std.testing.allocator);
+    Config.parseInto(&cfg, std.testing.allocator,
+        \\[terminal]
+        \\font_face = "menlo"
+    );
+    try std.testing.expectEqualStrings("menlo", cfg.font_face);
+    try std.testing.expectEqualStrings("Menlo", cfg.fontFaceDisplay());
+}
+
 test "parse theme foreground preset" {
     var cfg: Config = .{};
     defer cfg.deinit(std.testing.allocator);
