@@ -102,14 +102,33 @@ test "font_size is clamped" {
 }
 
 test "font_face is parsed" {
+    const faces = @import("../../font/faces.zig");
+    // Catalog ids are platform-specific (menlo on macOS, dejavu on Linux, …).
+    const id = faces.catalog[0].id;
+    var toml_buf: [128]u8 = undefined;
+    const toml = std.fmt.bufPrint(&toml_buf,
+        \\[terminal]
+        \\font_face = "{s}"
+    , .{id}) catch unreachable;
+
+    var cfg: Config = .{};
+    defer cfg.deinit(std.testing.allocator);
+    Config.parseInto(&cfg, std.testing.allocator, toml);
+
+    const expected = if (faces.pathForId(id) != null) id else faces.defaultId();
+    try std.testing.expectEqualStrings(expected, cfg.font_face);
+    try std.testing.expectEqualStrings(faces.labelForId(expected), cfg.fontFaceDisplay());
+}
+
+test "font_face unknown falls back to default" {
+    const faces = @import("../../font/faces.zig");
     var cfg: Config = .{};
     defer cfg.deinit(std.testing.allocator);
     Config.parseInto(&cfg, std.testing.allocator,
         \\[terminal]
-        \\font_face = "menlo"
+        \\font_face = "not-a-real-face"
     );
-    try std.testing.expectEqualStrings("menlo", cfg.font_face);
-    try std.testing.expectEqualStrings("Menlo", cfg.fontFaceDisplay());
+    try std.testing.expectEqualStrings(faces.defaultId(), cfg.font_face);
 }
 
 test "parse theme foreground preset" {
