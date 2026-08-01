@@ -26,7 +26,7 @@
 
 ---
 
-Orbit is a GPU-accelerated terminal inspired by Ghostty’s performance focus, with one core idea: **keep developers in the flow by organizing everything around projects.**
+Orbit is a GPU accelerated terminal inspired by Ghostty’s performance focus, with one core idea: **keep developers in the flow by organizing everything around projects.**
 
 Unlike traditional terminals that only launch shells, Orbit remembers workspaces, restores sessions, and stays out of your way.
 
