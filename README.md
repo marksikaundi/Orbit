@@ -82,7 +82,7 @@ Everything revolves around the developer’s workflow — Backend, Frontend, Pro
 
 ### Orbit Workspaces
 
-Projects are first-class. Each workspace can remember:
+Projects are first class. Each workspace can remember:
 
 | Remembers | Examples |
 | :-------- | :------- |
