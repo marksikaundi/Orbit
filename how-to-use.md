@@ -238,11 +238,17 @@ Full guide: [`assets/plugins/README.md`](assets/plugins/README.md). Appearance (
 | Type | Live filter |
 | `Tab` | Switch **Terminal** ↔ **Files** |
 | `↑` `↓` | Move between matches |
-| `Enter` | Terminal: jump to hit · Files: insert path into the shell |
+| `Enter` | Terminal: jump to hit · Files: open a syntax-highlighted preview |
+| `Shift+Enter` | Files: insert the path into the shell |
 | `Esc` | Close |
 
 - **Terminal** — searches visible screen + scrollback (case-insensitive)
 - **Files** — searches file names under the opened folder / current cwd
+- **Preview** — colors keywords, strings, comments, and so on by language (JavaScript, Python, Zig, Rust, Go, HTML, JSON, …). `↑` `↓` scroll, `I` inserts the path, `Esc` closes.
+
+Palette → **Open File** jumps straight to Files search. Opening a file path with Orbit (`orbit app.js`) also shows the preview.
+
+In the shell, `vi` / `vim` / `less` use the alternate screen: quitting (`:q`) returns you to the prompt without leftover tildes. Orbit sets `TERM=xterm-256color` so those editors can color syntax (enable it in vim with `syntax on`, or use `vim` rather than `vi`).
 
 ## Workspaces (Phase 4)
 

@@ -20,6 +20,11 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 - **Open Workspace** opens a native folder picker and starts a shell in that directory
 - **Text color** presets in Appearance (independent of theme)
 - **Search** finds text in the terminal (incl. scrollback) and file names in the opened folder (`Cmd/Ctrl+Shift+F`)
+- **Syntax-highlighted file preview** — JavaScript, Python, Zig, and other languages get distinct colors (Search → Files → Enter, or palette **Open File**)
+
+### Fixed
+- Full-screen apps (`vi` / `vim`, `less`, `htop`) restore the shell when they quit (alternate screen buffer)
+- Shells now advertise `TERM=xterm-256color` so editors can use syntax colors
 - **Plugins** home panel — browse, toggle, reload, and install bundled pack (hello, git, devtools, themes, workflow, keys)
 - **Plugin shortcuts** — define `shortcut = "ctrl+shift+g"` or `[[bindings]]` in `plugin.toml` to run commands with your own key chords
 - Bundled **keys** plugin as a starter for custom shortcuts / colors / themes (see `assets/plugins/README.md`)

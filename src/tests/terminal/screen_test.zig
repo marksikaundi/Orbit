@@ -78,3 +78,16 @@ test "eraseInLine clears from cursor" {
     try std.testing.expectEqual(@as(u21, 'b'), screen.cellAtConst(1, 0).codepoint);
     try std.testing.expectEqual(@as(u21, ' '), screen.cellAtConst(2, 0).codepoint);
 }
+
+test "enterAltScreen swaps buffers and leave restores" {
+    var screen = try Screen.init(std.testing.allocator, 6, 2);
+    defer screen.deinit();
+    screen.putChar('A');
+    screen.enterAltScreen(true, true);
+    try std.testing.expect(screen.alt_active);
+    try std.testing.expectEqual(@as(u21, ' '), screen.cellAtConst(0, 0).codepoint);
+    screen.putChar('Z');
+    screen.leaveAltScreen(true);
+    try std.testing.expect(!screen.alt_active);
+    try std.testing.expectEqual(@as(u21, 'A'), screen.cellAtConst(0, 0).codepoint);
+}

@@ -17,6 +17,9 @@ comptime {
     _ = @import("tests/ui/bindings_test.zig");
     _ = @import("tests/ui/home_test.zig");
     _ = @import("tests/ui/search_test.zig");
+    _ = @import("tests/ui/viewer_test.zig");
+
+    _ = @import("tests/syntax/highlight_test.zig");
 
     _ = @import("tests/pty/pty_test.zig");
 

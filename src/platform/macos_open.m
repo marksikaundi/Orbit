@@ -25,11 +25,7 @@ static void orbit_push_url(NSURL *url) {
     if (url == nil) return;
     NSString *path = url.path;
     if (path == nil || [path length] == 0) return;
-    BOOL is_dir = NO;
-    [[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&is_dir];
-    if (!is_dir) {
-        path = [path stringByDeletingLastPathComponent];
-    }
+    // Keep files as well as folders so Orbit can open a syntax-highlighted preview.
     orbit_push_path([path fileSystemRepresentation]);
 }
 

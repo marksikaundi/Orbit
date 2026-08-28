@@ -67,6 +67,11 @@ pub const Pty = struct {
                 setEnvEntry(entry);
             }
 
+            // Full-screen apps (vim, less) need a color-capable TERM. GUI launches
+            // often inherit nothing / "dumb", which disables syntax and alt-screen.
+            _ = c.setenv("TERM", "xterm-256color", 1);
+            _ = c.setenv("COLORTERM", "truecolor", 1);
+
             execChild(opts);
             c._exit(127);
         }

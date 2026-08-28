@@ -152,6 +152,10 @@ pub const Session = struct {
                 self.output_seen = true;
                 const chunk = self.read_buf[0..result.len];
                 self.parser.feed(&self.screen, chunk);
+                if (self.parser.reply_len > 0) {
+                    self.pty.write(self.parser.reply_buf[0..self.parser.reply_len]);
+                    self.parser.reply_len = 0;
+                }
                 self.ingestForStatus(chunk);
                 if (self.parser.notify_len > 0) {
                     self.pushStatus(self.parser.notify_msg[0..self.parser.notify_len]);

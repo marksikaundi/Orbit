@@ -98,8 +98,17 @@ pub const help_rows = [_]HelpRow{
     .{ .item = .{ .keys = "Right-click", .desc = "Copy / Paste context menu" } },
     .{ .item = .{ .keys = "Cmd/Ctrl+Shift+F", .desc = "Search terminal text or workspace files" } },
     .{ .item = .{ .keys = "Tab", .desc = "Switch Terminal / Files mode in search" } },
-    .{ .item = .{ .keys = "Up/Down Enter", .desc = "Move hits / jump or insert file path" } },
+    .{ .item = .{ .keys = "Enter (Files)", .desc = "Open a syntax-highlighted preview" } },
+    .{ .item = .{ .keys = "Shift+Enter (Files)", .desc = "Insert the file path into the shell" } },
+    .{ .item = .{ .keys = "Up/Down Enter", .desc = "Move hits / jump to a terminal match" } },
     .{ .item = .{ .keys = "Esc", .desc = "Close search" } },
+    .{ .spacer = {} },
+
+    .{ .heading = "File preview" },
+    .{ .item = .{ .keys = "Palette → Open File", .desc = "Find a file, then Enter to preview with language colors" } },
+    .{ .item = .{ .keys = "↑ ↓ / wheel", .desc = "Scroll the preview" } },
+    .{ .item = .{ .keys = "I", .desc = "Insert the path into the shell and close" } },
+    .{ .item = .{ .keys = "Esc / Q", .desc = "Close the preview" } },
     .{ .spacer = {} },
 
     .{ .heading = "Workspaces" },

@@ -8,6 +8,8 @@ const Tabs = @import("../ui/tabs.zig").Tabs;
 const layout_mod = @import("../ui/layout.zig");
 const Rect = layout_mod.Rect;
 const Search = @import("../ui/search.zig").Search;
+const Viewer = @import("../ui/viewer.zig").Viewer;
+const viewer_mod = @import("../ui/viewer.zig");
 const Palette = @import("../ui/palette.zig").Palette;
 const palette_mod = @import("../ui/palette.zig");
 const bindings = @import("../ui/bindings.zig");
@@ -28,7 +30,7 @@ const macos_open = @import("../platform/macos_open.zig");
 const Color = @import("../terminal/cell.zig").Color;
 const dev_root = @import("../dev_root.zig");
 
-const UiMode = enum { home, normal, search, ws_picker, ws_save, palette, ssh_prompt, settings, plugins };
+const UiMode = enum { home, normal, search, viewer, ws_picker, ws_save, palette, ssh_prompt, settings, plugins };
 
 const StatusKind = enum { info, success, err };
 
@@ -56,6 +58,7 @@ pub const App = struct {
     workspaces: WsManager,
     plugins: PluginRegistry,
     search: Search = .{},
+    viewer: Viewer = .{},
     palette: Palette = .{},
     home: Home = .{},
     ui: UiMode = .home,
@@ -169,6 +172,7 @@ pub const App = struct {
         self.plugins.deinit();
         self.workspaces.deinit();
         self.search.close(self.allocator);
+        self.viewer.close(self.allocator);
         self.tabs.deinit();
         self.renderer.deinit();
         self.window.deinit();
@@ -193,11 +197,12 @@ pub const App = struct {
 
     /// When the user types `exit` (or the shell otherwise ends), close that pane/tab.
     fn reapExitedSessions(self: *App) void {
-        if (self.ui != .normal and self.ui != .search) return;
+        if (self.ui != .normal and self.ui != .search and self.ui != .viewer) return;
         if (!self.tabs.pruneDead()) return;
 
         if (self.tabs.items.items.len == 0) {
             self.search.close(self.allocator);
+            self.viewer.close(self.allocator);
             self.goHome();
             return;
         }
@@ -459,6 +464,7 @@ pub const App = struct {
                 .ws_save => try self.drawSavePrompt(),
                 .ssh_prompt => try self.drawSshPrompt(),
                 .search => try self.drawSearch(),
+                .viewer => try self.drawViewer(),
                 .home, .normal => self.ui = .home,
             }
             if (self.status_len > 0) {
@@ -499,6 +505,9 @@ pub const App = struct {
 
         if (self.ui == .search) {
             try self.drawSearch();
+        }
+        if (self.ui == .viewer) {
+            try self.drawViewer();
         }
         if (self.ui == .ws_picker) {
             try self.drawWorkspacePicker();
@@ -822,9 +831,9 @@ pub const App = struct {
             }
         }
 
-        var foot: [80]u8 = undefined;
+        var foot: [96]u8 = undefined;
         const foot_line = if (hit_n > 0)
-            (std.fmt.bufPrint(&foot, "{d} matches   Enter open   Esc close", .{hit_n}) catch "Enter open   Esc close")
+            (std.fmt.bufPrint(&foot, "{d} matches   Enter preview   Shift+Enter insert   Esc", .{hit_n}) catch "Enter preview   Esc close")
         else
             "Up/Down move   Tab mode   Esc close";
         try self.renderer.drawText(x + pad_x, y + h - footer_h + @divTrunc(pad_y, 2), foot_line, dim);
@@ -863,7 +872,7 @@ pub const App = struct {
         }
     }
 
-    fn handleSearchKey(self: *App, key: c_int) void {
+    fn handleSearchKey(self: *App, key: c_int, shift: bool) void {
         switch (key) {
             c.GLFW_KEY_ESCAPE => {
                 self.search.close(self.allocator);
@@ -889,12 +898,12 @@ pub const App = struct {
                 self.search.backspace();
                 self.refreshSearchResults();
             },
-            c.GLFW_KEY_ENTER => self.activateSearchSelection(),
+            c.GLFW_KEY_ENTER => self.activateSearchSelection(shift),
             else => {},
         }
     }
 
-    fn activateSearchSelection(self: *App) void {
+    fn activateSearchSelection(self: *App, insert_path: bool) void {
         switch (self.search.mode) {
             .terminal => {
                 if (self.search.term_count == 0) return;
@@ -911,16 +920,28 @@ pub const App = struct {
                     self.setStatus("no file selected");
                     return;
                 };
-                // Insert relative path into the shell for cd/open/edit.
-                if (self.focused()) |s| {
-                    s.write(rel);
-                    s.write(" ");
+                if (insert_path) {
+                    if (self.focused()) |s| {
+                        s.write(rel);
+                        s.write(" ");
+                    }
+                    self.search.close(self.allocator);
+                    self.ui = .normal;
+                    var buf: [96]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "inserted {s}", .{rel}) catch "file inserted";
+                    self.setStatus(msg);
+                    return;
                 }
+                const abs = self.search.selectedFileAbsolute(self.allocator) catch {
+                    self.setStatus("could not open file");
+                    return;
+                } orelse {
+                    self.setStatus("no file selected");
+                    return;
+                };
+                defer self.allocator.free(abs);
+                self.openViewerPath(abs, rel);
                 self.search.close(self.allocator);
-                self.ui = .normal;
-                var buf: [96]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "inserted {s}", .{rel}) catch "file inserted";
-                self.setStatus(msg);
             },
         }
     }
@@ -1341,6 +1362,7 @@ pub const App = struct {
                 self.refreshSearchResults();
                 return;
             },
+            .viewer => return,
             .palette => {
                 self.palette.inputChar(codepoint);
                 return;
@@ -1432,7 +1454,11 @@ pub const App = struct {
             return;
         }
         if (self.ui == .search) {
-            self.handleSearchKey(key);
+            self.handleSearchKey(key, shift);
+            return;
+        }
+        if (self.ui == .viewer) {
+            self.handleViewerKey(key);
             return;
         }
 
@@ -1557,6 +1583,7 @@ pub const App = struct {
         self.ui = .home;
         self.closeContextMenu();
         self.search.close(self.allocator);
+        self.viewer.close(self.allocator);
         self.palette.close();
     }
 
@@ -1761,6 +1788,13 @@ pub const App = struct {
             .save_workspace => self.openSavePrompt(),
             .search => {
                 self.openSearch();
+            },
+            .open_file => {
+                self.openSearch();
+                if (self.ui == .search) {
+                    self.search.mode = .files;
+                    self.refreshSearchResults();
+                }
             },
             .ssh => {
                 self.ssh_host_len = 0;
@@ -2783,19 +2817,209 @@ pub const App = struct {
 
     fn applyLaunch(self: *App, opts: LaunchOpts) void {
         if (!opts.skip_home) return;
-        const dir = opts.cwd orelse @import("../platform/paths.zig").defaultCwd();
-        self.openSession(dir, opts.title, opts.execute, opts.wait_after_command) catch {
+        const raw = opts.cwd orelse @import("../platform/paths.zig").defaultCwd();
+        var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var file_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const resolved = self.resolveOpenPath(raw, &dir_buf, &file_buf);
+        self.openSession(resolved.dir, opts.title, opts.execute, opts.wait_after_command) catch {
             self.setStatus("could not open folder");
+            return;
         };
+        if (resolved.file) |f| self.openViewerPath(f, std.fs.path.basename(f));
     }
 
     fn drainExternalOpens(self: *App) void {
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         while (macos_open.take(&buf)) |p| {
-            self.openSession(p, null, &.{}, false) catch {
+            var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+            var file_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const resolved = self.resolveOpenPath(p, &dir_buf, &file_buf);
+            self.openSession(resolved.dir, null, &.{}, false) catch {
                 self.setStatus("could not open folder");
+                continue;
             };
+            if (resolved.file) |f| self.openViewerPath(f, std.fs.path.basename(f));
         }
+    }
+
+    fn pathIsDir(self: *App, path: []const u8) bool {
+        const dir = std.Io.Dir.openDirAbsolute(self.io, path, .{}) catch return false;
+        dir.close(self.io);
+        return true;
+    }
+
+    fn pathIsFile(self: *App, path: []const u8) bool {
+        const file = std.Io.Dir.openFileAbsolute(self.io, path, .{}) catch return false;
+        file.close(self.io);
+        return true;
+    }
+
+    fn absolutizePath(self: *App, path: []const u8, buf: *[std.fs.max_path_bytes]u8) ?[]u8 {
+        if (std.fs.path.isAbsolute(path)) {
+            if (path.len >= buf.len) return null;
+            @memcpy(buf[0..path.len], path);
+            return buf[0..path.len];
+        }
+        var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const n = std.Io.Dir.cwd().realPath(self.io, &cwd_buf) catch return null;
+        return std.fmt.bufPrint(buf, "{s}{c}{s}", .{ cwd_buf[0..n], std.fs.path.sep, path }) catch null;
+    }
+
+    fn resolveOpenPath(
+        self: *App,
+        path: []const u8,
+        dir_buf: *[std.fs.max_path_bytes]u8,
+        file_buf: *[std.fs.max_path_bytes]u8,
+    ) struct { dir: []const u8, file: ?[]const u8 } {
+        const abs = self.absolutizePath(path, file_buf) orelse return .{ .dir = path, .file = null };
+        if (self.pathIsDir(abs)) return .{ .dir = abs, .file = null };
+        if (!self.pathIsFile(abs)) return .{ .dir = abs, .file = null };
+        const parent = std.fs.path.dirname(abs) orelse ".";
+        const n = @min(parent.len, dir_buf.len);
+        @memcpy(dir_buf[0..n], parent[0..n]);
+        return .{ .dir = dir_buf[0..n], .file = abs };
+    }
+
+    fn openViewerPath(self: *App, abs_path: []const u8, display: []const u8) void {
+        self.viewer.open(self.allocator, self.io, abs_path, display);
+        self.ui = .viewer;
+        var buf: [96]u8 = undefined;
+        const msg = std.fmt.bufPrint(
+            &buf,
+            "{s} · {s}",
+            .{ std.fs.path.basename(abs_path), viewer_mod.languageLabel(self.viewer.language) },
+        ) catch "opened file";
+        self.setStatus(msg);
+    }
+
+    fn viewerVisibleLines(self: *const App) usize {
+        const ch = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_h)));
+        const row_h = ch + 4;
+        const header = ch + 28;
+        const footer = ch + 16;
+        const body = @max(row_h, self.window.fb_height - Tabs.bar_height - 24 - header - footer);
+        return @intCast(@max(1, @divTrunc(body, row_h)));
+    }
+
+    fn handleViewerKey(self: *App, key: c_int) void {
+        const visible = self.viewerVisibleLines();
+        switch (key) {
+            c.GLFW_KEY_ESCAPE, c.GLFW_KEY_Q => {
+                self.viewer.close(self.allocator);
+                self.leaveOverlay();
+            },
+            c.GLFW_KEY_UP => self.viewer.scrollBy(-1, visible),
+            c.GLFW_KEY_DOWN => self.viewer.scrollBy(1, visible),
+            c.GLFW_KEY_PAGE_UP => self.viewer.scrollBy(-@as(i32, @intCast(visible)), visible),
+            c.GLFW_KEY_PAGE_DOWN => self.viewer.scrollBy(@as(i32, @intCast(visible)), visible),
+            c.GLFW_KEY_HOME => {
+                self.viewer.scroll = 0;
+            },
+            c.GLFW_KEY_END => {
+                self.viewer.scroll = std.math.maxInt(usize);
+                self.viewer.clampScroll(visible);
+            },
+            c.GLFW_KEY_I => {
+                if (self.viewer.displayName().len > 0) {
+                    if (self.focused()) |s| {
+                        s.write(self.viewer.displayName());
+                        s.write(" ");
+                    }
+                }
+                self.viewer.close(self.allocator);
+                self.leaveOverlay();
+                self.setStatus("inserted path");
+            },
+            else => {},
+        }
+    }
+
+    fn drawViewer(self: *App) !void {
+        const chrome = self.overlayChrome();
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+        const cw = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_w)));
+        const ch = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_h)));
+        const margin: i32 = @max(cw * 2, 16);
+        const x = margin;
+        const y = Tabs.bar_height + 8;
+        const w = @max(cw * 20, fb_w - margin * 2);
+        const h = @max(ch * 8, fb_h - y - 12);
+        const pad_x: i32 = 14;
+        const pad_y: i32 = 10;
+        const header_h = ch + 18;
+        const footer_h = ch + 14;
+        const row_h = ch + 4;
+        const gutter_cols: i32 = 6;
+        const gutter_w = cw * gutter_cols + 10;
+        const body_y = y + pad_y + header_h;
+        const body_h = @max(row_h, h - pad_y - header_h - footer_h);
+        const visible: usize = @intCast(@max(1, @divTrunc(body_h, row_h)));
+        const code_cols: usize = @intCast(@max(8, @divTrunc(w - pad_x * 2 - gutter_w, cw)));
+        self.viewer.clampScroll(visible);
+
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
+        try self.renderer.drawRect(x, y, w, h, chrome.panel, 0.98);
+        try self.renderer.drawRect(x, y, w, 2, chrome.accent, 0.55);
+
+        const name = self.viewer.displayName();
+        const lang = viewer_mod.languageLabel(self.viewer.language);
+        var title_buf: [160]u8 = undefined;
+        const title = std.fmt.bufPrint(&title_buf, "{s}  ·  {s}", .{ name, lang }) catch name;
+        const title_shown = title[0..@min(title.len, @as(usize, @intCast(@max(8, @divTrunc(w - pad_x * 2, cw)))))];
+        try self.renderer.drawText(x + pad_x, y + pad_y, title_shown, chrome.fg);
+        try self.renderer.drawRect(x + pad_x, y + pad_y + header_h - 8, w - pad_x * 2, 1, chrome.rule, 0.9);
+
+        if (self.viewer.error_msg) |err| {
+            try self.renderer.drawText(x + pad_x, body_y + 8, err, chrome.muted);
+        } else if (self.viewer.lineCount() == 0) {
+            try self.renderer.drawText(x + pad_x, body_y + 8, "(empty file)", chrome.muted);
+        } else {
+            const start = self.viewer.scroll;
+            const total = self.viewer.lineCount();
+            const shown_n = @min(visible, total -| start);
+            var i: usize = 0;
+            var spans: [viewer_mod.max_spans]viewer_mod.Span = undefined;
+            while (i < shown_n) : (i += 1) {
+                const li = start + i;
+                const text = self.viewer.line(li);
+                const ry = body_y + @as(i32, @intCast(i)) * row_h;
+                var num_buf: [12]u8 = undefined;
+                const num = std.fmt.bufPrint(&num_buf, "{d: >5}", .{li + 1}) catch "    0";
+                try self.renderer.drawText(x + pad_x, ry, num, chrome.dim);
+
+                const clipped = text[0..@min(text.len, code_cols)];
+                var state = self.viewer.lineState(li);
+                const n = viewer_mod.highlightLine(clipped, self.viewer.language, &state, &spans);
+                const text_x = x + pad_x + gutter_w;
+                if (n == 0) {
+                    try self.renderer.drawText(text_x, ry, clipped, chrome.fg);
+                } else {
+                    var si: usize = 0;
+                    while (si < n) : (si += 1) {
+                        const span = spans[si];
+                        if (span.start >= clipped.len) break;
+                        const end = @min(span.end, clipped.len);
+                        if (end <= span.start) continue;
+                        const color = viewer_mod.colorFor(span.kind, self.renderer.theme);
+                        try self.renderer.drawText(
+                            text_x + @as(i32, @intCast(span.start)) * cw,
+                            ry,
+                            clipped[span.start..end],
+                            color,
+                        );
+                    }
+                }
+            }
+        }
+
+        var foot: [96]u8 = undefined;
+        const lines = self.viewer.lineCount();
+        const foot_line = if (lines > 0)
+            (std.fmt.bufPrint(&foot, "{d} lines   ↑↓ scroll   I insert path   Esc close", .{lines}) catch "Esc close")
+        else
+            "Esc close";
+        try self.renderer.drawText(x + pad_x, y + h - footer_h + 2, foot_line, chrome.dim);
     }
 
     fn openSession(
@@ -3001,6 +3225,11 @@ pub const App = struct {
         if (self.ui == .home and self.home.show_help) {
             const lines: i32 = @intFromFloat(-yoff * 3.0);
             self.home.scrollHelp(lines);
+            return;
+        }
+        if (self.ui == .viewer) {
+            const lines: i32 = @intFromFloat(-yoff * 3.0);
+            self.viewer.scrollBy(lines, self.viewerVisibleLines());
             return;
         }
         if (self.ui != .normal) return;

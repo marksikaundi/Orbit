@@ -210,11 +210,10 @@ pub const Pty = struct {
         };
 
         // Child-only environment: never mutate Orbit's process env.
+        // Always overlay TERM so vim/less get 256-color + alternate screen.
         var env_block: ?[:0]u16 = null;
         defer if (env_block) |eb| std.heap.c_allocator.free(eb);
-        if (opts.env.len > 0) {
-            env_block = try buildChildEnvironmentBlock(std.heap.c_allocator, opts.env);
-        }
+        env_block = try buildChildEnvironmentBlock(std.heap.c_allocator, opts.env);
 
         var pi: windows.PROCESS.INFORMATION = undefined;
         @memset(std.mem.asBytes(&pi), 0);
@@ -448,6 +447,9 @@ fn buildChildEnvironmentBlock(allocator: std.mem.Allocator, extra: []const []con
         }
     }
 
+    try upsertEnv(&entries, allocator, "TERM=xterm-256color");
+    try upsertEnv(&entries, allocator, "COLORTERM=truecolor");
+
     // Serialize to double-NUL-terminated UTF-16LE block.
     var out: std.ArrayList(u16) = .empty;
     errdefer out.deinit(allocator);
@@ -462,4 +464,17 @@ fn buildChildEnvironmentBlock(allocator: std.mem.Allocator, extra: []const []con
     const owned = try out.toOwnedSlice(allocator);
     // Ensure Zig [:0]u16 — last element is already 0.
     return owned[0 .. owned.len - 1 :0];
+}
+
+fn upsertEnv(entries: *std.ArrayList([]u8), allocator: std.mem.Allocator, entry: []const u8) !void {
+    const eq = std.mem.indexOfScalar(u8, entry, '=') orelse return;
+    const key = entry[0..eq];
+    for (entries.items, 0..) |existing, i| {
+        const existing_eq = std.mem.indexOfScalar(u8, existing, '=') orelse continue;
+        if (!std.ascii.eqlIgnoreCase(existing[0..existing_eq], key)) continue;
+        allocator.free(existing);
+        entries.items[i] = try allocator.dupe(u8, entry);
+        return;
+    }
+    try entries.append(allocator, try allocator.dupe(u8, entry));
 }
