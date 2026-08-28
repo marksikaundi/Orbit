@@ -47,7 +47,8 @@
         "orbit.path": {
           "type": "string",
           "default": "",
-          "description": "Path to the orbit executable. Empty uses PATH, or `open -a Orbit.app` on macOS."
+          "scope": "application",
+          "description": "Absolute path to the orbit executable, or a command name on PATH. Empty uses PATH, or `open -a Orbit.app` on macOS. Workspace settings are ignored."
         }
       }
     }

@@ -50,3 +50,24 @@ test "upsertMany writes several keys" {
     try std.testing.expect(std.mem.indexOf(u8, out, "linuxExec") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "\"both\"") != null);
 }
+
+test "upsert keeps comments that contain braces" {
+    const src =
+        \\{
+        \\    // use } only in comments
+        \\    "editor.tabSize": 4
+        \\}
+        \\
+    ;
+    const out = try jsonc.upsertString(std.testing.allocator, src, "terminal.explorerKind", "both");
+    defer std.testing.allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "// use } only in comments") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "editor.tabSize") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"terminal.explorerKind\": \"both\"") != null);
+}
+
+test "upsert escapes control characters in values" {
+    const out = try jsonc.upsertString(std.testing.allocator, "{}", "k", "a\x01b");
+    defer std.testing.allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\\u0001") != null);
+}

@@ -35,7 +35,8 @@ comptime {
 
     _ = @import("tests/version_test.zig");
 
-    // Private workspace parse helpers (same-file tests)
+    // Same-file unit tests
+    _ = @import("cli/ide_setup.zig");
     _ = @import("workspace/workspace.zig");
     _ = @import("platform/folder_picker.zig");
     _ = @import("platform/shell.zig");

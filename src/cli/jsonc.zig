@@ -71,14 +71,14 @@ fn findKeyValueRange(src: []const u8, key: []const u8) ?Range {
 }
 
 fn insertBeforeClosingBrace(allocator: std.mem.Allocator, src: []const u8, replacement: []const u8) ![]u8 {
-    var brace = src.len;
-    while (brace > 0) {
-        brace -= 1;
-        if (src[brace] == '}') break;
-    }
-    if (brace == 0 and (src.len == 0 or src[0] != '}')) {
+    const start = skipJunk(src, 0);
+    const close_end = if (start < src.len and src[start] == '{')
+        skipBalanced(src, start, '{', '}')
+    else
+        null;
+    const brace = if (close_end) |end| end - 1 else {
         return std.fmt.allocPrint(allocator, "{{\n    {s}\n}}\n", .{replacement});
-    }
+    };
 
     const before = std.mem.trimEnd(u8, src[0..brace], " \t\r\n");
     const needs_comma = before.len > 0 and before[before.len - 1] != '{' and before[before.len - 1] != ',';
@@ -155,7 +155,20 @@ fn skipBalanced(src: []const u8, start: usize, open: u8, close: u8) ?usize {
     var i = start;
     var in_str = false;
     var esc = false;
-    while (i < src.len) : (i += 1) {
+    while (i < src.len) {
+        if (!in_str) {
+            if (src[i] == '/' and i + 1 < src.len and src[i + 1] == '/') {
+                i += 2;
+                while (i < src.len and src[i] != '\n') : (i += 1) {}
+                continue;
+            }
+            if (src[i] == '/' and i + 1 < src.len and src[i + 1] == '*') {
+                i += 2;
+                while (i + 1 < src.len and !(src[i] == '*' and src[i + 1] == '/')) : (i += 1) {}
+                i = if (i + 1 < src.len) i + 2 else src.len;
+                continue;
+            }
+        }
         const c = src[i];
         if (in_str) {
             if (esc) {
@@ -165,17 +178,21 @@ fn skipBalanced(src: []const u8, start: usize, open: u8, close: u8) ?usize {
             } else if (c == '"') {
                 in_str = false;
             }
+            i += 1;
             continue;
         }
         if (c == '"') {
             in_str = true;
+            i += 1;
             continue;
         }
         if (c == open) depth += 1;
         if (c == close) {
+            if (depth == 0) return null;
             depth -= 1;
             if (depth == 0) return i + 1;
         }
+        i += 1;
     }
     return null;
 }
@@ -191,7 +208,15 @@ fn quoteJsonString(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
             '\n' => try out.appendSlice(allocator, "\\n"),
             '\r' => try out.appendSlice(allocator, "\\r"),
             '\t' => try out.appendSlice(allocator, "\\t"),
-            else => try out.append(allocator, c),
+            else => {
+                if (c < 0x20) {
+                    var hex: [6]u8 = undefined;
+                    const s = std.fmt.bufPrint(&hex, "\\u{x:0>4}", .{c}) catch unreachable;
+                    try out.appendSlice(allocator, s);
+                } else {
+                    try out.append(allocator, c);
+                }
+            },
         }
     }
     try out.append(allocator, '"');

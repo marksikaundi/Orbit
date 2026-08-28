@@ -46,10 +46,21 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, editor_arg: ?[]const u8) !v
         if (!t.active) continue;
         const settings = try t.settingsPath(allocator);
         defer allocator.free(settings);
-        patchSettings(allocator, io, t.name, settings, &pairs) catch |err| {
-            std.debug.print("  {s}: skip ({s})\n", .{ t.name, @errorName(err) });
+        patchSettings(allocator, io, settings, &pairs) catch |err| {
+            switch (err) {
+                error.FileTooLarge => std.debug.print(
+                    "  {s}: skip (settings.json > 512 KiB, file left unchanged)\n",
+                    .{t.name},
+                ),
+                error.ReadFailed => std.debug.print(
+                    "  {s}: skip (could not read settings.json, file left unchanged)\n",
+                    .{t.name},
+                ),
+                else => std.debug.print("  {s}: skip ({s})\n", .{ t.name, @errorName(err) }),
+            }
             continue;
         };
+        std.debug.print("  {s}: {s}\n", .{ t.name, settings });
         patched += 1;
     }
 
@@ -140,31 +151,53 @@ fn editorSupportRoot(allocator: std.mem.Allocator, support_dir: []const u8) ![]u
 fn patchSettings(
     allocator: std.mem.Allocator,
     io: std.Io,
-    name: []const u8,
     settings_path: []const u8,
     pairs: []const Pair,
 ) !void {
     const parent = std.fs.path.dirname(settings_path) orelse return error.NoDir;
     paths.ensureDir(parent);
 
-    const existing = readFile(allocator, io, settings_path) catch "";
+    const existing = readFile(allocator, io, settings_path) catch |err| switch (err) {
+        error.NotFound => "",
+        else => return err,
+    };
     defer if (existing.len > 0) allocator.free(existing);
 
     const next = try jsonc.upsertMany(allocator, existing, pairs);
     defer allocator.free(next);
 
-    const file = try std.Io.Dir.createFileAbsolute(io, settings_path, .{});
-    defer file.close(io);
-    try file.writeStreamingAll(io, next);
-    std.debug.print("  {s}: {s}\n", .{ name, settings_path });
+    try writeFileAtomic(allocator, io, settings_path, next);
 }
 
+const max_settings_bytes: usize = 512 * 1024;
+
 fn readFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8 {
+    return readFileLimited(allocator, io, path, max_settings_bytes);
+}
+
+fn readFileLimited(allocator: std.mem.Allocator, io: std.Io, path: []const u8, limit: usize) ![]u8 {
     const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch return error.NotFound;
     defer file.close(io);
     var buf: [4096]u8 = undefined;
     var reader = file.reader(io, &buf);
-    return reader.interface.allocRemaining(allocator, .limited(512 * 1024)) catch return error.ReadFailed;
+    return reader.interface.allocRemaining(allocator, .limited(limit)) catch |err| switch (err) {
+        error.StreamTooLong => return error.FileTooLarge,
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ReadFailed,
+    };
+}
+
+fn writeFileAtomic(allocator: std.mem.Allocator, io: std.Io, path: []const u8, data: []const u8) !void {
+    const tmp = try std.fmt.allocPrint(allocator, "{s}.orbit-tmp", .{path});
+    defer allocator.free(tmp);
+    errdefer std.Io.Dir.deleteFileAbsolute(io, tmp) catch {};
+
+    {
+        const file = try std.Io.Dir.createFileAbsolute(io, tmp, .{});
+        defer file.close(io);
+        try file.writeStreamingAll(io, data);
+    }
+    try std.Io.Dir.renameAbsolute(tmp, path, io);
 }
 
 fn writeIdeWrapper(allocator: std.mem.Allocator, io: std.Io) !?[]u8 {
@@ -328,4 +361,51 @@ fn chmod755(path: []const u8) void {
     @memcpy(buf[0..path.len], path);
     buf[path.len] = 0;
     _ = std.c.chmod(buf[0..path.len :0], 0o755);
+}
+
+test "readFile missing is NotFound" {
+    const io = std.testing.io;
+    try std.testing.expectError(
+        error.NotFound,
+        readFile(std.testing.allocator, io, "/this/orbit-ide-setup-missing-settings.json"),
+    );
+}
+
+test "readFileLimited rejects oversized files" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    {
+        const file = try tmp.dir.createFile(io, "big.json", .{});
+        defer file.close(io);
+        try file.writeStreamingAll(io, "0123456789");
+    }
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const n = try tmp.dir.realPathFile(io, "big.json", &buf);
+    try std.testing.expectError(
+        error.FileTooLarge,
+        readFileLimited(std.testing.allocator, io, buf[0..n], 4),
+    );
+}
+
+test "patchSettings merges without dropping existing keys" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    {
+        const file = try tmp.dir.createFile(io, "settings.json", .{});
+        defer file.close(io);
+        try file.writeStreamingAll(io, "{\n    \"editor.fontSize\": 14\n}\n");
+    }
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const n = try tmp.dir.realPathFile(io, "settings.json", &buf);
+    const pairs = [_]Pair{
+        .{ .k = "terminal.explorerKind", .v = "both" },
+    };
+    try patchSettings(allocator, io, buf[0..n], &pairs);
+    const data = try readFile(allocator, io, buf[0..n]);
+    defer allocator.free(data);
+    try std.testing.expect(std.mem.indexOf(u8, data, "editor.fontSize") != null);
+    try std.testing.expect(std.mem.indexOf(u8, data, "terminal.explorerKind") != null);
 }

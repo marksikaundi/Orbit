@@ -10,4 +10,4 @@ orbit ide-setup
 
 Then reload the editor window.
 
-Set `orbit.path` in settings if the `orbit` command is not on PATH.
+If `orbit` is not on PATH, set `orbit.path` in **User** settings (not workspace) to an absolute executable path or a command name. Workspace values are ignored.
