@@ -383,12 +383,14 @@ Large ideas should map to a phase in [roamap.md](roamap.md) or be discussed befo
 
 ## Security
 
+How to report vulnerabilities, which versions we patch, and what is in scope is documented in **[SECURITY.md](.github/SECURITY.md)**.
+
 ### Reporting vulnerabilities
 
 If you believe you found a security vulnerability:
 
 1. **Do not** open a public issue with exploit details.
-2. Contact the maintainer privately via GitHub security advisories (if enabled) or another private channel listed on the repository.
+2. Report it privately via [GitHub security advisories](https://github.com/marksikaundi/Orbit/security/advisories/new) — see [SECURITY.md](.github/SECURITY.md).
 3. Allow reasonable time for a fix before public disclosure.
 
 ### Automated scans

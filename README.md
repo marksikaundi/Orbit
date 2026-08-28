@@ -345,6 +345,8 @@ Bug fixes, tests, docs, plugins, and features that fit Orbit’s design principl
 
 → **[CONTRIBUTING.md](CONTRIBUTING.md)** — setup, coding standards, tests, commits, and PRs.
 
+→ **[SECURITY.md](.github/SECURITY.md)** — how to report vulnerabilities privately.
+
 Architecture feedback and roadmap discussion: [roamap.md](roamap.md).
 
 ---
