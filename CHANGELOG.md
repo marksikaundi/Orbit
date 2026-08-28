@@ -19,7 +19,7 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 - Quit / close tab / shell-exit handling
 - **Open Workspace** opens a native folder picker and starts a shell in that directory
 - **Text color** presets in Appearance (independent of theme)
-- **Search** finds text in the terminal (incl. scrollback) and file names in the opened folder (`Cmd/Ctrl+Shift+F`)
+- **Search** finds text in the terminal, file names, or **code inside files** (`Cmd/Ctrl+Shift+F`; Tab switches Terminal / Files / Code). **⌘/Ctrl+F** in the editor finds in the open file.
 - **In-file editor with autocomplete** — open a file and type; keywords, common APIs, and names already in the file show a popup with signature and a short meaning (Java, JavaScript, Python, and the other highlighted languages)
 
 ### Fixed

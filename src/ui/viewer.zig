@@ -4,6 +4,7 @@
 const std = @import("std");
 const highlight = @import("../syntax/highlight.zig");
 const complete = @import("../syntax/complete.zig");
+const search_mod = @import("search.zig");
 
 pub const Language = highlight.Language;
 pub const Kind = highlight.Kind;
@@ -12,6 +13,13 @@ pub const Span = highlight.Span;
 pub const max_spans = highlight.max_spans;
 pub const CompleteHit = complete.Hit;
 pub const max_complete = complete.max_results;
+pub const max_find: usize = 64;
+pub const max_find_query: usize = 64;
+
+pub const FindHit = struct {
+    row: usize,
+    col: usize,
+};
 
 pub const max_file_bytes: usize = 512 * 1024;
 
@@ -36,6 +44,12 @@ pub const Viewer = struct {
     complete_sel: usize = 0,
     complete_n: usize = 0,
     complete_hits: [max_complete]CompleteHit = undefined,
+    find_open: bool = false,
+    find_query: [max_find_query]u8 = undefined,
+    find_len: usize = 0,
+    find_hits: [max_find]FindHit = undefined,
+    find_count: usize = 0,
+    find_sel: usize = 0,
     /// True when the file is binary / not previewable.
     binary: bool = false,
     too_large: bool = false,
@@ -341,6 +355,103 @@ pub const Viewer = struct {
         if (self.complete_sel >= self.complete_n) self.complete_sel = 0;
     }
 
+    pub fn goTo(self: *Viewer, row: usize, col: usize) void {
+        const n = self.lineCount();
+        if (n == 0) {
+            self.cursor_row = 0;
+            self.cursor_col = 0;
+            self.want_col = 0;
+            return;
+        }
+        self.cursor_row = @min(row, n - 1);
+        self.cursor_col = @min(col, self.line(self.cursor_row).len);
+        self.want_col = self.cursor_col;
+        self.complete_open = false;
+    }
+
+    pub fn findQuerySlice(self: *const Viewer) []const u8 {
+        return self.find_query[0..self.find_len];
+    }
+
+    pub fn openFind(self: *Viewer) void {
+        self.find_open = true;
+        self.complete_open = false;
+        self.refreshFind();
+    }
+
+    pub fn closeFind(self: *Viewer) void {
+        self.find_open = false;
+        self.find_count = 0;
+        self.find_sel = 0;
+    }
+
+    pub fn findInputChar(self: *Viewer, codepoint: u32) void {
+        if (!self.find_open) return;
+        if (codepoint < 32 or codepoint > 126) return;
+        if (self.find_len + 1 >= self.find_query.len) return;
+        self.find_query[self.find_len] = @intCast(codepoint);
+        self.find_len += 1;
+        self.refreshFind();
+        self.jumpFind();
+    }
+
+    pub fn findBackspace(self: *Viewer) void {
+        if (!self.find_open) return;
+        if (self.find_len > 0) self.find_len -= 1;
+        self.refreshFind();
+        self.jumpFind();
+    }
+
+    pub fn findNext(self: *Viewer) void {
+        if (!self.find_open or self.find_count == 0) return;
+        self.find_sel = (self.find_sel + 1) % self.find_count;
+        self.jumpFind();
+    }
+
+    pub fn findPrev(self: *Viewer) void {
+        if (!self.find_open or self.find_count == 0) return;
+        self.find_sel = if (self.find_sel == 0) self.find_count - 1 else self.find_sel - 1;
+        self.jumpFind();
+    }
+
+    pub fn refreshFind(self: *Viewer) void {
+        self.find_count = 0;
+        const q = self.findQuerySlice();
+        if (q.len == 0 or !self.canEdit()) {
+            self.find_sel = 0;
+            return;
+        }
+        const lines = self.lineCount();
+        var row: usize = 0;
+        while (row < lines and self.find_count < max_find) : (row += 1) {
+            const text = self.line(row);
+            var from: usize = 0;
+            while (from < text.len and self.find_count < max_find) {
+                if (search_mod.indexOfIgnoreCase(text[from..], q)) |rel| {
+                    const col = from + rel;
+                    self.find_hits[self.find_count] = .{ .row = row, .col = col };
+                    self.find_count += 1;
+                    from = col + 1;
+                } else break;
+            }
+        }
+        self.find_sel = 0;
+        var i: usize = 0;
+        while (i < self.find_count) : (i += 1) {
+            const h = self.find_hits[i];
+            if (h.row > self.cursor_row or (h.row == self.cursor_row and h.col >= self.cursor_col)) {
+                self.find_sel = i;
+                break;
+            }
+        }
+    }
+
+    fn jumpFind(self: *Viewer) void {
+        if (self.find_count == 0 or self.find_sel >= self.find_count) return;
+        const hit = self.find_hits[self.find_sel];
+        self.goTo(hit.row, hit.col);
+    }
+
     pub fn save(self: *Viewer, io: std.Io) bool {
         const path = self.abs_path orelse return false;
         const data = self.content orelse return false;
@@ -388,6 +499,7 @@ pub const Viewer = struct {
         self.content = next;
         self.dirty = true;
         try self.rebuild(allocator);
+        if (self.find_open) self.refreshFind();
     }
 
     fn rebuild(self: *Viewer, allocator: std.mem.Allocator) !void {

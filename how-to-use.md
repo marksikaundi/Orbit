@@ -236,14 +236,17 @@ Full guide: [`assets/plugins/README.md`](assets/plugins/README.md). Appearance (
 | Key | Action |
 | --- | ------ |
 | Type | Live filter |
-| `Tab` | Switch **Terminal** ↔ **Files** |
+| `Tab` | Switch **Terminal** ↔ **Files** ↔ **Code** |
 | `↑` `↓` | Move between matches |
-| `Enter` | Terminal: jump to hit · Files: open the file to edit |
-| `Shift+Enter` | Files: insert the path into the shell |
-| `Esc` | Close |
+| `Enter` | Terminal: jump to hit · Files: open the file · Code: open the file at that line |
+| `Shift+Enter` | Files / Code: insert the path into the shell |
+| `Esc` | Close (returns to the editor if a file is still open) |
 
 - **Terminal** — searches visible screen + scrollback (case-insensitive)
 - **Files** — searches file names under the opened folder / current cwd
+- **Code** — searches inside files; Enter opens the editor on that line
+- **Find in file** — with a file open, **⌘/Ctrl+F** searches that file; Enter / F3 next match, Shift+Enter previous, Esc closes find
+
 - **Editor** — colors keywords, strings, comments, and so on by language (Java, JavaScript, Python, Zig, Rust, Go, HTML, JSON, …). Type to edit. While you type an identifier, a popup lists matching keywords, common APIs, and names already in the file, with a one-line meaning. **Tab** or **Enter** inserts the selected item, **Ctrl+Space** opens the list, **⌘/Ctrl+S** saves, **Esc** closes (press twice if unsaved).
 
 This is not a full language server (no project-wide Java IntelliSense). Completions come from Orbit’s catalogs plus the current file.

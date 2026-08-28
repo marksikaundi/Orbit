@@ -780,18 +780,21 @@ pub const App = struct {
         // Mode tabs
         const term_label = if (self.search.mode == .terminal) "[ Terminal ]" else "  Terminal  ";
         const files_label = if (self.search.mode == .files) "[ Files ]" else "  Files  ";
+        const code_label = if (self.search.mode == .code) "[ Code ]" else "  Code  ";
         try self.renderer.drawText(x + pad_x, cy, term_label, if (self.search.mode == .terminal) accent else muted);
         try self.renderer.drawText(x + pad_x + cw * 14, cy, files_label, if (self.search.mode == .files) accent else muted);
+        try self.renderer.drawText(x + pad_x + cw * 24, cy, code_label, if (self.search.mode == .code) accent else muted);
         try self.renderer.drawText(x + w - pad_x - cw * 12, cy, "Tab switch", dim);
         cy += mode_h;
 
         try self.renderer.drawRect(x + pad_x - 4, cy - 4, w - pad_x * 2 + 8, search_h, chrome.field, 1.0);
         var qbuf: [96]u8 = undefined;
         const query = self.search.querySlice();
-        const placeholder = if (self.search.mode == .terminal)
-            "Find in terminal..."
-        else
-            "Find files in workspace...";
+        const placeholder = switch (self.search.mode) {
+            .terminal => "Find in terminal...",
+            .files => "Find files by name...",
+            .code => "Find code in files...",
+        };
         const qline = if (query.len == 0) placeholder else (std.fmt.bufPrint(&qbuf, "> {s}", .{query}) catch "> ");
         try self.renderer.drawText(x + pad_x + 4, cy + @divTrunc(search_h - ch, 2) - 2, qline, if (query.len == 0) dim else accent);
         cy += search_h + gap;
@@ -799,10 +802,11 @@ pub const App = struct {
         try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, chrome.rule, 0.9);
 
         if (query.len == 0) {
-            const hint = if (self.search.mode == .terminal)
-                "Type to search scrollback and the visible screen"
-            else
-                "Type to search file names in the opened folder";
+            const hint = switch (self.search.mode) {
+                .terminal => "Type to search scrollback and the visible screen",
+                .files => "Type to search file names in the opened folder",
+                .code => "Type to search inside files, then Enter to open at that line",
+            };
             try self.renderer.drawText(x + pad_x, cy + @divTrunc(row_h - ch, 2), hint, muted);
         } else if (hit_n == 0) {
             try self.renderer.drawText(x + pad_x, cy + @divTrunc(row_h - ch, 2), "No matches", muted);
@@ -818,13 +822,21 @@ pub const App = struct {
                     try self.renderer.drawRect(x + 10, ry, 3, row_h - 2, accent, 1.0);
                 }
 
-                var line_buf: [128]u8 = undefined;
+                var line_buf: [160]u8 = undefined;
                 const line: []const u8 = switch (self.search.mode) {
                     .terminal => blk: {
                         const hit = self.search.term_hits[mi];
                         break :blk (std.fmt.bufPrint(&line_buf, "line {d}  col {d}", .{ hit.abs_row + 1, hit.col + 1 }) catch "hit");
                     },
                     .files => self.search.file_hits[mi],
+                    .code => blk: {
+                        const hit = self.search.code_hits[mi];
+                        break :blk (std.fmt.bufPrint(
+                            &line_buf,
+                            "{s}:{d}  {s}",
+                            .{ hit.rel, hit.line + 1, hit.snippetSlice() },
+                        ) catch hit.rel);
+                    },
                 };
                 const shown = line[0..@min(line.len, @as(usize, @intCast(label_max)))];
                 try self.renderer.drawText(x + pad_x + 6, text_y, shown, fg);
@@ -869,6 +881,12 @@ pub const App = struct {
                 }
                 self.search.refreshFiles(self.allocator, self.io);
             },
+            .code => {
+                if (self.focused()) |s| {
+                    self.search.setRoot(self.allocator, s.cwd) catch {};
+                }
+                self.search.refreshCode(self.allocator, self.io);
+            },
         }
     }
 
@@ -876,7 +894,11 @@ pub const App = struct {
         switch (key) {
             c.GLFW_KEY_ESCAPE => {
                 self.search.close(self.allocator);
-                self.leaveOverlay();
+                if (self.viewer.active) {
+                    self.ui = .viewer;
+                } else {
+                    self.leaveOverlay();
+                }
             },
             c.GLFW_KEY_TAB => {
                 self.search.toggleMode();
@@ -915,7 +937,7 @@ pub const App = struct {
                 const msg = std.fmt.bufPrint(&buf, "match {d}/{d}", .{ self.search.selected + 1, self.search.term_count }) catch "match";
                 self.setStatus(msg);
             },
-            .files => {
+            .files, .code => {
                 const rel = self.search.selectedFilePath() orelse {
                     self.setStatus("no file selected");
                     return;
@@ -926,7 +948,11 @@ pub const App = struct {
                         s.write(" ");
                     }
                     self.search.close(self.allocator);
-                    self.ui = .normal;
+                    if (self.viewer.active) {
+                        self.ui = .viewer;
+                    } else {
+                        self.ui = .normal;
+                    }
                     var buf: [96]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "inserted {s}", .{rel}) catch "file inserted";
                     self.setStatus(msg);
@@ -940,7 +966,21 @@ pub const App = struct {
                     return;
                 };
                 defer self.allocator.free(abs);
+                const code = self.search.selectedCodeHit();
+                const goto_line: ?usize = if (code) |h| h.line else null;
+                const goto_col: usize = if (code) |h| h.col else 0;
+                var qbuf: [64]u8 = undefined;
+                const q = self.search.querySlice();
+                const qn = @min(q.len, qbuf.len);
+                @memcpy(qbuf[0..qn], q[0..qn]);
+                const from_code = self.search.mode == .code;
                 self.openViewerPath(abs, rel);
+                if (goto_line) |row| self.viewer.goTo(row, goto_col);
+                if (from_code and qn > 0) {
+                    @memcpy(self.viewer.find_query[0..qn], qbuf[0..qn]);
+                    self.viewer.find_len = qn;
+                    self.viewer.openFind();
+                }
                 self.search.close(self.allocator);
             },
         }
@@ -1365,6 +1405,11 @@ pub const App = struct {
             .viewer => {
                 if (self.viewer.suppress_next_char) {
                     self.viewer.suppress_next_char = false;
+                    return;
+                }
+                if (self.viewer.find_open) {
+                    self.viewer.findInputChar(codepoint);
+                    self.viewer.ensureCursorVisible(self.viewerVisibleLines());
                     return;
                 }
                 self.viewer.insertChar(self.allocator, codepoint);
@@ -2904,8 +2949,9 @@ pub const App = struct {
         const ch = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_h)));
         const row_h = ch + 4;
         const header = ch + 28;
+        const find_h: i32 = if (self.viewer.find_open) ch + 16 else 0;
         const footer = ch + 16;
-        const body = @max(row_h, self.window.fb_height - Tabs.bar_height - 24 - header - footer);
+        const body = @max(row_h, self.window.fb_height - Tabs.bar_height - 24 - header - find_h - footer);
         return @intCast(@max(1, @divTrunc(body, row_h)));
     }
 
@@ -2920,6 +2966,51 @@ pub const App = struct {
                 self.setStatus("could not save");
             }
             return;
+        }
+
+        if (cmd and !shift and key == c.GLFW_KEY_F) {
+            self.viewer.suppress_next_char = true;
+            self.viewer.openFind();
+            return;
+        }
+
+        if (cmd and shift and key == c.GLFW_KEY_F) {
+            self.openSearch();
+            if (self.ui == .search) {
+                self.search.mode = .code;
+                self.refreshSearchResults();
+            }
+            return;
+        }
+
+        if (self.viewer.find_open) {
+            switch (key) {
+                c.GLFW_KEY_ESCAPE => {
+                    self.viewer.closeFind();
+                    return;
+                },
+                c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER, c.GLFW_KEY_F3 => {
+                    if (shift) self.viewer.findPrev() else self.viewer.findNext();
+                    self.viewer.ensureCursorVisible(visible);
+                    return;
+                },
+                c.GLFW_KEY_BACKSPACE => {
+                    self.viewer.findBackspace();
+                    self.viewer.ensureCursorVisible(visible);
+                    return;
+                },
+                c.GLFW_KEY_UP => {
+                    self.viewer.findPrev();
+                    self.viewer.ensureCursorVisible(visible);
+                    return;
+                },
+                c.GLFW_KEY_DOWN, c.GLFW_KEY_TAB => {
+                    self.viewer.findNext();
+                    self.viewer.ensureCursorVisible(visible);
+                    return;
+                },
+                else => {},
+            }
         }
 
         if (cmd and !shift and key == c.GLFW_KEY_SPACE) {
@@ -3024,12 +3115,13 @@ pub const App = struct {
         const pad_x: i32 = 14;
         const pad_y: i32 = 10;
         const header_h = ch + 18;
+        const find_h: i32 = if (self.viewer.find_open) ch + 16 else 0;
         const footer_h = ch + 14;
         const row_h = ch + 4;
         const gutter_cols: i32 = 6;
         const gutter_w = cw * gutter_cols + 10;
-        const body_y = y + pad_y + header_h;
-        const body_h = @max(row_h, h - pad_y - header_h - footer_h);
+        const body_y = y + pad_y + header_h + find_h;
+        const body_h = @max(row_h, h - pad_y - header_h - find_h - footer_h);
         const visible: usize = @intCast(@max(1, @divTrunc(body_h, row_h)));
         const code_cols: usize = @intCast(@max(8, @divTrunc(w - pad_x * 2 - gutter_w, cw)));
         self.viewer.ensureCursorVisible(visible);
@@ -3046,6 +3138,22 @@ pub const App = struct {
         const title_shown = title[0..@min(title.len, @as(usize, @intCast(@max(8, @divTrunc(w - pad_x * 2, cw)))))];
         try self.renderer.drawText(x + pad_x, y + pad_y, title_shown, chrome.fg);
         try self.renderer.drawRect(x + pad_x, y + pad_y + header_h - 8, w - pad_x * 2, 1, chrome.rule, 0.9);
+
+        if (self.viewer.find_open) {
+            const fy = y + pad_y + header_h - 2;
+            try self.renderer.drawRect(x + pad_x, fy, w - pad_x * 2, find_h - 4, chrome.field, 1.0);
+            var find_buf: [96]u8 = undefined;
+            const q = self.viewer.findQuerySlice();
+            const n = self.viewer.find_count;
+            const find_line = if (q.len == 0)
+                "Find in file…"
+            else if (n == 0)
+                (std.fmt.bufPrint(&find_buf, "Find  {s}   no matches", .{q}) catch "Find")
+            else
+                (std.fmt.bufPrint(&find_buf, "Find  {s}   {d}/{d}", .{ q, self.viewer.find_sel + 1, n }) catch "Find");
+            const find_shown = find_line[0..@min(find_line.len, @as(usize, @intCast(@max(8, @divTrunc(w - pad_x * 2 - 8, cw)))))];
+            try self.renderer.drawText(x + pad_x + 8, fy + 4, find_shown, if (q.len == 0) chrome.dim else chrome.accent);
+        }
 
         const text_x = x + pad_x + gutter_w;
         var caret_screen_y: ?i32 = null;
@@ -3068,6 +3176,26 @@ pub const App = struct {
                 if (on_cursor) {
                     try self.renderer.drawRect(x + pad_x, ry - 1, w - pad_x * 2, row_h, chrome.sel_bg, 0.28);
                     caret_screen_y = ry;
+                }
+                if (self.viewer.find_open and self.viewer.find_len > 0) {
+                    const qlen = self.viewer.find_len;
+                    var hi: usize = 0;
+                    while (hi < self.viewer.find_count) : (hi += 1) {
+                        const hit = self.viewer.find_hits[hi];
+                        if (hit.row != li) continue;
+                        if (hit.col >= code_cols) continue;
+                        const hw = @min(qlen, code_cols - hit.col);
+                        if (hw == 0) continue;
+                        const alpha: f32 = if (hi == self.viewer.find_sel) 0.55 else 0.28;
+                        try self.renderer.drawRect(
+                            text_x + @as(i32, @intCast(hit.col)) * cw,
+                            ry,
+                            @as(i32, @intCast(hw)) * cw,
+                            ch,
+                            chrome.accent,
+                            alpha,
+                        );
+                    }
                 }
                 var num_buf: [12]u8 = undefined;
                 const num = std.fmt.bufPrint(&num_buf, "{d: >5}", .{li + 1}) catch "    0";
@@ -3111,7 +3239,7 @@ pub const App = struct {
         const lines = self.viewer.lineCount();
         const foot_line = std.fmt.bufPrint(
             &foot,
-            "{d} lines   ⌘/Ctrl+S save   Ctrl+Space complete   Tab accept   Esc close",
+            "{d} lines   ⌘/Ctrl+S save   ⌘/Ctrl+F find   Ctrl+Shift+F code   Esc close",
             .{lines},
         ) catch "Esc close";
         const foot_shown = foot_line[0..@min(foot_line.len, @as(usize, @intCast(@max(8, @divTrunc(w - pad_x * 2, cw)))))];

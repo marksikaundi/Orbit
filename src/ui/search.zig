@@ -1,13 +1,25 @@
-//! Search — find text in the terminal buffer (incl. scrollback) or files in the workspace folder.
+//! Search — find text in the terminal, file names, or code inside workspace files.
 
 const std = @import("std");
 const Screen = @import("../terminal/screen.zig").Screen;
 
-pub const Mode = enum { terminal, files };
+pub const Mode = enum { terminal, files, code };
 
 pub const TermHit = struct {
     abs_row: usize,
     col: usize,
+};
+
+pub const CodeHit = struct {
+    rel: []u8,
+    line: usize,
+    col: usize,
+    snippet: [72]u8 = undefined,
+    snippet_len: u8 = 0,
+
+    pub fn snippetSlice(self: *const CodeHit) []const u8 {
+        return self.snippet[0..self.snippet_len];
+    }
 };
 
 pub const max_hits = 64;
@@ -29,6 +41,9 @@ pub const Search = struct {
     /// Relative paths under `root` (owned).
     file_hits: [max_hits][]u8 = undefined,
     file_count: usize = 0,
+    /// Code hits: path + line + snippet (owned rel path).
+    code_hits: [max_hits]CodeHit = undefined,
+    code_count: usize = 0,
     /// Absolute workspace / cwd being searched (owned).
     root: ?[]u8 = null,
 
@@ -59,11 +74,8 @@ pub const Search = struct {
     }
 
     pub fn clearHits(self: *Search, allocator: std.mem.Allocator) void {
-        var i: usize = 0;
-        while (i < self.file_count) : (i += 1) {
-            allocator.free(self.file_hits[i]);
-        }
-        self.file_count = 0;
+        self.clearFileHits(allocator);
+        self.clearCodeHits(allocator);
         self.term_count = 0;
         if (self.root) |r| {
             allocator.free(r);
@@ -79,6 +91,14 @@ pub const Search = struct {
         self.file_count = 0;
     }
 
+    pub fn clearCodeHits(self: *Search, allocator: std.mem.Allocator) void {
+        var i: usize = 0;
+        while (i < self.code_count) : (i += 1) {
+            allocator.free(self.code_hits[i].rel);
+        }
+        self.code_count = 0;
+    }
+
     pub fn querySlice(self: *const Search) []const u8 {
         return self.query[0..self.query_len];
     }
@@ -87,6 +107,7 @@ pub const Search = struct {
         return switch (self.mode) {
             .terminal => self.term_count,
             .files => self.file_count,
+            .code => self.code_count,
         };
     }
 
@@ -105,7 +126,11 @@ pub const Search = struct {
     }
 
     pub fn toggleMode(self: *Search) void {
-        self.mode = if (self.mode == .terminal) .files else .terminal;
+        self.mode = switch (self.mode) {
+            .terminal => .files,
+            .files => .code,
+            .code => .terminal,
+        };
         self.selected = 0;
     }
 
@@ -185,8 +210,22 @@ pub const Search = struct {
     }
 
     pub fn selectedFilePath(self: *const Search) ?[]const u8 {
-        if (self.mode != .files or self.file_count == 0 or self.selected >= self.file_count) return null;
-        return self.file_hits[self.selected];
+        return switch (self.mode) {
+            .files => blk: {
+                if (self.file_count == 0 or self.selected >= self.file_count) break :blk null;
+                break :blk self.file_hits[self.selected];
+            },
+            .code => blk: {
+                if (self.code_count == 0 or self.selected >= self.code_count) break :blk null;
+                break :blk self.code_hits[self.selected].rel;
+            },
+            .terminal => null,
+        };
+    }
+
+    pub fn selectedCodeHit(self: *const Search) ?*const CodeHit {
+        if (self.mode != .code or self.code_count == 0 or self.selected >= self.code_count) return null;
+        return &self.code_hits[self.selected];
     }
 
     /// Absolute path for the selected file (caller frees).
@@ -194,6 +233,20 @@ pub const Search = struct {
         const rel = self.selectedFilePath() orelse return null;
         const root = self.root orelse return null;
         return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ root, rel });
+    }
+
+    /// Rebuild code hits by grepping file contents under `root`.
+    pub fn refreshCode(self: *Search, allocator: std.mem.Allocator, io: std.Io) void {
+        self.clearCodeHits(allocator);
+        const q = self.querySlice();
+        const root = self.root orelse return;
+        if (q.len == 0) return;
+
+        var scanned: usize = 0;
+        walkCode(allocator, io, root, "", q, &self.code_hits, &self.code_count, 0, &scanned) catch {};
+        if (self.selected >= self.code_count and self.code_count > 0) {
+            self.selected = self.code_count - 1;
+        }
     }
 };
 
@@ -309,4 +362,137 @@ fn walkFiles(
             else => {},
         }
     }
+}
+
+const max_code_bytes: usize = 256 * 1024;
+const max_scan_files: usize = 400;
+
+fn walkCode(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    root: []const u8,
+    rel: []const u8,
+    query: []const u8,
+    out: *[max_hits]CodeHit,
+    count: *usize,
+    depth: u32,
+    scanned: *usize,
+) !void {
+    if (count.* >= max_hits or depth > max_depth or scanned.* >= max_scan_files) return;
+
+    const abs = if (rel.len == 0)
+        try allocator.dupe(u8, root)
+    else
+        try std.fmt.allocPrint(allocator, "{s}/{s}", .{ root, rel });
+    defer allocator.free(abs);
+
+    var dir = std.Io.Dir.openDirAbsolute(io, abs, .{ .iterate = true }) catch return;
+    defer dir.close(io);
+
+    var it = dir.iterate();
+    while (it.next(io) catch null) |entry| {
+        if (count.* >= max_hits or scanned.* >= max_scan_files) return;
+        const name = entry.name;
+        if (name.len == 0 or std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) continue;
+
+        const child_rel = if (rel.len == 0)
+            try allocator.dupe(u8, name)
+        else
+            try std.fmt.allocPrint(allocator, "{s}/{s}", .{ rel, name });
+        defer allocator.free(child_rel);
+
+        switch (entry.kind) {
+            .directory => {
+                if (shouldSkipDir(name)) continue;
+                try walkCode(allocator, io, root, child_rel, query, out, count, depth + 1, scanned);
+            },
+            .file => {
+                scanned.* += 1;
+                const child_abs = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ root, child_rel });
+                defer allocator.free(child_abs);
+                grepFile(allocator, io, child_abs, child_rel, query, out, count) catch {};
+            },
+            else => {},
+        }
+    }
+}
+
+fn grepFile(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    abs: []const u8,
+    rel: []const u8,
+    query: []const u8,
+    out: *[max_hits]CodeHit,
+    count: *usize,
+) !void {
+    if (count.* >= max_hits) return;
+    const raw = readLimited(allocator, io, abs, max_code_bytes) catch return;
+    defer allocator.free(raw);
+    if (looksBinary(raw)) return;
+
+    var line_i: usize = 0;
+    var i: usize = 0;
+    while (i < raw.len and count.* < max_hits) {
+        const start = i;
+        while (i < raw.len and raw[i] != '\n') i += 1;
+        var line = raw[start..i];
+        if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
+        var from: usize = 0;
+        while (from < line.len and count.* < max_hits) {
+            if (indexOfIgnoreCase(line[from..], query)) |rel_col| {
+                const col = from + rel_col;
+                var hit: CodeHit = .{
+                    .rel = try allocator.dupe(u8, rel),
+                    .line = line_i,
+                    .col = col,
+                };
+                fillSnippet(&hit, line, col);
+                out[count.*] = hit;
+                count.* += 1;
+                from = col + 1;
+            } else break;
+        }
+        if (i < raw.len) i += 1;
+        line_i += 1;
+    }
+}
+
+fn fillSnippet(hit: *CodeHit, line: []const u8, col: usize) void {
+    var start: usize = 0;
+    while (start < line.len and (line[start] == ' ' or line[start] == '\t')) start += 1;
+    const body = line[start..];
+    const adj = if (col >= start) col - start else 0;
+    const keep = hit.snippet.len;
+    var from: usize = 0;
+    if (body.len > keep) {
+        from = if (adj > keep / 4) adj - keep / 4 else 0;
+        if (from + keep > body.len) from = body.len - keep;
+    }
+    const n = @min(keep, body.len - from);
+    if (n > 0) @memcpy(hit.snippet[0..n], body[from..][0..n]);
+    hit.snippet_len = @intCast(n);
+}
+
+fn readLimited(allocator: std.mem.Allocator, io: std.Io, path: []const u8, limit: usize) ![]u8 {
+    const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch return error.NotFound;
+    defer file.close(io);
+    var buf: [4096]u8 = undefined;
+    var reader = file.reader(io, &buf);
+    return reader.interface.allocRemaining(allocator, .limited(limit)) catch |err| switch (err) {
+        error.StreamTooLong => return error.FileTooLarge,
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ReadFailed,
+    };
+}
+
+fn looksBinary(data: []const u8) bool {
+    const n = @min(data.len, 1024);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const ch = data[i];
+        if (ch == 0) return true;
+        if (ch < 0x09 and ch != '\n' and ch != '\r' and ch != '\t') return true;
+    }
+    return false;
 }

@@ -162,6 +162,33 @@ test "save writes edits back to disk" {
     try std.testing.expect(std.mem.indexOf(u8, body, "\ny") != null);
 }
 
+test "find in file locates and cycles matches" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    {
+        const file = try tmp.dir.createFile(io, "note.py", .{});
+        defer file.close(io);
+        try file.writeStreamingAll(io, "hello one\nworld\nhello two\n");
+    }
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const n = try tmp.dir.realPathFile(io, "note.py", &buf);
+
+    var v: Viewer = .{};
+    v.open(std.testing.allocator, io, buf[0..n], "note.py");
+    defer v.close(std.testing.allocator);
+
+    v.openFind();
+    for ("hello") |ch| v.findInputChar(ch);
+    try std.testing.expectEqual(@as(usize, 2), v.find_count);
+    try std.testing.expectEqual(@as(usize, 0), v.find_hits[0].row);
+    try std.testing.expectEqual(@as(usize, 2), v.find_hits[1].row);
+    v.findNext();
+    try std.testing.expectEqual(@as(usize, 2), v.cursor_row);
+    v.findNext();
+    try std.testing.expectEqual(@as(usize, 0), v.cursor_row);
+}
+
 test "missing file sets an error" {
     var v: Viewer = .{};
     v.open(std.testing.allocator, std.testing.io, "/this/orbit-missing-preview-file.py", "missing.py");
