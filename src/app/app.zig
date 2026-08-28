@@ -24,6 +24,7 @@ const PluginCommand = @import("../plugins/types.zig").PluginCommand;
 const plugin_audit = @import("../security/plugin_audit.zig");
 const clipboard = @import("../clipboard/clipboard.zig");
 const folder_picker = @import("../platform/folder_picker.zig");
+const macos_open = @import("../platform/macos_open.zig");
 const Color = @import("../terminal/cell.zig").Color;
 const dev_root = @import("../dev_root.zig");
 
@@ -81,7 +82,15 @@ pub const App = struct {
     /// Selected plugin index in the Plugins panel.
     plugin_row: usize = 0,
 
-    pub fn create(allocator: std.mem.Allocator, io: std.Io) !*App {
+    pub const LaunchOpts = struct {
+        cwd: ?[]const u8 = null,
+        title: ?[]const u8 = null,
+        execute: []const []const u8 = &.{},
+        wait_after_command: bool = false,
+        skip_home: bool = false,
+    };
+
+    pub fn create(allocator: std.mem.Allocator, io: std.Io, opts: LaunchOpts) !*App {
         const self = try allocator.create(App);
         errdefer allocator.destroy(self);
 
@@ -135,6 +144,9 @@ pub const App = struct {
         self.fireHooks(.on_load);
         self.applyRendererHooks();
         self.publishSourceRoot();
+        macos_open.install();
+        self.applyLaunch(opts);
+        self.drainExternalOpens();
         return self;
     }
 
@@ -167,6 +179,7 @@ pub const App = struct {
     pub fn run(self: *App) !void {
         while (!self.window.shouldClose()) {
             Window.poll();
+            self.drainExternalOpens();
             self.handleResize();
             self.tabs.tickAll();
             self.flushPendingSsh();
@@ -2761,10 +2774,37 @@ pub const App = struct {
     }
 
     fn newTab(self: *App) !void {
-        try self.newTabInDir(self.sessionCwd(), null);
+        try self.openSession(self.sessionCwd(), null, &.{}, false);
     }
 
     fn newTabInDir(self: *App, cwd: []const u8, title_opt: ?[]const u8) !void {
+        try self.openSession(cwd, title_opt, &.{}, false);
+    }
+
+    fn applyLaunch(self: *App, opts: LaunchOpts) void {
+        if (!opts.skip_home) return;
+        const dir = opts.cwd orelse @import("../platform/paths.zig").defaultCwd();
+        self.openSession(dir, opts.title, opts.execute, opts.wait_after_command) catch {
+            self.setStatus("could not open folder");
+        };
+    }
+
+    fn drainExternalOpens(self: *App) void {
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        while (macos_open.take(&buf)) |p| {
+            self.openSession(p, null, &.{}, false) catch {
+                self.setStatus("could not open folder");
+            };
+        }
+    }
+
+    fn openSession(
+        self: *App,
+        cwd: []const u8,
+        title_opt: ?[]const u8,
+        command: []const []const u8,
+        wait_after: bool,
+    ) !void {
         const bounds = self.contentRect();
         const cols, const rows = self.gridSize(bounds.w, bounds.h);
         const theme = self.config.theme();
@@ -2790,10 +2830,14 @@ pub const App = struct {
             .title = title,
             .cwd = cwd,
             .shell = launch,
+            .command = command,
+            .wait_after_command = wait_after,
         });
         session.setTheme(theme.foreground, theme.background);
         session.setScrollback(self.config.scrollback);
         try self.tabs.add(title, session);
+        self.ui = .normal;
+        self.updateWindowTitle();
     }
 
     fn splitPane(self: *App, dir: layout_mod.Dir) !void {

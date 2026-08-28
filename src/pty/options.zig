@@ -11,6 +11,10 @@ pub const CreateOptions = struct {
     shell: ?[]const u8 = null,
     /// Extra environment entries as "KEY=VALUE".
     env: []const []const u8 = &.{},
+    /// If non-empty, exec this argv instead of a login shell (`orbit -e`).
+    command: []const []const u8 = &.{},
+    /// After `command` exits, start a login shell so the window stays open.
+    wait_after_command: bool = false,
 };
 
 pub const ReadResult = struct {

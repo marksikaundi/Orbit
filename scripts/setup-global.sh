@@ -49,6 +49,11 @@ fi
 
 LAUNCH="$ROOT/scripts/launch-detached.sh"
 if [[ -x "$LAUNCH" ]]; then
+  case "${1:-}" in
+    ide-setup|--ide-setup|-h|--help|-V|--version)
+      export ORBIT_FOREGROUND=1
+      ;;
+  esac
   exec "$LAUNCH" "$@"
 fi
 
@@ -68,6 +73,11 @@ fi
 if [[ "${ORBIT_FOREGROUND:-}" == "1" ]]; then
   exec "$EXE" "$@"
 fi
+case "${1:-}" in
+  ide-setup|--ide-setup|-h|--help|-V|--version)
+    exec "$EXE" "$@"
+    ;;
+esac
 nohup "$EXE" "$@" </dev/null >>"$LOG_DIR/orbit.log" 2>&1 &
 disown $! 2>/dev/null || true
 echo "Orbit terminal opened successfully"

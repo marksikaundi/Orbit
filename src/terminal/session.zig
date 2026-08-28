@@ -16,6 +16,8 @@ pub const SessionOptions = struct {
     cwd: ?[]const u8 = null,
     shell: ?[]const u8 = null,
     env: []const []const u8 = &.{},
+    command: []const []const u8 = &.{},
+    wait_after_command: bool = false,
 };
 
 pub const Session = struct {
@@ -93,6 +95,8 @@ pub const Session = struct {
             .cwd = cwd_owned,
             .shell = shell_owned,
             .env = env_refs,
+            .command = opts.command,
+            .wait_after_command = opts.wait_after_command,
         });
         errdefer pty.deinit();
 

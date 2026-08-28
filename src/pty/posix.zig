@@ -67,9 +67,7 @@ pub const Pty = struct {
                 setEnvEntry(entry);
             }
 
-            const shell_path = resolveShell(opts.shell);
-            const argv = [_]?[*:0]const u8{ shell_path, "-l", null };
-            _ = c.execvp(shell_path, @ptrCast(&argv));
+            execChild(opts);
             c._exit(127);
         }
 
@@ -183,6 +181,54 @@ pub const Pty = struct {
         self.alive = false;
     }
 };
+
+fn execChild(opts: CreateOptions) void {
+    const shell_path = resolveShell(opts.shell);
+    if (opts.command.len == 0) {
+        const argv = [_]?[*:0]const u8{ shell_path, "-l", null };
+        _ = c.execvp(shell_path, @ptrCast(&argv));
+        return;
+    }
+
+    var storage: [48][768]u8 = undefined;
+    var argv: [56]?[*:0]const u8 = undefined;
+    if (opts.command.len > storage.len) return;
+    if (opts.wait_after_command and opts.command.len + 6 > argv.len) return;
+
+    if (opts.wait_after_command) {
+        const script: [*:0]const u8 = "exec \"$@\"; exec \"$0\" -l";
+        var n: usize = 0;
+        argv[n] = shell_path;
+        n += 1;
+        argv[n] = "-l";
+        n += 1;
+        argv[n] = "-c";
+        n += 1;
+        argv[n] = script;
+        n += 1;
+        argv[n] = shell_path;
+        n += 1;
+        for (opts.command, 0..) |arg, i| {
+            if (arg.len >= storage[i].len) return;
+            @memcpy(storage[i][0..arg.len], arg);
+            storage[i][arg.len] = 0;
+            argv[n] = storage[i][0..arg.len :0];
+            n += 1;
+        }
+        argv[n] = null;
+        _ = c.execvp(shell_path, @ptrCast(&argv));
+        return;
+    }
+
+    for (opts.command, 0..) |arg, i| {
+        if (arg.len >= storage[i].len) return;
+        @memcpy(storage[i][0..arg.len], arg);
+        storage[i][arg.len] = 0;
+        argv[i] = storage[i][0..arg.len :0];
+    }
+    argv[opts.command.len] = null;
+    _ = c.execvp(argv[0].?, @ptrCast(&argv));
+}
 
 fn resolveShell(shell: ?[]const u8) [*:0]const u8 {
     if (shell) |s| {

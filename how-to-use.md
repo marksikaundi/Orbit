@@ -27,6 +27,63 @@ ORBIT_FOREGROUND=1 orbit
 
 If the current directory has its own `build.zig`, that project wins (Orbit is not redirected).
 
+## Connect to Cursor, VS Code, and other IDEs
+
+The editor keeps **two** terminals. Orbit only hooks the second one.
+
+| | What it is | What to do |
+| --- | --- | --- |
+| **Integrated** | Panel inside the editor (`Ctrl+`` ` / `Cmd+`` `) | Leave it alone |
+| **External** | A separate app window | Point this at Orbit |
+
+Do **not** add Orbit as an integrated profile or default shell. That would try to run the Orbit GUI *inside* the editor panel.
+
+### Automatic (safe)
+
+```bash
+orbit ide-setup                 # Cursor, VS Code, and others it finds
+orbit ide-setup --editor cursor # Cursor only
+```
+
+This only writes **external** settings and sets `terminal.explorerKind` to `"both"`, so the built-in panel stays. Reload the editor window after.
+
+Then:
+
+- `` Ctrl+` `` / `` Cmd+` `` — still the built-in terminal
+- Explorer → right-click a folder → **Open in External Terminal** — Orbit
+- Explorer → right-click → **Open in Orbit Terminal** — Orbit
+- Command Palette → **Open in Orbit Terminal** — Orbit
+
+### Manual (same result, you paste the keys)
+
+1. Command Palette → **Preferences: Open User Settings (JSON)**
+2. Add **only** these keys (keep everything else you already have):
+
+```json
+"terminal.external.osxExec": "Orbit.app",
+"terminal.external.linuxExec": "orbit-ide",
+"terminal.external.windowsExec": "orbit-ide.cmd",
+"terminal.explorerKind": "both"
+```
+
+3. Save, then reload the window.
+
+`"both"` is the important line: Explorer offers **Open in Integrated Terminal** *and* **Open in External Terminal**. If you set `"external"` instead, the integrated option disappears from the explorer menu (the panel itself still works).
+
+Leave these **unchanged**:
+
+- `terminal.integrated.defaultProfile.*`
+- `terminal.integrated.profiles.*`
+- `terminal.integrated.shell.*`
+
+### Other IDEs (JetBrains, etc.)
+
+Point the **external / standalone terminal** at Orbit. Do not replace the embedded terminal.
+
+```bash
+orbit --working-directory /path/to/project
+```
+
 ## From the Orbit repo
 
 ```bash

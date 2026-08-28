@@ -30,6 +30,9 @@ comptime {
 
     _ = @import("tests/workspace/workspace_test.zig");
 
+    _ = @import("tests/cli/args_test.zig");
+    _ = @import("tests/cli/jsonc_test.zig");
+
     _ = @import("tests/version_test.zig");
 
     // Private workspace parse helpers (same-file tests)

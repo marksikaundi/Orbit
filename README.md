@@ -151,6 +151,14 @@ ORBIT_FOREGROUND=1 orbit   # live logs in this terminal (Unix)
 # Windows:  $env:ORBIT_FOREGROUND=1; orbit
 ```
 
+Connect Orbit as an **external** terminal (the editor’s built-in panel stays):
+
+```bash
+orbit ide-setup          # Cursor, VS Code, and others it finds
+```
+
+Details: [how-to-use.md](how-to-use.md#connect-to-cursor-vs-code-and-other-ides).
+
 Optional config:
 
 ```bash

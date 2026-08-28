@@ -11,6 +11,9 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 ## [Unreleased]
 
 ### Added
+- **IDE connect** — `orbit ide-setup` registers Orbit as the external terminal in Cursor, VS Code, VSCodium, and Windsurf, and installs an **Open in Orbit Terminal** explorer command
+- CLI flags editors already send: `--working-directory`, `-e` / `--command`, positional folder (Ghostty / Alacritty / Kitty compatible)
+- macOS `open -a Orbit.app /folder` opens a shell in that folder
 - Appearance settings (themes, cursor, shell)
 - Full Help & Shortcuts reference
 - Quit / close tab / shell-exit handling

@@ -192,11 +192,11 @@ pub const Pty = struct {
         si.StartupInfo.cb = @sizeOf(STARTUPINFOEXW);
         si.lpAttributeList = attr_bytes.ptr;
 
-        var cmdline_buf: [1024]u8 = undefined;
+        var cmdline_buf: [2048]u8 = undefined;
         const shell = opts.shell orelse paths.defaultShell();
-        const cmdline_utf8 = buildCommandLine(&cmdline_buf, shell) catch return error.CommandLineTooLong;
+        const cmdline_utf8 = buildCommandLine(&cmdline_buf, shell, opts.command, opts.wait_after_command) catch return error.CommandLineTooLong;
 
-        var cmdline_w: [1024]u16 = undefined;
+        var cmdline_w: [2048]u16 = undefined;
         const cmdline_len = try std.unicode.wtf8ToWtf16Le(cmdline_w[0 .. cmdline_w.len - 1], cmdline_utf8);
         cmdline_w[cmdline_len] = 0;
 
@@ -343,12 +343,31 @@ pub const Pty = struct {
     }
 };
 
-fn buildCommandLine(buf: []u8, shell: []const u8) ![]const u8 {
+fn buildCommandLine(buf: []u8, shell: []const u8, command: []const []const u8, wait_after: bool) ![]const u8 {
     // Quotes in the shell path break CreateProcess command-line parsing.
     if (std.mem.indexOfScalar(u8, shell, '"') != null) return error.InvalidShellPath;
     if (std.mem.indexOfScalar(u8, shell, '\n') != null or std.mem.indexOfScalar(u8, shell, '\r') != null) {
         return error.InvalidShellPath;
     }
+    if (command.len == 0) {
+        return buildShellLine(buf, shell);
+    }
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.heap.c_allocator);
+    if (wait_after) {
+        // Keep a prompt after the program exits (debug / -e).
+        try out.appendSlice(std.heap.c_allocator, "cmd.exe /c \"");
+        try appendQuotedArgs(&out, std.heap.c_allocator, command);
+        try out.appendSlice(std.heap.c_allocator, " & pause\"");
+    } else {
+        try appendQuotedArgs(&out, std.heap.c_allocator, command);
+    }
+    if (out.items.len >= buf.len) return error.CommandLineTooLong;
+    @memcpy(buf[0..out.items.len], out.items);
+    return buf[0..out.items.len];
+}
+
+fn buildShellLine(buf: []u8, shell: []const u8) ![]const u8 {
     // Prefer PowerShell / pwsh as login-like interactive shells.
     if (std.ascii.endsWithIgnoreCase(shell, "powershell.exe") or
         std.ascii.endsWithIgnoreCase(shell, "pwsh.exe") or
@@ -361,6 +380,25 @@ fn buildCommandLine(buf: []u8, shell: []const u8) ![]const u8 {
         return std.fmt.bufPrint(buf, "\"{s}\" /K", .{shell}) catch return error.CommandLineTooLong;
     }
     return std.fmt.bufPrint(buf, "\"{s}\"", .{shell}) catch return error.CommandLineTooLong;
+}
+
+fn appendQuotedArgs(out: *std.ArrayList(u8), allocator: std.mem.Allocator, command: []const []const u8) !void {
+    for (command, 0..) |arg, i| {
+        if (std.mem.indexOfScalar(u8, arg, '\n') != null or std.mem.indexOfScalar(u8, arg, '\r') != null) {
+            return error.InvalidShellPath;
+        }
+        if (i > 0) try out.append(allocator, ' ');
+        const need_quotes = std.mem.indexOfAny(u8, arg, " \t\"") != null;
+        if (need_quotes) try out.append(allocator, '"');
+        for (arg) |ch| {
+            if (ch == '"') {
+                try out.appendSlice(allocator, "\\\"");
+            } else {
+                try out.append(allocator, ch);
+            }
+        }
+        if (need_quotes) try out.append(allocator, '"');
+    }
 }
 
 /// Build a Unicode environment block for CreateProcessW (child-only; parent unchanged).

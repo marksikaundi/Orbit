@@ -15,10 +15,11 @@ Orbit is currently distributed as **source**. You clone the repository, install 
 5. [Windows](#windows)
 6. [Verify the install](#verify-the-install)
 7. [Optional: global launcher](#optional-global-launcher)
-8. [Optional: config & plugins](#optional-config--plugins)
-9. [Update Orbit](#update-orbit)
-10. [Uninstall](#uninstall)
-11. [Troubleshooting](#troubleshooting)
+8. [Optional: connect to Cursor / VS Code](#optional-connect-to-cursor--vs-code)
+9. [Optional: config & plugins](#optional-config--plugins)
+10. [Update Orbit](#update-orbit)
+11. [Uninstall](#uninstall)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -426,6 +427,18 @@ ORBIT_FOREGROUND=1 orbit   # logs in this terminal
 ```
 
 Details: [how-to-use.md](how-to-use.md).
+
+---
+
+## Optional: connect to Cursor / VS Code
+
+Orbit is added as the **external** terminal only. The built-in panel (`` Ctrl+` `` / `` Cmd+` ``) is not replaced.
+
+```bash
+orbit ide-setup
+```
+
+Reload the editor. Full steps, including a manual JSON paste that does not touch integrated profiles: [how-to-use.md — Connect to IDEs](how-to-use.md#connect-to-cursor-vs-code-and-other-ides).
 
 ---
 

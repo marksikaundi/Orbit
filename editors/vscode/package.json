@@ -1,0 +1,55 @@
+{
+  "name": "orbit-terminal",
+  "displayName": "Orbit Terminal",
+  "description": "Open folders in Orbit — Cursor, VS Code, and other VS Code-compatible editors.",
+  "version": "0.1.0",
+  "publisher": "orbit",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Other"],
+  "keywords": ["orbit", "terminal", "external terminal"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "orbit.open",
+        "title": "Open in Orbit Terminal"
+      },
+      {
+        "command": "orbit.openWorkspace",
+        "title": "Orbit: Open Workspace Folder"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "orbit.open",
+          "group": "navigation@90"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "orbit.open",
+          "group": "navigation@90"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "orbit.openWorkspace"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Orbit Terminal",
+      "properties": {
+        "orbit.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the orbit executable. Empty uses PATH, or `open -a Orbit.app` on macOS."
+        }
+      }
+    }
+  }
+}
