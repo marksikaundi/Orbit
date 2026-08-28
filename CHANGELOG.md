@@ -15,6 +15,8 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 - CLI flags editors already send: `--working-directory`, `-e` / `--command`, positional folder (Ghostty / Alacritty / Kitty compatible)
 - macOS `open -a Orbit.app /folder` opens a shell in that folder
 - Appearance settings (themes, cursor, shell)
+- **Ghostty-style look** — compact / comfortable / airy / glass (padding, line spacing, opacity) plus prompt styles (ghostty ❯, minimal, starship) in Appearance
+- Catppuccin Mocha and Tokyo Night themes
 - Full Help & Shortcuts reference
 - Quit / close tab / shell-exit handling
 - **Open Workspace** opens a native folder picker and starts a shell in that directory

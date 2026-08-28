@@ -149,15 +149,31 @@ Open **Settings** (`S` on home) and use **↑↓** + **←→** to change:
 
 | Option | Choices |
 | ------ | ------- |
-| Theme | orbit-dark, orbit-light, nord, dracula, gruvbox-dark, solarized-dark |
+| Theme | orbit-dark, orbit-light, nord, dracula, gruvbox-dark, solarized-dark, catppuccin-mocha, tokyo-night |
 | Text | theme (default), soft white, bright, mint, amber, sky, … |
+| Font / Face | size in points; SF Mono, Menlo, JetBrains Mono, … |
+| Look | compact, comfortable, airy, glass — Ghostty-style padding, line spacing, and opacity |
+| Opacity | 100% … 70% (glass look starts at 86%) |
+| Padding | interior margin around the grid |
+| Spacing | tight → loose (Ghostty `adjust-cell-height`) |
 | Cursor | block, underline, bar |
 | Blink | on / off |
+| Prompt | default (your `.zshrc`), ghostty (dim path + ❯), minimal, starship |
 | Shell | `$SHELL`, zsh, bash, sh, fish… (applies to **new** tabs) |
+
+**Look** is the fast path: pick `comfortable` or `glass` and the terminal immediately feels like a custom Ghostty window. Fine-tune Opacity / Padding / Spacing after if you want.
+
+**Prompt** restyles the shell prompt in **new** tabs (your `.zshrc` prompt stays as `default`). Ghostty-style:
+
+```
+~/Projects/Orbit ❯
+```
+
+Starship uses the `starship` binary if it is on `PATH`, otherwise falls back to the ghostty prompt. Re-run `zig build setup` so `~/.config/orbit/shell/orbit.sh` has the prompt helper.
 
 Press **S** in Settings to save to `~/.config/orbit/config.toml`.
 
-Or edit the file directly (see `assets/config.example.toml`). The shell prompt text itself (`%`, `$`, starship, etc.) still comes from your shell config (`.zshrc` / `.bashrc`).
+Or edit the file directly (see `assets/config.example.toml`). With Prompt set to `default`, the text still comes from `.zshrc` / `.bashrc`.
 
 ## Font size
 
@@ -172,9 +188,13 @@ Default is **14pt** SF Mono (Retina-aware), Ghostty-style. Or set in `~/.config/
 ```toml
 [terminal]
 font_size = 15
-padding_x = 10
-padding_y = 6
+padding_x = 16
+padding_y = 10
+line_height = 1.12
+prompt = "ghostty"
 ```
+
+Ghostty-compatible keys also work: `background-opacity`, `window-padding-x`, `adjust-cell-height`.
 
 ## Plugins (Phase 6)
 
@@ -223,7 +243,7 @@ selection = "#243044"
 
 Press **R** to reload. Example chords from the `keys` pack: `Ctrl+Shift+G` (git status), `Ctrl+Alt+L` (ls), `Ctrl+Alt+K` (clear).
 
-Full guide: [`assets/plugins/README.md`](assets/plugins/README.md). Appearance (**S**) still covers built-in themes, text color, cursor, and shell.
+Full guide: [`assets/plugins/README.md`](assets/plugins/README.md). Appearance (**S**) covers look, opacity, padding, prompt, themes, text color, cursor, and shell.
 
 ## Command palette (Phase 5)
 

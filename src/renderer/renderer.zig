@@ -41,6 +41,10 @@ pub const Renderer = struct {
     allocator: std.mem.Allocator,
     theme: theme_mod.Theme = theme_mod.orbit_dark,
     opacity: f32 = 1.0,
+    /// Extra vertical cell space (Ghostty adjust-cell-height). 1.0 = font metrics.
+    line_height: f32 = 1.0,
+    /// Unscaled glyph height from the atlas (glyphs stay crisp when line_height > 1).
+    glyph_h: f32 = 16,
     cursor_style: CursorStyle = .block,
     cursor_blink: bool = true,
     /// Frame counter for cursor blink (incremented each draw).
@@ -130,7 +134,8 @@ pub const Renderer = struct {
         if (self.atlas) |*old| old.deinit();
         self.atlas = new_atlas;
         self.cell_w = @floatFromInt(new_atlas.cell_w);
-        self.cell_h = @floatFromInt(new_atlas.cell_h);
+        self.glyph_h = @floatFromInt(new_atlas.cell_h);
+        self.cell_h = self.glyph_h * @max(1.0, self.line_height);
         self.uploadAtlas();
     }
 
@@ -181,6 +186,13 @@ pub const Renderer = struct {
     pub fn setFontFace(self: *Renderer, face_id: []const u8) void {
         self.font_face = face_id;
         self.rebuildAtlas() catch {};
+    }
+
+    pub fn setLineHeight(self: *Renderer, height: f32) void {
+        self.line_height = @min(1.5, @max(1.0, height));
+        if (self.glyph_h > 0) {
+            self.cell_h = self.glyph_h * self.line_height;
+        }
     }
 
     pub fn bumpFontSize(self: *Renderer, delta: f32) void {
@@ -379,7 +391,7 @@ pub const Renderer = struct {
         const fh: f32 = @floatFromInt(self.fb_h);
         const glyph_count: f32 = @floatFromInt(atlas_mod.glyph_count);
         const cw = self.cell_w * s;
-        const ch = self.cell_h * s;
+        const ch = @max(1.0, self.glyph_h) * s;
         var i: usize = 0;
         while (i < text.len) : (i += 1) {
             const cp: u21 = text[i];
@@ -567,8 +579,9 @@ pub const Renderer = struct {
         color: Color,
     ) !void {
         const x0 = ox + @as(f32, @floatFromInt(col)) * cell_w;
-        const y0 = oy + @as(f32, @floatFromInt(row)) * cell_h;
-        try self.appendGlyphPx(fw, fh, x0, y0, cell_w, cell_h, uv_left, uv_right, color);
+        const extra = cell_h - self.glyph_h;
+        const y0 = oy + @as(f32, @floatFromInt(row)) * cell_h + extra * 0.5;
+        try self.appendGlyphPx(fw, fh, x0, y0, cell_w, self.glyph_h, uv_left, uv_right, color);
     }
 
     fn appendGlyphPx(

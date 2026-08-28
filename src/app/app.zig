@@ -32,6 +32,28 @@ const dev_root = @import("../dev_root.zig");
 
 const UiMode = enum { home, normal, search, viewer, ws_picker, ws_save, palette, ssh_prompt, settings, plugins };
 
+const SettingsRow = enum(u8) {
+    theme,
+    text,
+    font,
+    face,
+    look,
+    opacity,
+    padding,
+    spacing,
+    cursor,
+    blink,
+    prompt,
+    shell,
+
+    pub const count = std.meta.fields(SettingsRow).len;
+
+    fn fromIndex(i: usize) SettingsRow {
+        const n = @min(i, count - 1);
+        return @enumFromInt(@as(u8, @intCast(n)));
+    }
+};
+
 const StatusKind = enum { info, success, err };
 
 /// Right-click terminal menu (Copy / Paste).
@@ -80,7 +102,7 @@ pub const App = struct {
     mouse_y: f64 = 0,
     /// Right-click Copy/Paste menu over the terminal (null = closed).
     context_menu: ?ContextMenu = null,
-    /// Settings row: 0 theme, 1 text, 2 font, 3 face, 4 cursor, 5 blink, 6 shell
+    /// Settings row: theme, text, font, face, look, opacity, padding, spacing, cursor, blink, prompt, shell
     settings_row: usize = 0,
     /// Selected plugin index in the Plugins panel.
     plugin_row: usize = 0,
@@ -111,6 +133,7 @@ pub const App = struct {
         renderer.setContentScale(window.contentScale());
         renderer.setFontFace(config.font_face);
         renderer.setFontSize(config.font_size);
+        renderer.setLineHeight(config.line_height);
         renderer.cursor_style = config.cursor_style;
         renderer.cursor_blink = config.cursor_blink;
 
@@ -1029,11 +1052,15 @@ pub const App = struct {
         const accent_h = @max(2, @divTrunc(ch, 10));
 
         const w = ui_scale.panelWidth(fb_w, cw, 48, @as(i32, @intFromFloat(@round(540.0 * ui))));
-        const rows_n: i32 = 7;
-        const list_h = rows_n * row_h;
-        const h = pad_y + title_h + subtitle_h + gap + list_h + gap + footer_h;
+        const header_h = pad_y + title_h + subtitle_h + gap;
+        const avail = @max(row_h, fb_h - header_h - footer_h - ch * 2);
+        const max_visible: usize = @max(1, @as(usize, @intCast(@divTrunc(avail, row_h))));
+        const total = SettingsRow.count;
+        const visible = @min(total, max_visible);
+        const list_h = @as(i32, @intCast(visible)) * row_h;
+        const h = header_h + list_h + gap + footer_h;
         const x = @divTrunc(fb_w - w, 2);
-        const y = @max(ch * 2, @divTrunc(fb_h - h, 2));
+        const y = @max(ch, @divTrunc(fb_h - h, 2));
 
         const panel = chrome.panel;
         const fg = chrome.fg;
@@ -1049,27 +1076,49 @@ pub const App = struct {
         var cy = y + pad_y;
         try self.renderer.drawTextScaled(x + pad_x, cy, "Appearance", fg, title_s);
         cy += title_h;
-        try self.renderer.drawTextScaled(x + pad_x, cy, "Theme, text, font, face, cursor, and shell", muted, ui);
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Ghostty-style look, prompt, and shell", muted, ui);
         cy += subtitle_h + gap;
 
         try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
 
         var size_buf: [16]u8 = undefined;
         const size_str = std.fmt.bufPrint(&size_buf, "{d:.0}pt", .{self.renderer.font_size}) catch "14pt";
+        var opacity_buf: [16]u8 = undefined;
+        const opacity_str = std.fmt.bufPrint(&opacity_buf, "{d:.0}%", .{self.config.opacity * 100.0}) catch "100%";
+        var pad_buf: [24]u8 = undefined;
+        const pad_str = std.fmt.bufPrint(&pad_buf, "{d}×{d}", .{
+            self.config.padding_x,
+            self.config.padding_y,
+        }) catch "10×6";
         const rows = [_]struct { label: []const u8, value: []const u8 }{
             .{ .label = "Theme", .value = self.config.theme_name },
             .{ .label = "Text", .value = self.config.fgDisplay() },
             .{ .label = "Font", .value = size_str },
             .{ .label = "Face", .value = self.config.fontFaceDisplay() },
+            .{ .label = "Look", .value = self.config.look.name() },
+            .{ .label = "Opacity", .value = opacity_str },
+            .{ .label = "Padding", .value = pad_str },
+            .{ .label = "Spacing", .value = self.config.lineHeightDisplay() },
             .{ .label = "Cursor", .value = self.config.cursor_style.name() },
             .{ .label = "Blink", .value = if (self.config.cursor_blink) "on" else "off" },
+            .{ .label = "Prompt", .value = self.config.prompt.name() },
             .{ .label = "Shell", .value = self.config.shellDisplay() },
         };
 
+        if (self.settings_row >= rows.len) self.settings_row = rows.len - 1;
+        var start: usize = 0;
+        if (self.settings_row >= visible) {
+            start = self.settings_row + 1 - visible;
+        }
+
         var value_buf: [96]u8 = undefined;
         const value_col_w = @divTrunc(w * 11, 20);
-        for (rows, 0..) |row, i| {
-            const ry = cy + @as(i32, @intCast(i)) * row_h;
+        const list_top = cy;
+        var shown: usize = 0;
+        while (shown < visible) : (shown += 1) {
+            const i = start + shown;
+            const row = rows[i];
+            const ry = list_top + @as(i32, @intCast(shown)) * row_h;
             const text_y = ry + @divTrunc(row_h - ch, 2);
             const selected = i == self.settings_row;
 
@@ -1090,19 +1139,17 @@ pub const App = struct {
             try self.renderer.drawTextScaled(vx, text_y, value_text[0..value_len], if (selected) accent else muted, ui);
         }
 
-        cy += list_h + gap;
+        cy = y + h - footer_h;
         try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
 
+        const more = if (start > 0 or start + visible < rows.len) "  (scroll)" else "";
         var info: [96]u8 = undefined;
-        const pad_line = std.fmt.bufPrint(&info, "Applies to terminal + UI    padding  {d}x{d}", .{
-            self.config.padding_x,
-            self.config.padding_y,
-        }) catch "";
-        try self.renderer.drawTextScaled(x + pad_x, cy, pad_line, muted, ui);
+        const hint = std.fmt.bufPrint(&info, "Look sets padding + spacing + opacity{s}", .{more}) catch "Look sets padding + spacing + opacity";
+        try self.renderer.drawTextScaled(x + pad_x, cy, hint, muted, ui);
         cy += ch + @max(6, @divTrunc(ch, 4));
         try self.renderer.drawTextScaled(x + pad_x, cy, "Up/Down select    Left/Right change    S save", dim, ui);
         cy += ch + @max(6, @divTrunc(ch, 4));
-        try self.renderer.drawTextScaled(x + pad_x, cy, "Esc close    Ctrl+=/-/0 font size", dim, ui);
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Prompt applies to new tabs    Esc close", dim, ui);
     }
 
     fn drawPlugins(self: *App) !void {
@@ -1859,6 +1906,8 @@ pub const App = struct {
             .theme_dracula => self.applyTheme("dracula"),
             .theme_gruvbox => self.applyTheme("gruvbox-dark"),
             .theme_solarized => self.applyTheme("solarized-dark"),
+            .theme_catppuccin => self.applyTheme("catppuccin-mocha"),
+            .theme_tokyo_night => self.applyTheme("tokyo-night"),
             .cursor_block => self.setCursorStyle(.block),
             .cursor_underline => self.setCursorStyle(.underline),
             .cursor_bar => self.setCursorStyle(.bar),
@@ -1873,13 +1922,13 @@ pub const App = struct {
             .go_home => self.goHome(),
             .reload_config => {
                 self.config.reload(self.allocator, self.io);
-                self.renderer.opacity = self.config.opacity;
                 self.renderer.setContentScale(self.window.contentScale());
                 self.renderer.setFontSize(self.config.font_size);
+                self.renderer.setFontFace(self.config.font_face);
                 self.renderer.cursor_style = self.config.cursor_style;
                 self.renderer.cursor_blink = self.config.cursor_blink;
+                self.applyLookVisuals();
                 self.applyTheme(self.config.theme_name);
-                self.resizeAllSessions();
                 self.setStatus("config reloaded");
             },
             .reload_plugins => {
@@ -2347,7 +2396,7 @@ pub const App = struct {
                 if (self.settings_row > 0) self.settings_row -= 1;
             },
             c.GLFW_KEY_DOWN => {
-                if (self.settings_row + 1 < 7) self.settings_row += 1;
+                if (self.settings_row + 1 < SettingsRow.count) self.settings_row += 1;
             },
             c.GLFW_KEY_LEFT => self.nudgeSettings(-1),
             c.GLFW_KEY_RIGHT, c.GLFW_KEY_ENTER => self.nudgeSettings(1),
@@ -2357,12 +2406,12 @@ pub const App = struct {
     }
 
     fn nudgeSettings(self: *App, delta: i32) void {
-        switch (self.settings_row) {
-            0 => {
+        switch (SettingsRow.fromIndex(self.settings_row)) {
+            .theme => {
                 const next = theme_mod.nextName(self.config.theme_name, delta);
                 self.applyTheme(next);
             },
-            1 => {
+            .text => {
                 self.config.cycleFgPreset(self.allocator, delta) catch {
                     self.setStatus("text color failed");
                     return;
@@ -2372,10 +2421,10 @@ pub const App = struct {
                 const msg = std.fmt.bufPrint(&buf, "text {s}", .{self.config.fgDisplay()}) catch "text color";
                 self.setStatus(msg);
             },
-            2 => {
+            .font => {
                 self.adjustFont(if (delta >= 0) 1.0 else -1.0);
             },
-            3 => {
+            .face => {
                 self.config.cycleFontFace(self.allocator, delta) catch {
                     self.setStatus("font face failed");
                     return;
@@ -2386,7 +2435,38 @@ pub const App = struct {
                 const msg = std.fmt.bufPrint(&buf, "face {s}", .{self.config.fontFaceDisplay()}) catch "font face";
                 self.setStatus(msg);
             },
-            4 => {
+            .look => {
+                self.config.cycleLook(delta);
+                self.applyLookVisuals();
+                var buf: [80]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "look {s}", .{self.config.look.name()}) catch "look updated";
+                self.setStatus(msg);
+            },
+            .opacity => {
+                self.config.cycleOpacity(delta);
+                self.applyLookVisuals();
+                var buf: [48]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "opacity {d:.0}%", .{self.config.opacity * 100.0}) catch "opacity";
+                self.setStatus(msg);
+            },
+            .padding => {
+                self.config.cyclePadding(delta);
+                self.resizeAllSessions();
+                var buf: [48]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "padding {d}x{d}", .{
+                    self.config.padding_x,
+                    self.config.padding_y,
+                }) catch "padding";
+                self.setStatus(msg);
+            },
+            .spacing => {
+                self.config.cycleLineHeight(delta);
+                self.applyLookVisuals();
+                var buf: [64]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "spacing {s}", .{self.config.lineHeightDisplay()}) catch "spacing";
+                self.setStatus(msg);
+            },
+            .cursor => {
                 self.config.cursor_style = if (delta >= 0)
                     self.config.cursor_style.next()
                 else
@@ -2394,8 +2474,14 @@ pub const App = struct {
                 self.renderer.cursor_style = self.config.cursor_style;
                 self.setStatus("cursor style");
             },
-            5 => self.toggleCursorBlink(),
-            6 => {
+            .blink => self.toggleCursorBlink(),
+            .prompt => {
+                self.config.cyclePrompt(delta);
+                var buf: [80]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "prompt {s} (new tabs)", .{self.config.prompt.name()}) catch "prompt updated";
+                self.setStatus(msg);
+            },
+            .shell => {
                 self.config.cycleShell(self.allocator, delta) catch {
                     self.setStatus("shell change failed");
                     return;
@@ -2404,8 +2490,14 @@ pub const App = struct {
                 const msg = std.fmt.bufPrint(&buf, "shell {s} (new tabs)", .{self.config.shellDisplay()}) catch "shell updated";
                 self.setStatus(msg);
             },
-            else => {},
         }
+    }
+
+    fn applyLookVisuals(self: *App) void {
+        self.renderer.opacity = self.config.opacity;
+        self.renderer.setLineHeight(self.config.line_height);
+        self.window.setOpacity(self.config.opacity);
+        self.resizeAllSessions();
     }
 
     fn setCursorStyle(self: *App, style: CursorStyle) void {
@@ -3341,12 +3433,17 @@ pub const App = struct {
             }
         }
 
+        var prompt_buf: [80]u8 = undefined;
+        var env_refs: [3][]const u8 = undefined;
+        const env = self.sessionLaunchEnv(&prompt_buf, &env_refs);
+
         const session = try Session.createWith(self.allocator, .{
             .cols = cols,
             .rows = rows,
             .title = title,
             .cwd = cwd,
             .shell = launch,
+            .env = env,
             .command = command,
             .wait_after_command = wait_after,
         });
@@ -3366,17 +3463,28 @@ pub const App = struct {
             Rect{ .x = 0, .y = 0, .w = bounds.w, .h = @divTrunc(bounds.h, 2) };
         const cols, const rows = self.gridSize(half.w, half.h);
         const theme = self.config.theme();
+        var prompt_buf: [80]u8 = undefined;
+        var env_refs: [3][]const u8 = undefined;
+        const env = self.sessionLaunchEnv(&prompt_buf, &env_refs);
         const session = try Session.createWith(self.allocator, .{
             .cols = cols,
             .rows = rows,
             .title = "Split",
             .cwd = self.sessionCwd(),
             .shell = self.config.resolveLaunchShell(),
+            .env = env,
         });
         session.setTheme(theme.foreground, theme.background);
         session.setScrollback(self.config.scrollback);
         try tab.layout.splitFocused(dir, session);
         self.resizeAllSessions();
+    }
+
+    fn sessionLaunchEnv(self: *const App, prompt_buf: *[80]u8, refs: *[3][]const u8) []const []const u8 {
+        refs[0] = "ORBIT_TERMINAL=1";
+        refs[1] = "TERM_PROGRAM=Orbit";
+        refs[2] = std.fmt.bufPrint(prompt_buf, "ORBIT_PROMPT={s}", .{self.config.prompt.name()}) catch "ORBIT_PROMPT=default";
+        return refs[0..3];
     }
 
     fn copySelection(self: *App) void {

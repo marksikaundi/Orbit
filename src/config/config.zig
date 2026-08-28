@@ -3,9 +3,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const theme_mod = @import("theme.zig");
+const look_mod = @import("look.zig");
 const faces = @import("../font/faces.zig");
 const paths = @import("../platform/paths.zig");
 const shell_guard = @import("../platform/shell.zig");
+
+pub const Look = look_mod.Look;
+pub const PromptStyle = look_mod.PromptStyle;
 
 pub const CursorStyle = enum {
     block,
@@ -75,6 +79,12 @@ pub const Config = struct {
     /// Interior padding in logical pixels (Ghostty window-padding).
     padding_x: i32 = 10,
     padding_y: i32 = 6,
+    /// Extra line spacing as a multiplier (Ghostty adjust-cell-height). 1.0 = tight.
+    line_height: f32 = 1.0,
+    /// Named Ghostty-style look (padding + spacing + opacity).
+    look: Look = .compact,
+    /// Prompt overlay for new tabs (`default` keeps the user's shell rc).
+    prompt: PromptStyle = .default,
     /// Shell executable; null/empty means $SHELL (or /bin/zsh).
     shell: ?[]const u8 = null,
     cursor_style: CursorStyle = .block,
@@ -180,6 +190,43 @@ pub const Config = struct {
         self.shell = owned;
     }
 
+    pub fn applyLook(self: *Config, look: Look) void {
+        self.look = look;
+        self.padding_x = look.paddingX();
+        self.padding_y = look.paddingY();
+        self.line_height = look.lineHeight();
+        self.opacity = look.opacity();
+    }
+
+    pub fn cycleLook(self: *Config, delta: i32) void {
+        self.applyLook(if (delta >= 0) self.look.next() else self.look.prev());
+    }
+
+    pub fn cycleOpacity(self: *Config, delta: i32) void {
+        self.opacity = look_mod.cycleOpacity(self.opacity, delta);
+        self.opacity = @min(1.0, @max(0.15, self.opacity));
+    }
+
+    pub fn cyclePadding(self: *Config, delta: i32) void {
+        self.padding_x = look_mod.cyclePadding(self.padding_x, delta);
+        // Keep a Ghostty-like ratio: vertical padding a bit tighter than horizontal.
+        self.padding_y = @max(2, @divTrunc(self.padding_x * 5, 8));
+        self.padding_x = @max(0, @min(48, self.padding_x));
+        self.padding_y = @max(0, @min(48, self.padding_y));
+    }
+
+    pub fn cycleLineHeight(self: *Config, delta: i32) void {
+        self.line_height = look_mod.cycleLineHeight(self.line_height, delta);
+    }
+
+    pub fn cyclePrompt(self: *Config, delta: i32) void {
+        self.prompt = if (delta >= 0) self.prompt.next() else self.prompt.prev();
+    }
+
+    pub fn lineHeightDisplay(self: *const Config) []const u8 {
+        return look_mod.lineHeightLabel(self.line_height);
+    }
+
     pub fn cycleShell(self: *Config, allocator: std.mem.Allocator, delta: i32) !void {
         // Build list of available choices (empty = $SHELL, plus existing binaries).
         var available: [shell_choices.len][]const u8 = undefined;
@@ -251,6 +298,7 @@ pub const Config = struct {
         );
         try appendFmt(&body, allocator, "width = {d}\n", .{self.window_width});
         try appendFmt(&body, allocator, "height = {d}\n", .{self.window_height});
+        try appendFmt(&body, allocator, "look = \"{s}\"\n", .{self.look.name()});
         try appendFmt(&body, allocator, "opacity = {d:.2}\n", .{self.opacity});
         try body.appendSlice(allocator, "\n[theme]\n");
         try appendFmt(&body, allocator, "name = \"{s}\"\n", .{self.theme_name});
@@ -265,6 +313,8 @@ pub const Config = struct {
         try appendFmt(&body, allocator, "font_face = \"{s}\"\n", .{self.font_face});
         try appendFmt(&body, allocator, "padding_x = {d}\n", .{self.padding_x});
         try appendFmt(&body, allocator, "padding_y = {d}\n", .{self.padding_y});
+        try appendFmt(&body, allocator, "line_height = {d:.2}\n", .{self.line_height});
+        try appendFmt(&body, allocator, "prompt = \"{s}\"\n", .{self.prompt.name()});
         try appendFmt(&body, allocator, "cursor_style = \"{s}\"\n", .{self.cursor_style.name()});
         try appendFmt(&body, allocator, "cursor_blink = {s}\n", .{if (self.cursor_blink) "true" else "false"});
         if (self.shellPath()) |sh| {
@@ -313,7 +363,10 @@ pub const Config = struct {
                 .window => {
                     if (std.mem.eql(u8, key, "width")) cfg.window_width = parseI32(val) orelse cfg.window_width;
                     if (std.mem.eql(u8, key, "height")) cfg.window_height = parseI32(val) orelse cfg.window_height;
-                    if (std.mem.eql(u8, key, "opacity")) cfg.opacity = parseF32(val) orelse cfg.opacity;
+                    if (std.mem.eql(u8, key, "look")) cfg.applyLook(Look.fromString(val));
+                    if (std.mem.eql(u8, key, "opacity") or std.mem.eql(u8, key, "background-opacity") or std.mem.eql(u8, key, "background_opacity")) {
+                        cfg.opacity = parseF32(val) orelse cfg.opacity;
+                    }
                 },
                 .theme => {
                     if (std.mem.eql(u8, key, "name")) {
@@ -349,13 +402,20 @@ pub const Config = struct {
                         const scale = parseF32(val) orelse 2.0;
                         cfg.font_size = @min(28.0, @max(9.0, 14.0 * scale / 2.0));
                     }
-                    if (std.mem.eql(u8, key, "padding_x")) {
+                    if (std.mem.eql(u8, key, "look")) cfg.applyLook(Look.fromString(val));
+                    if (std.mem.eql(u8, key, "padding_x") or std.mem.eql(u8, key, "window-padding-x") or std.mem.eql(u8, key, "window_padding_x")) {
                         cfg.padding_x = parseI32(val) orelse cfg.padding_x;
                         cfg.padding_x = @max(0, @min(48, cfg.padding_x));
                     }
-                    if (std.mem.eql(u8, key, "padding_y")) {
+                    if (std.mem.eql(u8, key, "padding_y") or std.mem.eql(u8, key, "window-padding-y") or std.mem.eql(u8, key, "window_padding_y")) {
                         cfg.padding_y = parseI32(val) orelse cfg.padding_y;
                         cfg.padding_y = @max(0, @min(48, cfg.padding_y));
+                    }
+                    if (std.mem.eql(u8, key, "line_height") or std.mem.eql(u8, key, "adjust-cell-height") or std.mem.eql(u8, key, "adjust_cell_height")) {
+                        cfg.line_height = look_mod.parseLineHeight(val) orelse cfg.line_height;
+                    }
+                    if (std.mem.eql(u8, key, "prompt") or std.mem.eql(u8, key, "prompt_style")) {
+                        cfg.prompt = PromptStyle.fromString(val);
                     }
                     if (std.mem.eql(u8, key, "shell")) {
                         if (!shell_guard.isAllowed(val)) continue;
@@ -375,6 +435,7 @@ pub const Config = struct {
             }
         }
         cfg.opacity = @min(1.0, @max(0.15, cfg.opacity));
+        cfg.line_height = @min(1.5, @max(1.0, cfg.line_height));
 
         // Drop configured shell if disallowed or missing (e.g. fish not installed).
         if (cfg.shell) |s| {

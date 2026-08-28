@@ -139,11 +139,11 @@ pub const help_rows = [_]HelpRow{
     .{ .spacer = {} },
 
     .{ .heading = "Appearance" },
-    .{ .item = .{ .keys = "S / Settings", .desc = "Theme, text, font size, face, cursor, shell" } },
+    .{ .item = .{ .keys = "S / Settings", .desc = "Theme, look, opacity, padding, prompt, shell" } },
     .{ .item = .{ .keys = "Left/Right", .desc = "Change the selected Appearance value" } },
     .{ .item = .{ .keys = "Ctrl+=/-/0", .desc = "Font size up / down / reset (everywhere)" } },
     .{ .item = .{ .keys = "Ctrl+Shift+P", .desc = "Palette -> Theme: ... / Cursor: ..." } },
-    .{ .note = "Font + Face apply to the terminal and all Orbit UI" },
+    .{ .note = "Look: compact / comfortable / airy / glass (Ghostty-style padding + opacity)" },
     .{ .spacer = {} },
 
     .{ .heading = "Config & plugins" },

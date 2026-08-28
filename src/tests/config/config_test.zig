@@ -146,6 +146,35 @@ test "parse theme foreground preset" {
     try std.testing.expectEqual(@as(u8, 160), t.foreground.r);
 }
 
+test "parse look applies padding opacity and prompt" {
+    var cfg: Config = .{};
+    defer cfg.deinit(std.testing.allocator);
+    Config.parseInto(&cfg, std.testing.allocator,
+        \\[window]
+        \\look = "glass"
+        \\[terminal]
+        \\prompt = "ghostty"
+        \\line_height = "20%"
+    );
+    try std.testing.expectEqual(.glass, cfg.look);
+    try std.testing.expectEqual(@as(i32, 16), cfg.padding_x);
+    try std.testing.expectEqual(@as(f32, 0.86), cfg.opacity);
+    try std.testing.expectEqual(.ghostty, cfg.prompt);
+    try std.testing.expectEqual(@as(f32, 1.20), cfg.line_height);
+}
+
+test "explicit opacity wins over look preset" {
+    var cfg: Config = .{};
+    defer cfg.deinit(std.testing.allocator);
+    Config.parseInto(&cfg, std.testing.allocator,
+        \\[window]
+        \\look = "glass"
+        \\opacity = 0.95
+    );
+    try std.testing.expectEqual(.glass, cfg.look);
+    try std.testing.expectEqual(@as(f32, 0.95), cfg.opacity);
+}
+
 test "comments and blank lines ignored" {
     var cfg: Config = .{};
     defer cfg.deinit(std.testing.allocator);

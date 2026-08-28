@@ -71,6 +71,8 @@ pub const Pty = struct {
             // often inherit nothing / "dumb", which disables syntax and alt-screen.
             _ = c.setenv("TERM", "xterm-256color", 1);
             _ = c.setenv("COLORTERM", "truecolor", 1);
+            _ = c.setenv("TERM_PROGRAM", "Orbit", 1);
+            _ = c.setenv("ORBIT_TERMINAL", "1", 1);
 
             execChild(opts);
             c._exit(127);

@@ -60,7 +60,7 @@ cursor = "#7ec8ff"
 selection = "#243044"
 ```
 
-Pick the theme from Appearance (**S**) or the palette. For text color alone, Appearance also has **Text** presets saved in `config.toml`.
+Pick the theme from Appearance (**S**) or the palette. Appearance also has **Look** (compact / comfortable / airy / glass), opacity, padding, prompt style, and **Text** color presets.
 
 ## Command actions
 

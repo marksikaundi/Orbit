@@ -23,12 +23,14 @@ test "byName new themes" {
     try std.testing.expectEqualStrings("dracula", theme.byName("dracula").name);
     try std.testing.expectEqualStrings("gruvbox-dark", theme.byName("gruvbox").name);
     try std.testing.expectEqualStrings("solarized-dark", theme.byName("solarized-dark").name);
+    try std.testing.expectEqualStrings("catppuccin-mocha", theme.byName("catppuccin").name);
+    try std.testing.expectEqualStrings("tokyo-night", theme.byName("tokyo").name);
 }
 
 test "nextName cycles builtins" {
     const a = theme.nextName("orbit-dark", 1);
     try std.testing.expectEqualStrings("orbit-light", a);
-    const b = theme.nextName("solarized-dark", 1);
+    const b = theme.nextName("tokyo-night", 1);
     try std.testing.expectEqualStrings("orbit-dark", b);
 }
 

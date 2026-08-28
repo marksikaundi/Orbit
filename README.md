@@ -183,12 +183,21 @@ Day-to-day usage: [how-to-use.md](how-to-use.md).
 Orbit watches config changes and reloads automatically — no restart required.
 
 ```toml
-font = "JetBrains Mono"
-font_size = 14
-theme = "Orbit Dark"
+[window]
+look = "comfortable"
 opacity = 0.95
-cursor = "beam"
-padding = 10
+
+[theme]
+name = "catppuccin-mocha"
+
+[terminal]
+font_face = "jetbrains"
+font_size = 14
+padding_x = 16
+padding_y = 10
+line_height = 1.12
+prompt = "ghostty"
+cursor_style = "bar"
 ```
 
 Workspaces live in `~/.config/orbit/workspaces/<name>.toml`.

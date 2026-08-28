@@ -69,3 +69,46 @@ zig() {
   # Run from the Orbit tree so relative paths in build.zig resolve.
   (cd "$root" && command zig build "$@")
 }
+
+# Ghostty-style prompt — only inside Orbit, and only when Appearance → Prompt
+# is not "default". Sourced last from ~/.zshrc / ~/.bashrc so it wins.
+if [ -n "${ORBIT_TERMINAL:-}" ] && [ -n "${ORBIT_PROMPT:-}" ] && [ "${ORBIT_PROMPT}" != "default" ]; then
+  _orbit_apply_prompt() {
+    case "${ORBIT_PROMPT}" in
+      starship)
+        if command -v starship >/dev/null 2>&1; then
+          if [ -n "${ZSH_VERSION:-}" ]; then
+            eval "$(starship init zsh)"
+            return
+          fi
+          if [ -n "${BASH_VERSION:-}" ]; then
+            eval "$(starship init bash)"
+            return
+          fi
+        fi
+        ORBIT_PROMPT=ghostty
+        ;;
+    esac
+    case "${ORBIT_PROMPT}" in
+      minimal)
+        if [ -n "${ZSH_VERSION:-}" ]; then
+          PROMPT='%F{8}%~%f %F{4}›%f '
+          unset RPROMPT 2>/dev/null || true
+        elif [ -n "${BASH_VERSION:-}" ]; then
+          PS1='\[\e[90m\]\w\[\e[0m\] \[\e[34m\]›\[\e[0m\] '
+        fi
+        ;;
+      ghostty|pretty|nice|*)
+        if [ -n "${ZSH_VERSION:-}" ]; then
+          PROMPT='%F{8}%~%f %(?.%F{6}.%F{1})❯%f '
+          RPROMPT='%F{8}%n%f'
+        elif [ -n "${BASH_VERSION:-}" ]; then
+          PS1='\[\e[90m\]\w\[\e[0m\] \[\e[36m\]❯\[\e[0m\] '
+        fi
+        ;;
+    esac
+  }
+  _orbit_apply_prompt
+  unset -f _orbit_apply_prompt 2>/dev/null || true
+fi
+

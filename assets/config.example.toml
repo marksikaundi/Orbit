@@ -5,10 +5,13 @@
 [window]
 width = 980
 height = 620
+# compact | comfortable | airy | glass  (Ghostty-style padding + spacing + opacity)
+look = "comfortable"
 opacity = 1.0
 
 [theme]
 # orbit-dark | orbit-light | nord | dracula | gruvbox-dark | solarized-dark
+# catppuccin-mocha | tokyo-night
 name = "orbit-dark"
 # Text color override (optional). theme | soft-white | bright | cool-gray | warm-gray
 # mint | green | amber | sky | lavender | rose
@@ -18,9 +21,14 @@ foreground = "theme"
 scrollback = 2000
 # Point size (Ghostty-style). Retina scale is applied automatically.
 font_size = 14
-# Interior padding in logical pixels
-padding_x = 10
-padding_y = 6
+# Interior padding in logical pixels (Ghostty window-padding-x / window-padding-y)
+padding_x = 16
+padding_y = 10
+# Extra line spacing (Ghostty adjust-cell-height). 1.0 = tight, 1.12 = comfortable
+line_height = 1.12
+# Prompt overlay for new tabs: default | ghostty | minimal | starship
+# ghostty = dim path + colored ❯   (requires `zig build setup` so orbit.sh is sourced)
+prompt = "ghostty"
 # Shell for new tabs (omit for platform default).
 # Unix: "/bin/zsh" "/bin/bash" "/bin/fish"
 # Windows: "powershell.exe" "pwsh.exe" "cmd.exe"

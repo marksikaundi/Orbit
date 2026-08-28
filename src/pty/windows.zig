@@ -449,6 +449,8 @@ fn buildChildEnvironmentBlock(allocator: std.mem.Allocator, extra: []const []con
 
     try upsertEnv(&entries, allocator, "TERM=xterm-256color");
     try upsertEnv(&entries, allocator, "COLORTERM=truecolor");
+    try upsertEnv(&entries, allocator, "TERM_PROGRAM=Orbit");
+    try upsertEnv(&entries, allocator, "ORBIT_TERMINAL=1");
 
     // Serialize to double-NUL-terminated UTF-16LE block.
     var out: std.ArrayList(u16) = .empty;
