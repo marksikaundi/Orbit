@@ -1,6 +1,6 @@
 {
-  "name": "orbit-terminal",
-  "displayName": "Orbit Terminal",
+  "name": "orbit",
+  "displayName": "Orbit",
   "description": "Open folders in Orbit — Cursor, VS Code, and other VS Code-compatible editors.",
   "version": "0.1.0",
   "publisher": "orbit",
