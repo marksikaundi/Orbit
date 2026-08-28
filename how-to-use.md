@@ -238,15 +238,17 @@ Full guide: [`assets/plugins/README.md`](assets/plugins/README.md). Appearance (
 | Type | Live filter |
 | `Tab` | Switch **Terminal** ↔ **Files** |
 | `↑` `↓` | Move between matches |
-| `Enter` | Terminal: jump to hit · Files: open a syntax-highlighted preview |
+| `Enter` | Terminal: jump to hit · Files: open the file to edit |
 | `Shift+Enter` | Files: insert the path into the shell |
 | `Esc` | Close |
 
 - **Terminal** — searches visible screen + scrollback (case-insensitive)
 - **Files** — searches file names under the opened folder / current cwd
-- **Preview** — colors keywords, strings, comments, and so on by language (JavaScript, Python, Zig, Rust, Go, HTML, JSON, …). `↑` `↓` scroll, `I` inserts the path, `Esc` closes.
+- **Editor** — colors keywords, strings, comments, and so on by language (Java, JavaScript, Python, Zig, Rust, Go, HTML, JSON, …). Type to edit. While you type an identifier, a popup lists matching keywords, common APIs, and names already in the file, with a one-line meaning. **Tab** or **Enter** inserts the selected item, **Ctrl+Space** opens the list, **⌘/Ctrl+S** saves, **Esc** closes (press twice if unsaved).
 
-Palette → **Open File** jumps straight to Files search. Opening a file path with Orbit (`orbit app.js`) also shows the preview.
+This is not a full language server (no project-wide Java IntelliSense). Completions come from Orbit’s catalogs plus the current file.
+
+Palette → **Open File** jumps straight to Files search. Opening a file path with Orbit (`orbit app.js`) also opens the editor.
 
 In the shell, `vi` / `vim` / `less` use the alternate screen: quitting (`:q`) returns you to the prompt without leftover tildes. Orbit sets `TERM=xterm-256color` so those editors can color syntax (enable it in vim with `syntax on`, or use `vim` rather than `vi`).
 

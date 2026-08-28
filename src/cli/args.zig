@@ -152,7 +152,7 @@ pub fn printHelp() void {
         \\  orbit ide-setup [--editor cursor|code|codium|windsurf|all]
         \\
         \\Launch:
-        \\  path                         Folder (shell) or file (preview + shell in its folder)
+        \\  path                         Folder (shell) or file (editor + shell in its folder)
         \\  -d, --working-directory DIR  Working directory (Alacritty / Ghostty / VS Code)
         \\      --workdir DIR            Same (Konsole)
         \\      --directory DIR          Same (Kitty)

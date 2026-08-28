@@ -77,7 +77,7 @@ Everything revolves around the developer’s workflow — Backend, Frontend, Pro
 - POSIX PTY (Linux / macOS) and ConPTY (Windows)
 - Full ANSI parsing — CSI, OSC, SGR, DEC, DCS, UTF-8
 - Colors, cursor, scrolling, selection, clipboard
-- **Syntax-highlighted file preview** (JS, Python, Zig, and more)
+- **Syntax-highlighted file editor** (JS, Python, Java, Zig, and more) with autocomplete and short docs
 - Tabs, split panes, search, themes, transparency
 - TOML config with **live reload** (no restart)
 

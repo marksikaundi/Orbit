@@ -833,7 +833,7 @@ pub const App = struct {
 
         var foot: [96]u8 = undefined;
         const foot_line = if (hit_n > 0)
-            (std.fmt.bufPrint(&foot, "{d} matches   Enter preview   Shift+Enter insert   Esc", .{hit_n}) catch "Enter preview   Esc close")
+            (std.fmt.bufPrint(&foot, "{d} matches   Enter open   Shift+Enter insert   Esc", .{hit_n}) catch "Enter open   Esc close")
         else
             "Up/Down move   Tab mode   Esc close";
         try self.renderer.drawText(x + pad_x, y + h - footer_h + @divTrunc(pad_y, 2), foot_line, dim);
@@ -1362,7 +1362,15 @@ pub const App = struct {
                 self.refreshSearchResults();
                 return;
             },
-            .viewer => return,
+            .viewer => {
+                if (self.viewer.suppress_next_char) {
+                    self.viewer.suppress_next_char = false;
+                    return;
+                }
+                self.viewer.insertChar(self.allocator, codepoint);
+                self.viewer.ensureCursorVisible(self.viewerVisibleLines());
+                return;
+            },
             .palette => {
                 self.palette.inputChar(codepoint);
                 return;
@@ -1458,7 +1466,7 @@ pub const App = struct {
             return;
         }
         if (self.ui == .viewer) {
-            self.handleViewerKey(key);
+            self.handleViewerKey(key, ctrl, shift, super);
             return;
         }
 
@@ -2886,7 +2894,7 @@ pub const App = struct {
         var buf: [96]u8 = undefined;
         const msg = std.fmt.bufPrint(
             &buf,
-            "{s} · {s}",
+            "{s} · {s} · type to edit",
             .{ std.fs.path.basename(abs_path), viewer_mod.languageLabel(self.viewer.language) },
         ) catch "opened file";
         self.setStatus(msg);
@@ -2901,34 +2909,102 @@ pub const App = struct {
         return @intCast(@max(1, @divTrunc(body, row_h)));
     }
 
-    fn handleViewerKey(self: *App, key: c_int) void {
+    fn handleViewerKey(self: *App, key: c_int, ctrl: bool, shift: bool, super: bool) void {
         const visible = self.viewerVisibleLines();
+        const cmd = ctrl or super;
+
+        if (cmd and !shift and key == c.GLFW_KEY_S) {
+            if (self.viewer.save(self.io)) {
+                self.setStatus("saved");
+            } else {
+                self.setStatus("could not save");
+            }
+            return;
+        }
+
+        if (cmd and !shift and key == c.GLFW_KEY_SPACE) {
+            self.viewer.suppress_next_char = true;
+            self.viewer.refreshCompletion(true);
+            return;
+        }
+
+        if (self.viewer.complete_open) {
+            switch (key) {
+                c.GLFW_KEY_ESCAPE => {
+                    self.viewer.complete_open = false;
+                    return;
+                },
+                c.GLFW_KEY_UP => {
+                    self.viewer.completeMove(-1);
+                    return;
+                },
+                c.GLFW_KEY_DOWN => {
+                    self.viewer.completeMove(1);
+                    return;
+                },
+                c.GLFW_KEY_TAB, c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER => {
+                    self.viewer.suppress_next_char = true;
+                    _ = self.viewer.acceptCompletion(self.allocator);
+                    self.viewer.ensureCursorVisible(visible);
+                    return;
+                },
+                else => {},
+            }
+        }
+
         switch (key) {
-            c.GLFW_KEY_ESCAPE, c.GLFW_KEY_Q => {
-                self.viewer.close(self.allocator);
-                self.leaveOverlay();
-            },
-            c.GLFW_KEY_UP => self.viewer.scrollBy(-1, visible),
-            c.GLFW_KEY_DOWN => self.viewer.scrollBy(1, visible),
-            c.GLFW_KEY_PAGE_UP => self.viewer.scrollBy(-@as(i32, @intCast(visible)), visible),
-            c.GLFW_KEY_PAGE_DOWN => self.viewer.scrollBy(@as(i32, @intCast(visible)), visible),
-            c.GLFW_KEY_HOME => {
-                self.viewer.scroll = 0;
-            },
-            c.GLFW_KEY_END => {
-                self.viewer.scroll = std.math.maxInt(usize);
-                self.viewer.clampScroll(visible);
-            },
-            c.GLFW_KEY_I => {
-                if (self.viewer.displayName().len > 0) {
-                    if (self.focused()) |s| {
-                        s.write(self.viewer.displayName());
-                        s.write(" ");
-                    }
+            c.GLFW_KEY_ESCAPE => {
+                if (self.viewer.dirty and !self.viewer.discard_armed) {
+                    self.viewer.discard_armed = true;
+                    self.setStatus("unsaved — Esc again to discard, ⌘/Ctrl+S to save");
+                    return;
                 }
                 self.viewer.close(self.allocator);
                 self.leaveOverlay();
-                self.setStatus("inserted path");
+            },
+            c.GLFW_KEY_UP => {
+                self.viewer.moveUp();
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_DOWN => {
+                self.viewer.moveDown();
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_LEFT => {
+                self.viewer.moveLeft();
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_RIGHT => {
+                self.viewer.moveRight();
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_PAGE_UP => self.viewer.page(-@as(i32, @intCast(visible)), visible),
+            c.GLFW_KEY_PAGE_DOWN => self.viewer.page(@as(i32, @intCast(visible)), visible),
+            c.GLFW_KEY_HOME => {
+                if (cmd) self.viewer.moveFileStart() else self.viewer.moveLineStart();
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_END => {
+                if (cmd) self.viewer.moveFileEnd() else self.viewer.moveLineEnd();
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_BACKSPACE => {
+                self.viewer.backspace(self.allocator);
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_DELETE => {
+                self.viewer.deleteForward(self.allocator);
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER => {
+                self.viewer.newline(self.allocator);
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_TAB => {
+                self.viewer.suppress_next_char = true;
+                self.viewer.insertBytes(self.allocator, "    ");
+                self.viewer.refreshCompletion(false);
+                self.viewer.ensureCursorVisible(visible);
             },
             else => {},
         }
@@ -2956,7 +3032,7 @@ pub const App = struct {
         const body_h = @max(row_h, h - pad_y - header_h - footer_h);
         const visible: usize = @intCast(@max(1, @divTrunc(body_h, row_h)));
         const code_cols: usize = @intCast(@max(8, @divTrunc(w - pad_x * 2 - gutter_w, cw)));
-        self.viewer.clampScroll(visible);
+        self.viewer.ensureCursorVisible(visible);
 
         try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
         try self.renderer.drawRect(x, y, w, h, chrome.panel, 0.98);
@@ -2964,11 +3040,15 @@ pub const App = struct {
 
         const name = self.viewer.displayName();
         const lang = viewer_mod.languageLabel(self.viewer.language);
-        var title_buf: [160]u8 = undefined;
-        const title = std.fmt.bufPrint(&title_buf, "{s}  ·  {s}", .{ name, lang }) catch name;
+        const dirty_mark: []const u8 = if (self.viewer.dirty) " •" else "";
+        var title_buf: [168]u8 = undefined;
+        const title = std.fmt.bufPrint(&title_buf, "{s}{s}  ·  {s}", .{ name, dirty_mark, lang }) catch name;
         const title_shown = title[0..@min(title.len, @as(usize, @intCast(@max(8, @divTrunc(w - pad_x * 2, cw)))))];
         try self.renderer.drawText(x + pad_x, y + pad_y, title_shown, chrome.fg);
         try self.renderer.drawRect(x + pad_x, y + pad_y + header_h - 8, w - pad_x * 2, 1, chrome.rule, 0.9);
+
+        const text_x = x + pad_x + gutter_w;
+        var caret_screen_y: ?i32 = null;
 
         if (self.viewer.error_msg) |err| {
             try self.renderer.drawText(x + pad_x, body_y + 8, err, chrome.muted);
@@ -2984,14 +3064,18 @@ pub const App = struct {
                 const li = start + i;
                 const text = self.viewer.line(li);
                 const ry = body_y + @as(i32, @intCast(i)) * row_h;
+                const on_cursor = li == self.viewer.cursor_row;
+                if (on_cursor) {
+                    try self.renderer.drawRect(x + pad_x, ry - 1, w - pad_x * 2, row_h, chrome.sel_bg, 0.28);
+                    caret_screen_y = ry;
+                }
                 var num_buf: [12]u8 = undefined;
                 const num = std.fmt.bufPrint(&num_buf, "{d: >5}", .{li + 1}) catch "    0";
-                try self.renderer.drawText(x + pad_x, ry, num, chrome.dim);
+                try self.renderer.drawText(x + pad_x, ry, num, if (on_cursor) chrome.accent else chrome.dim);
 
                 const clipped = text[0..@min(text.len, code_cols)];
                 var state = self.viewer.lineState(li);
                 const n = viewer_mod.highlightLine(clipped, self.viewer.language, &state, &spans);
-                const text_x = x + pad_x + gutter_w;
                 if (n == 0) {
                     try self.renderer.drawText(text_x, ry, clipped, chrome.fg);
                 } else {
@@ -3011,15 +3095,96 @@ pub const App = struct {
                     }
                 }
             }
+
+            if (caret_screen_y) |cy| {
+                const col = @min(self.viewer.cursor_col, code_cols);
+                const cx = text_x + @as(i32, @intCast(col)) * cw;
+                try self.renderer.drawRect(cx, cy, @max(2, @divTrunc(cw, 5)), ch, chrome.accent, 0.95);
+            }
         }
 
-        var foot: [96]u8 = undefined;
+        if (self.viewer.complete_open and self.viewer.complete_n > 0) {
+            try self.drawCompletionPopup(chrome, text_x, body_y, body_h, w, pad_x, x, cw, ch, row_h, code_cols);
+        }
+
+        var foot: [128]u8 = undefined;
         const lines = self.viewer.lineCount();
-        const foot_line = if (lines > 0)
-            (std.fmt.bufPrint(&foot, "{d} lines   ↑↓ scroll   I insert path   Esc close", .{lines}) catch "Esc close")
-        else
-            "Esc close";
-        try self.renderer.drawText(x + pad_x, y + h - footer_h + 2, foot_line, chrome.dim);
+        const foot_line = std.fmt.bufPrint(
+            &foot,
+            "{d} lines   ⌘/Ctrl+S save   Ctrl+Space complete   Tab accept   Esc close",
+            .{lines},
+        ) catch "Esc close";
+        const foot_shown = foot_line[0..@min(foot_line.len, @as(usize, @intCast(@max(8, @divTrunc(w - pad_x * 2, cw)))))];
+        try self.renderer.drawText(x + pad_x, y + h - footer_h + 2, foot_shown, chrome.dim);
+    }
+
+    fn drawCompletionPopup(
+        self: *App,
+        chrome: ui_chrome.Chrome,
+        text_x: i32,
+        body_y: i32,
+        body_h: i32,
+        panel_w: i32,
+        pad_x: i32,
+        panel_x: i32,
+        cw: i32,
+        ch: i32,
+        row_h: i32,
+        code_cols: usize,
+    ) !void {
+        const n = self.viewer.complete_n;
+        const line_text = self.viewer.line(self.viewer.cursor_row);
+        const col = @min(self.viewer.cursor_col, line_text.len);
+        const prefix = viewer_mod.identPrefix(line_text, col);
+        const prefix_col = col - prefix.len;
+        const vis_row = self.viewer.cursor_row -| self.viewer.scroll;
+        const caret_y = body_y + @as(i32, @intCast(vis_row)) * row_h;
+        const doc_h = ch + 10;
+        const list_h = @as(i32, @intCast(n)) * row_h;
+        const pop_h = list_h + doc_h;
+        const pop_w = @min(@as(i32, @intCast(@min(code_cols, 56))) * cw, @max(cw * 24, panel_w - pad_x * 2 - (text_x - panel_x)));
+        var pop_x = text_x + @as(i32, @intCast(@min(prefix_col, code_cols))) * cw;
+        if (pop_x + pop_w > panel_x + panel_w - pad_x) {
+            pop_x = panel_x + panel_w - pad_x - pop_w;
+        }
+        pop_x = @max(panel_x + pad_x, pop_x);
+
+        const below_y = caret_y + row_h + 2;
+        const above_y = caret_y - pop_h - 2;
+        const pop_y = if (below_y + pop_h <= body_y + body_h) below_y else @max(body_y, above_y);
+
+        try self.renderer.drawRect(pop_x, pop_y, pop_w, pop_h, chrome.field, 0.98);
+        try self.renderer.drawRect(pop_x, pop_y, pop_w, 2, chrome.accent, 0.7);
+
+        const cols: usize = @intCast(@max(8, @divTrunc(pop_w - 16, cw)));
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const hit = self.viewer.complete_hits[i];
+            const ry = pop_y + 4 + @as(i32, @intCast(i)) * row_h;
+            if (i == self.viewer.complete_sel) {
+                try self.renderer.drawRect(pop_x + 2, ry - 1, pop_w - 4, row_h, chrome.sel_bg, 0.85);
+            }
+            const kind = hit.kindTag();
+            try self.renderer.drawText(pop_x + 8, ry, kind, chrome.dim);
+            const label_x = pop_x + 8 + cw * 4;
+            const label = hit.label();
+            const label_shown = label[0..@min(label.len, cols / 2)];
+            try self.renderer.drawText(label_x, ry, label_shown, chrome.fg);
+            if (hit.detail.len > 0 and cols > label_shown.len + 10) {
+                const det = hit.detail[0..@min(hit.detail.len, cols / 3)];
+                const det_x = pop_x + pop_w - 8 - @as(i32, @intCast(det.len)) * cw;
+                if (det_x > label_x + @as(i32, @intCast(label_shown.len)) * cw) {
+                    try self.renderer.drawText(det_x, ry, det, chrome.muted);
+                }
+            }
+        }
+
+        const sel = self.viewer.complete_hits[self.viewer.complete_sel];
+        const doc_y = pop_y + list_h + 2;
+        try self.renderer.drawRect(pop_x, doc_y - 1, pop_w, 1, chrome.rule, 0.8);
+        const doc = if (sel.doc.len > 0) sel.doc else sel.detail;
+        const doc_shown = doc[0..@min(doc.len, cols)];
+        try self.renderer.drawText(pop_x + 8, doc_y + 2, doc_shown, chrome.muted);
     }
 
     fn openSession(

@@ -20,6 +20,7 @@ comptime {
     _ = @import("tests/ui/viewer_test.zig");
 
     _ = @import("tests/syntax/highlight_test.zig");
+    _ = @import("tests/syntax/complete_test.zig");
 
     _ = @import("tests/pty/pty_test.zig");
 

@@ -56,7 +56,7 @@ pub const catalog = [_]BuiltinEntry{
     .{ .action = .load_saved_workspace, .label = "Load Saved Workspace", .hint = "saved" },
     .{ .action = .save_workspace, .label = "Save Workspace", .hint = "Ctrl+Shift+S" },
     .{ .action = .search, .label = "Search", .hint = "Ctrl+Shift+F" },
-    .{ .action = .open_file, .label = "Open File", .hint = "preview" },
+    .{ .action = .open_file, .label = "Open File", .hint = "edit" },
     .{ .action = .ssh, .label = "SSH…", .hint = "ssh host" },
     .{ .action = .theme_orbit_dark, .label = "Theme: Orbit Dark", .hint = "" },
     .{ .action = .theme_orbit_light, .label = "Theme: Orbit Light", .hint = "" },
