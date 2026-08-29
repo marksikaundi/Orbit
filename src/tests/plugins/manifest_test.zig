@@ -86,3 +86,60 @@ test "parse command shortcut and [[bindings]]" {
     try std.testing.expect(plugin.bindings[1].alt);
     try std.testing.expectEqualStrings("t", plugin.bindings[1].key_name);
 }
+
+test "parse kind tool and run action" {
+    const data =
+        \\name = "format"
+        \\version = "1"
+        \\kind = "format"
+        \\description = "fmt"
+        \\
+        \\[tool]
+        \\command = "sh"
+        \\script = "run.sh"
+        \\args = "{file}"
+        \\stdin = "buffer"
+        \\stdout = "replace"
+        \\languages = "javascript, zig"
+        \\timeout_ms = 12000
+        \\
+        \\[[commands]]
+        \\id = "format.document"
+        \\label = "Format"
+        \\action = "run"
+        \\payload = "format"
+    ;
+    var plugin = try manifest.parsePlugin(std.testing.allocator, "/tmp/format", data);
+    defer plugin.deinit();
+    try std.testing.expect(plugin.kind == .format);
+    try std.testing.expect(plugin.tool.hasRunner());
+    try std.testing.expectEqualStrings("sh", plugin.tool.command.?);
+    try std.testing.expectEqualStrings("run.sh", plugin.tool.script.?);
+    try std.testing.expectEqual(@as(usize, 1), plugin.tool.args.len);
+    try std.testing.expectEqualStrings("{file}", plugin.tool.args[0]);
+    try std.testing.expect(plugin.tool.stdin == .buffer);
+    try std.testing.expect(plugin.tool.stdout == .replace);
+    try std.testing.expectEqual(@as(u32, 12000), plugin.tool.timeout_ms);
+    try std.testing.expect(plugin.tool.matchesLanguage("javascript"));
+    try std.testing.expect(plugin.tool.matchesLanguage("zig"));
+    try std.testing.expect(!plugin.tool.matchesLanguage("ruby"));
+    try std.testing.expectEqual(@as(usize, 1), plugin.commands.len);
+    try std.testing.expect(plugin.commands[0].kind == .run);
+}
+
+test "tool without commands synthesizes a run command" {
+    const data =
+        \\name = "lint"
+        \\kind = "lint"
+        \\[tool]
+        \\command = "sh"
+        \\script = "run.sh"
+    ;
+    var plugin = try manifest.parsePlugin(std.testing.allocator, "/tmp/lint", data);
+    defer plugin.deinit();
+    try std.testing.expect(plugin.kind == .lint);
+    try std.testing.expect(plugin.tool.parse == .unix);
+    try std.testing.expectEqual(@as(usize, 1), plugin.commands.len);
+    try std.testing.expect(plugin.commands[0].kind == .run);
+    try std.testing.expectEqualStrings("lint.run", plugin.commands[0].id);
+}

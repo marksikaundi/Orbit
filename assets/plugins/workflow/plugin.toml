@@ -1,5 +1,6 @@
 name = "workflow"
 version = "0.1.0"
+kind = "commands"
 description = "Workflow helpers — tabs, splits, search, workspace shortcuts"
 
 [[commands]]

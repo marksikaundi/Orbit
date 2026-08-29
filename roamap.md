@@ -364,6 +364,8 @@ Commands
 
 Themes
 
+Format / lint / AI tools (user-owned `[tool]`)
+
 Renderer hooks
 
 Workspace hooks
@@ -372,15 +374,13 @@ Lifecycle
 
 ---
 
-## Phase 7
+## Phase 7 ✅
 
-AI Assistant
+AI Assistant (plugin)
 
 Optional
 
-Offline model
-
-Cloud providers
+Your CLI (Ollama / `ORBIT_AI_BIN`)
 
 Explain errors
 

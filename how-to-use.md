@@ -196,22 +196,25 @@ prompt = "ghostty"
 
 Ghostty-compatible keys also work: `background-opacity`, `window-padding-x`, `adjust-cell-height`.
 
-## Plugins (Phase 6)
+## Plugins
 
 On home press **L** (or **5**) to open the Plugins panel:
 
-- List installed plugins and **Space/Enter** to enable/disable
-- **R** reload from disk after you edit a `plugin.toml`
-- **I** install the bundled pack: **hello**, **git**, **devtools**, **themes**, **workflow**, **keys**
+- List installed plugins and **Space/Enter** to enable/disable (remembered)
+- **R** reload from disk after you edit a `plugin.toml` or script
+- **I** install the bundled pack: **hello**, **git**, **devtools**, **themes**, **workflow**, **keys**, **format**, **lint**, **ai**
 
-| Plugin | What you get |
-| --- | --- |
-| `hello` | Demo commands + amber theme |
-| `git` | Status, diff, log, branch, pull, push, stash |
-| `devtools` | pwd, ls, tree, clear, disk, ports, env |
-| `themes` | ocean, forest, midnight, rose |
-| `workflow` | New tab, split, open/save workspace, search |
-| `keys` | **Starter custom shortcuts** — edit this to make Orbit yours |
+| Plugin | Kind | What you get |
+| --- | --- | --- |
+| `hello` | commands | Demo commands + amber theme |
+| `git` | commands | Status, diff, log, branch, pull, push, stash |
+| `devtools` | commands | pwd, ls, tree, clear, disk, ports, env |
+| `themes` | theme | ocean, forest, midnight, rose |
+| `workflow` | commands | New tab, split, open/save workspace, search |
+| `keys` | keys | **Starter custom shortcuts** — edit this to make Orbit yours |
+| `format` | format | Format the open file (`Ctrl+Shift+I`) — edit `run.sh` |
+| `lint` | lint | Lint the open file (`Ctrl+Shift+;`) — unix diagnostics |
+| `ai` | ai | Explain selection (`Ctrl+Shift+A`) — Ollama or your CLI; never auto-runs |
 
 Or copy from the repo:
 
@@ -219,29 +222,28 @@ Or copy from the repo:
 cp -R assets/plugins/* ~/.config/orbit/plugins/
 ```
 
-Then **R** in the Plugins panel. Commands and themes appear in **Ctrl+Shift+P**.
+Then **R** in the Plugins panel. Commands and themes appear in **Ctrl+Shift+P**. Format and lint need a file open (Search → Files / Code). AI uses selected terminal text.
 
-### Make it yours (shortcuts, colors, themes)
+### Make it yours (shortcuts, format, lint, AI)
 
-Edit `~/.config/orbit/plugins/keys/plugin.toml` (or add your own folder):
+Edit `~/.config/orbit/plugins/keys/plugin.toml`, or the **scripts**:
+
+- `format/run.sh` — point at Prettier, `zig fmt`, rustfmt, …
+- `lint/run.sh` — point at ESLint, ruff, …
+- `ai/ask.sh` — Ollama by default, or `ORBIT_AI_BIN`
 
 ```toml
-[[commands]]
-id = "mine.status"
-label = "My: Git Status"
-action = "insert"
-payload = "git status\r"
-shortcut = "ctrl+shift+g"
+kind = "format"
 
-[[themes]]
-name = "my-night"
-foreground = "#e8eef5"
-background = "#0c1018"
-cursor = "#7ec8ff"
-selection = "#243044"
+[tool]
+command = "sh"
+script = "run.sh"
+args = "{file}"
+stdin = "buffer"
+stdout = "replace"
 ```
 
-Press **R** to reload. Example chords from the `keys` pack: `Ctrl+Shift+G` (git status), `Ctrl+Alt+L` (ls), `Ctrl+Alt+K` (clear).
+Press **R** to reload. Example chords from the pack: `Ctrl+Shift+G` (git status), `Ctrl+Shift+I` (format), `Ctrl+Shift+A` (AI explain).
 
 Full guide: [`assets/plugins/README.md`](assets/plugins/README.md). Appearance (**S**) covers look, opacity, padding, prompt, themes, text color, cursor, and shell.
 

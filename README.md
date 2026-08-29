@@ -95,16 +95,16 @@ Projects are first class. Each workspace can remember:
 ### Extensibility
 
 - **Command palette** — jump to any action fast
-- **Plugin system** — commands, themes, custom shortcuts, hooks
-- **Optional AI** (Phase 7) — explain errors & suggest commands; never executes automatically
+- **Plugin system** — commands, themes, shortcuts, plus format / lint / AI tools you own
+- **Optional AI** — a plugin that runs *your* CLI (Ollama or `ORBIT_AI_BIN`); never executes automatically
 
 ---
 
 ## Status
 
-**Phases 1–6 are implemented** — terminal foundations through the command palette, plus a manifest-based plugin system (commands, themes, custom shortcuts, hooks).
+**Phases 1–7 are implemented** — terminal foundations through the command palette, a plugin system you own (commands, themes, format, lint, AI tools), and an optional local AI plugin that never auto-runs.
 
-Next up: optional AI assistant (**Phase 7**). Full detail in [roamap.md](roamap.md).
+Full detail in [roamap.md](roamap.md).
 
 | Phase | Focus | |
 | :---: | :---- | :-: |
@@ -114,7 +114,7 @@ Next up: optional AI assistant (**Phase 7**). Full detail in [roamap.md](roamap.
 | 4 | Orbit Workspaces | done |
 | 5 | Command palette | done |
 | 6 | Plugin system | done |
-| 7 | Optional AI assistant | next |
+| 7 | Optional AI assistant (plugin; local CLI) | done |
 
 ---
 
@@ -241,7 +241,7 @@ cp -R assets/plugins/* ~/.config/orbit/plugins/
 # or: home → Plugins → I
 ```
 
-Then **R** in the Plugins panel (or restart). Commands and themes show up in the palette.
+Then **R** in the Plugins panel (or restart). Commands, themes, format, lint, and AI tools show up in the palette.
 
 Customize shortcuts in any `plugin.toml`:
 
@@ -251,7 +251,7 @@ shortcut = "ctrl+shift+g"
 [[bindings]]
 ```
 
-Start with the bundled **`keys`** plugin → [`assets/plugins/README.md`](assets/plugins/README.md).
+Format / lint / AI are plugins you own — edit `run.sh` / `ask.sh` under `~/.config/orbit/plugins/`. Guide: [`assets/plugins/README.md`](assets/plugins/README.md).
 
 ---
 

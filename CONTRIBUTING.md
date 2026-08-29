@@ -343,7 +343,7 @@ Plugins are a supported extension path (Phase 6).
 
 - Bundled examples: `assets/plugins/`
 - Authoring guide: [`assets/plugins/README.md`](assets/plugins/README.md)
-- Manifest format: `plugin.toml` (commands, themes, `shortcut` / `[[bindings]]`)
+- Manifest format: `plugin.toml` (`kind`, `[tool]`, commands, themes, `shortcut` / `[[bindings]]`)
 
 When contributing a plugin:
 

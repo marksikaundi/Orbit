@@ -1,0 +1,31 @@
+name = "ai"
+version = "0.1.0"
+kind = "ai"
+description = "Ask a local model you own — Ollama by default, or edit ask.sh"
+
+[[commands]]
+id = "ai.explain"
+label = "AI: Explain"
+hint = "ctrl+shift+a"
+action = "run"
+payload = "explain"
+shortcut = "ctrl+shift+a"
+
+[[commands]]
+id = "ai.suggest"
+label = "AI: Suggest command"
+hint = "ctrl+shift+q"
+action = "run"
+payload = "suggest"
+
+[tool]
+command = "sh"
+script = "ask.sh"
+args = "{action}"
+stdin = "selection"
+stdout = "overlay"
+timeout_ms = 60000
+prompt = "You are a terminal assistant. Be concise."
+
+[hooks]
+on_load = "status:ai plugin — install ollama or edit ask.sh; never auto-runs"

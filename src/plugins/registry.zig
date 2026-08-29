@@ -8,20 +8,40 @@ const Theme = @import("../config/theme.zig").Theme;
 const Color = @import("../terminal/cell.zig").Color;
 const paths = @import("../platform/paths.zig");
 
+pub const CommandRef = struct {
+    plugin: *types.Plugin,
+    command: *types.PluginCommand,
+};
+
+pub const LoadIssue = struct {
+    name: []u8,
+    message: []u8,
+
+    fn deinit(self: *LoadIssue, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.message);
+    }
+};
+
 pub const Registry = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     dir_path: []u8,
+    enabled_path: []u8,
     plugins: std.ArrayList(types.Plugin) = .empty,
+    issues: std.ArrayList(LoadIssue) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) !Registry {
         const dir_path = try paths.joinConfig(allocator, &.{"plugins"});
         errdefer allocator.free(dir_path);
+        const enabled_path = try paths.joinConfig(allocator, &.{"plugins.enabled"});
+        errdefer allocator.free(enabled_path);
         paths.ensureDir(dir_path);
         var reg: Registry = .{
             .allocator = allocator,
             .io = io,
             .dir_path = dir_path,
+            .enabled_path = enabled_path,
         };
         try reg.reload();
         return reg;
@@ -30,7 +50,10 @@ pub const Registry = struct {
     pub fn deinit(self: *Registry) void {
         self.clear();
         self.plugins.deinit(self.allocator);
+        self.clearIssues();
+        self.issues.deinit(self.allocator);
         self.allocator.free(self.dir_path);
+        self.allocator.free(self.enabled_path);
     }
 
     fn clear(self: *Registry) void {
@@ -38,16 +61,20 @@ pub const Registry = struct {
         self.plugins.clearRetainingCapacity();
     }
 
+    fn clearIssues(self: *Registry) void {
+        for (self.issues.items) |*issue| issue.deinit(self.allocator);
+        self.issues.clearRetainingCapacity();
+    }
+
     pub fn reload(self: *Registry) !void {
-        // Fire unload hooks first (caller may also do this for status UI)
         self.clear();
+        self.clearIssues();
         paths.ensureDir(self.dir_path);
         const dir = std.Io.Dir.openDirAbsolute(self.io, self.dir_path, .{ .iterate = true }) catch return;
         defer dir.close(self.io);
 
         var it = dir.iterate();
         while (it.next(self.io) catch null) |entry| {
-            // Refuse symlinks so a planted link cannot pull plugins from outside the config tree.
             if (entry.kind != .directory) continue;
             if (entry.name.len == 0 or entry.name[0] == '.') continue;
             if (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, "..")) continue;
@@ -56,22 +83,80 @@ pub const Registry = struct {
             defer self.allocator.free(plugin_dir);
             if (!pluginDirIsContained(self.dir_path, plugin_dir)) {
                 std.log.warn("security: skipped plugin `{s}` (path escapes plugins directory)", .{entry.name});
+                try self.addIssue(entry.name, "path escapes plugins directory");
                 continue;
             }
             const toml_path = try std.fmt.allocPrint(self.allocator, "{s}{c}plugin.toml", .{ plugin_dir, std.fs.path.sep });
             defer self.allocator.free(toml_path);
 
-            const file = std.Io.Dir.openFileAbsolute(self.io, toml_path, .{}) catch continue;
+            const file = std.Io.Dir.openFileAbsolute(self.io, toml_path, .{}) catch {
+                try self.addIssue(entry.name, "missing plugin.toml");
+                continue;
+            };
             defer file.close(self.io);
             var buf: [4096]u8 = undefined;
             var reader = file.reader(self.io, &buf);
-            const data = reader.interface.allocRemaining(self.allocator, .limited(128 * 1024)) catch continue;
+            const data = reader.interface.allocRemaining(self.allocator, .limited(128 * 1024)) catch {
+                try self.addIssue(entry.name, "could not read plugin.toml");
+                continue;
+            };
             defer self.allocator.free(data);
 
-            const plugin = manifest.parsePlugin(self.allocator, plugin_dir, data) catch continue;
+            const plugin = manifest.parsePlugin(self.allocator, plugin_dir, data) catch {
+                std.log.warn("plugin: skipped `{s}` (invalid plugin.toml)", .{entry.name});
+                try self.addIssue(entry.name, "invalid plugin.toml");
+                continue;
+            };
             warnRiskyPlugin(&plugin);
             try self.plugins.append(self.allocator, plugin);
         }
+        self.applyEnabledState();
+    }
+
+    pub fn persistEnabled(self: *Registry) void {
+        const file = std.Io.Dir.createFileAbsolute(self.io, self.enabled_path, .{}) catch return;
+        defer file.close(self.io);
+        file.writeStreamingAll(self.io, "# Orbit plugin enablement — edit or toggle in the Plugins panel\n") catch return;
+        var line_buf: [192]u8 = undefined;
+        for (self.plugins.items) |p| {
+            const line = std.fmt.bufPrint(&line_buf, "{s}={s}\n", .{
+                p.name,
+                if (p.enabled) "true" else "false",
+            }) catch continue;
+            file.writeStreamingAll(self.io, line) catch return;
+        }
+    }
+
+    fn applyEnabledState(self: *Registry) void {
+        const file = std.Io.Dir.openFileAbsolute(self.io, self.enabled_path, .{}) catch return;
+        defer file.close(self.io);
+        var buf: [4096]u8 = undefined;
+        var reader = file.reader(self.io, &buf);
+        const data = reader.interface.allocRemaining(self.allocator, .limited(32 * 1024)) catch return;
+        defer self.allocator.free(data);
+
+        var lines = std.mem.splitScalar(u8, data, '\n');
+        while (lines.next()) |raw| {
+            const line = std.mem.trim(u8, raw, " \t\r");
+            if (line.len == 0 or line[0] == '#') continue;
+            const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+            const key = std.mem.trim(u8, line[0..eq], " \t");
+            const val = std.mem.trim(u8, line[eq + 1 ..], " \t");
+            const on = !(std.ascii.eqlIgnoreCase(val, "false") or std.ascii.eqlIgnoreCase(val, "0") or std.ascii.eqlIgnoreCase(val, "off"));
+            for (self.plugins.items) |*p| {
+                if (std.mem.eql(u8, p.name, key)) {
+                    p.enabled = on;
+                    break;
+                }
+            }
+        }
+    }
+
+    fn addIssue(self: *Registry, name: []const u8, message: []const u8) !void {
+        try self.issues.append(self.allocator, .{
+            .name = try self.allocator.dupe(u8, name),
+            .message = try self.allocator.dupe(u8, message),
+        });
     }
 
     pub fn findTheme(self: *const Registry, name: []const u8) ?Theme {
@@ -85,11 +170,16 @@ pub const Registry = struct {
     }
 
     pub fn findCommand(self: *Registry, plugin_name: []const u8, command_id: []const u8) ?*types.PluginCommand {
+        if (self.findCommandRef(plugin_name, command_id)) |ref| return ref.command;
+        return null;
+    }
+
+    pub fn findCommandRef(self: *Registry, plugin_name: []const u8, command_id: []const u8) ?CommandRef {
         for (self.plugins.items) |*p| {
             if (!p.enabled) continue;
             if (!std.mem.eql(u8, p.name, plugin_name)) continue;
             for (p.commands) |*c| {
-                if (std.mem.eql(u8, c.id, command_id)) return c;
+                if (std.mem.eql(u8, c.id, command_id)) return .{ .plugin = p, .command = c };
             }
         }
         return null;
@@ -97,11 +187,24 @@ pub const Registry = struct {
 
     /// Find a command by id across all enabled plugins.
     pub fn findCommandById(self: *Registry, command_id: []const u8) ?*types.PluginCommand {
+        if (self.findCommandByIdRef(command_id)) |ref| return ref.command;
+        return null;
+    }
+
+    pub fn findCommandByIdRef(self: *Registry, command_id: []const u8) ?CommandRef {
         for (self.plugins.items) |*p| {
             if (!p.enabled) continue;
             for (p.commands) |*c| {
-                if (std.mem.eql(u8, c.id, command_id)) return c;
+                if (std.mem.eql(u8, c.id, command_id)) return .{ .plugin = p, .command = c };
             }
+        }
+        return null;
+    }
+
+    pub fn findByKind(self: *Registry, kind: types.PluginKind) ?*types.Plugin {
+        for (self.plugins.items) |*p| {
+            if (!p.enabled) continue;
+            if (p.kind == kind and p.tool.hasRunner()) return p;
         }
         return null;
     }

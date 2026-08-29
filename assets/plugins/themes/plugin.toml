@@ -1,5 +1,6 @@
 name = "themes"
 version = "0.1.0"
+kind = "theme"
 description = "Extra color themes — ocean, forest, midnight, rose"
 
 [[themes]]

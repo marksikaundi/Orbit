@@ -1,5 +1,6 @@
 name = "git"
 version = "0.1.0"
+kind = "commands"
 description = "Git shortcuts — status, diff, log, branch, pull, push"
 
 [[commands]]

@@ -23,13 +23,11 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 - **Text color** presets in Appearance (independent of theme)
 - **Search** finds text in the terminal, file names, or **code inside files** (`Cmd/Ctrl+Shift+F`; Tab switches Terminal / Files / Code). **⌘/Ctrl+F** in the editor finds in the open file.
 - **In-file editor with autocomplete** — open a file and type; keywords, common APIs, and names already in the file show a popup with signature and a short meaning (Java, JavaScript, Python, and the other highlighted languages)
+- **Plugins you own** — kinds (`format`, `lint`, `ai`, `commands`, `theme`, `keys`) plus a `[tool]` that runs *your* command/script. Format the open file, lint with unix diagnostics, or ask a local model. Enablement is persisted. Bundled **format**, **lint**, and **ai** plugins (edit `run.sh` / `ask.sh`)
 
 ### Fixed
 - Full-screen apps (`vi` / `vim`, `less`, `htop`) restore the shell when they quit (alternate screen buffer)
 - Shells now advertise `TERM=xterm-256color` so editors can use syntax colors
-- **Plugins** home panel — browse, toggle, reload, and install bundled pack (hello, git, devtools, themes, workflow, keys)
-- **Plugin shortcuts** — define `shortcut = "ctrl+shift+g"` or `[[bindings]]` in `plugin.toml` to run commands with your own key chords
-- Bundled **keys** plugin as a starter for custom shortcuts / colors / themes (see `assets/plugins/README.md`)
 - **macOS app icon** — `zig build run` packages `Orbit.app` with a Dock icon (no more generic "exec")
 - **Global launch** — `zig build setup` installs shell integration so `zig build run` / `orbit` work from any directory
 - **Detached launch** — `orbit` / `zig build run` open Orbit in the background and print `Orbit terminal opened successfully`

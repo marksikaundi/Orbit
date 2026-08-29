@@ -131,10 +131,11 @@ If you are unsure, report privately. We would rather close a duplicate than miss
 
 ## Plugin trust
 
-Plugins live in `~/.config/orbit/plugins/<name>/plugin.toml`. An `insert` action types `payload` into the focused PTY — the same as the user typing.
+Plugins live in `~/.config/orbit/plugins/<name>/` (`plugin.toml` plus optional scripts). An `insert` action types `payload` into the focused PTY — the same as the user typing. A `[tool]` `run` action executes **your** command/script when you invoke it (never on load).
 
 - Treat third-party plugin folders like shell scripts you did not write.
-- Orbit **audits** payloads (`curl … \| sh`, `rm -rf /`, reverse shells, `sudo`, …) and warns at load and at run. Warnings are not a sandbox.
+- Orbit **audits** insert payloads (`curl … \| sh`, `rm -rf /`, reverse shells, `sudo`, …) and warns at load and at run. Warnings are not a sandbox.
+- Plugin scripts must stay under the plugins directory (`..` is refused).
 - Plugins that resolve outside the plugins directory are skipped.
 - Bundled pack under `assets/plugins/` is reviewed in this repo. Anything else is your trust decision.
 

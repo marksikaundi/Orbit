@@ -38,6 +38,10 @@ pub const Action = enum {
     reload_config,
     reload_plugins,
     list_plugins,
+    format_document,
+    lint_file,
+    ai_explain,
+    ai_suggest,
 };
 
 pub const BuiltinEntry = struct {
@@ -81,6 +85,10 @@ pub const catalog = [_]BuiltinEntry{
     .{ .action = .reload_config, .label = "Reload Config", .hint = "" },
     .{ .action = .reload_plugins, .label = "Reload Plugins", .hint = "" },
     .{ .action = .list_plugins, .label = "Plugins…", .hint = "L on home" },
+    .{ .action = .format_document, .label = "Format Document", .hint = "plugin" },
+    .{ .action = .lint_file, .label = "Lint File", .hint = "plugin" },
+    .{ .action = .ai_explain, .label = "AI: Explain", .hint = "plugin" },
+    .{ .action = .ai_suggest, .label = "AI: Suggest command", .hint = "plugin" },
 };
 
 pub const Item = struct {
@@ -95,7 +103,7 @@ pub const Item = struct {
     },
 };
 
-pub const max_items = 128;
+pub const max_items = 192;
 
 pub const Palette = struct {
     active: bool = false,

@@ -23,6 +23,11 @@ const theme_mod = @import("../config/theme.zig");
 const WsManager = @import("../workspace/workspace.zig").Manager;
 const PluginRegistry = @import("../plugins/registry.zig").Registry;
 const PluginCommand = @import("../plugins/types.zig").PluginCommand;
+const PluginKind = @import("../plugins/types.zig").PluginKind;
+const plugin_types = @import("../plugins/types.zig");
+const plugin_runner = @import("../plugins/runner.zig");
+const plugin_result_mod = @import("../plugins/result.zig");
+const plugin_bundled = @import("../plugins/bundled.zig");
 const plugin_audit = @import("../security/plugin_audit.zig");
 const clipboard = @import("../clipboard/clipboard.zig");
 const folder_picker = @import("../platform/folder_picker.zig");
@@ -30,7 +35,7 @@ const macos_open = @import("../platform/macos_open.zig");
 const Color = @import("../terminal/cell.zig").Color;
 const dev_root = @import("../dev_root.zig");
 
-const UiMode = enum { home, normal, search, viewer, ws_picker, ws_save, palette, ssh_prompt, settings, plugins };
+const UiMode = enum { home, normal, search, viewer, ws_picker, ws_save, palette, ssh_prompt, settings, plugins, plugin_result };
 
 const SettingsRow = enum(u8) {
     theme,
@@ -106,6 +111,7 @@ pub const App = struct {
     settings_row: usize = 0,
     /// Selected plugin index in the Plugins panel.
     plugin_row: usize = 0,
+    plugin_result: plugin_result_mod.ResultView = undefined,
 
     pub const LaunchOpts = struct {
         cwd: ?[]const u8 = null,
@@ -156,6 +162,7 @@ pub const App = struct {
             .config = config,
             .workspaces = workspaces,
             .plugins = plugins,
+            .plugin_result = plugin_result_mod.ResultView.init(allocator),
             .ui = .home,
         };
 
@@ -192,6 +199,7 @@ pub const App = struct {
         Window.on_mouse_button = null;
         Window.on_cursor_pos = null;
         Window.on_scroll = null;
+        self.plugin_result.deinit();
         self.plugins.deinit();
         self.workspaces.deinit();
         self.search.close(self.allocator);
@@ -482,6 +490,7 @@ pub const App = struct {
             switch (self.ui) {
                 .settings => try self.drawSettings(),
                 .plugins => try self.drawPlugins(),
+                .plugin_result => try self.drawPluginResult(),
                 .palette => try self.drawPalette(),
                 .ws_picker => try self.drawWorkspacePicker(),
                 .ws_save => try self.drawSavePrompt(),
@@ -549,6 +558,9 @@ pub const App = struct {
         }
         if (self.ui == .plugins) {
             try self.drawPlugins();
+        }
+        if (self.ui == .plugin_result) {
+            try self.drawPluginResult();
         }
         if (self.context_menu != null) {
             try self.drawContextMenu();
@@ -1206,7 +1218,7 @@ pub const App = struct {
         var cy = y + pad_y;
         try self.renderer.drawTextScaled(x + pad_x, cy, "Plugins", fg, title_s);
         cy += title_h;
-        try self.renderer.drawTextScaled(x + pad_x, cy, "Shortcuts, themes, and commands you can edit", muted, ui);
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Commands, themes, format, lint, and AI — yours to edit", muted, ui);
         cy += subtitle_h;
 
         try self.renderer.drawRect(x + pad_x - 4, cy, w - pad_x * 2 + 8, 1, rule, 0.9);
@@ -1229,7 +1241,7 @@ pub const App = struct {
         if (plugin_n == 0) {
             const empty_y = list_top + @divTrunc(list_h - ch * 2, 2);
             try self.renderer.drawTextScaled(x + pad_x + 8, empty_y, "Press I to install the bundled pack", fg, ui);
-            try self.renderer.drawTextScaled(x + pad_x + 8, empty_y + ch + 4, "hello · git · devtools · themes · workflow · keys", dim, ui);
+            try self.renderer.drawTextScaled(x + pad_x + 8, empty_y + ch + 4, "hello · git · format · lint · ai · keys", dim, ui);
         } else {
             if (self.plugin_row >= plugin_n) self.plugin_row = plugin_n - 1;
             var start: usize = 0;
@@ -1256,10 +1268,14 @@ pub const App = struct {
                 // Name + version on the first line.
                 try self.renderer.drawTextScaled(text_x, name_y, p.name, if (selected) fg else muted, ui);
 
+                const badge = p.kind.badge();
+                const name_w = @as(i32, @intCast(p.name.len)) * cw;
+                try self.renderer.drawTextScaled(text_x + name_w + cw, name_y, badge, if (selected) accent else dim, ui);
+
                 var ver_buf: [24]u8 = undefined;
                 const ver = std.fmt.bufPrint(&ver_buf, "v{s}", .{p.version}) catch "";
-                const name_w = @as(i32, @intCast(p.name.len)) * cw;
-                try self.renderer.drawTextScaled(text_x + name_w + cw, name_y, ver, dim, ui);
+                const badge_w = @as(i32, @intCast(badge.len)) * cw;
+                try self.renderer.drawTextScaled(text_x + name_w + cw + badge_w + cw, name_y, ver, dim, ui);
 
                 // Compact capability counts when selected (skip zeros).
                 if (selected) {
@@ -1280,8 +1296,11 @@ pub const App = struct {
                     append(&meta_buf, &meta_len, "cmd", p.commands.len);
                     append(&meta_buf, &meta_len, "theme", p.themes.len);
                     append(&meta_buf, &meta_len, "bind", p.bindings.len);
+                    if (p.tool.hasRunner() and meta_len + 6 < meta_buf.len) {
+                        append(&meta_buf, &meta_len, "tool", 1);
+                    }
                     if (meta_len > 0) {
-                        const meta_x = text_x + name_w + cw * (@as(i32, @intCast(ver.len)) + 2);
+                        const meta_x = text_x + name_w + cw * (@as(i32, @intCast(ver.len + badge.len)) + 3);
                         const state_reserve = cw * 6;
                         const meta_max = @max(0, (x + w - pad_x - state_reserve) - meta_x);
                         const meta_chars = @min(meta_len, @as(usize, @intCast(@divTrunc(meta_max, cw))));
@@ -1491,7 +1510,7 @@ pub const App = struct {
                 self.save_name_len += 1;
                 return;
             },
-            .ws_picker, .settings, .plugins => return,
+            .ws_picker, .settings, .plugins, .plugin_result => return,
             .normal => {},
         }
         const session = self.focused() orelse return;
@@ -1543,6 +1562,10 @@ pub const App = struct {
         }
         if (self.ui == .plugins) {
             self.handlePluginsKey(key);
+            return;
+        }
+        if (self.ui == .plugin_result) {
+            self.handlePluginResultKey(key);
             return;
         }
         if (self.ui == .ws_picker) {
@@ -1682,6 +1705,7 @@ pub const App = struct {
         self.home = .{};
         self.ui = .home;
         self.closeContextMenu();
+        self.plugin_result.close();
         self.search.close(self.allocator);
         self.viewer.close(self.allocator);
         self.palette.close();
@@ -1808,6 +1832,12 @@ pub const App = struct {
     }
 
     fn leaveOverlay(self: *App) void {
+        if (self.ui == .plugin_result) {
+            const back_viewer = self.plugin_result.return_to_viewer and self.viewer.active;
+            self.plugin_result.close();
+            self.ui = if (back_viewer) .viewer else if (self.tabs.items.items.len == 0) .home else .normal;
+            return;
+        }
         self.ui = if (self.tabs.items.items.len == 0) .home else .normal;
     }
 
@@ -1932,12 +1962,14 @@ pub const App = struct {
                 self.setStatus("config reloaded");
             },
             .reload_plugins => {
+                self.fireHooks(.on_unload);
                 self.plugins.reload() catch {
                     self.setStatus("plugin reload failed");
                     return;
                 };
                 self.fireHooks(.on_load);
                 self.applyRendererHooks();
+                self.rebuildPalette();
                 var buf: [64]u8 = undefined;
                 const msg = std.fmt.bufPrint(&buf, "plugins: {d} loaded", .{self.plugins.count()}) catch "plugins reloaded";
                 self.setStatus(msg);
@@ -1946,6 +1978,10 @@ pub const App = struct {
                 self.plugin_row = 0;
                 self.ui = .plugins;
             },
+            .format_document => self.runKindPlugin(.format, "format"),
+            .lint_file => self.runKindPlugin(.lint, "lint"),
+            .ai_explain => self.runKindPlugin(.ai, "explain"),
+            .ai_suggest => self.runKindPlugin(.ai, "suggest"),
         }
     }
 
@@ -1974,6 +2010,7 @@ pub const App = struct {
         }
         const p = &self.plugins.plugins.items[self.plugin_row];
         p.enabled = !p.enabled;
+        self.plugins.persistEnabled();
         self.rebuildPalette();
         self.applyRendererHooks();
         var buf: [64]u8 = undefined;
@@ -1982,6 +2019,7 @@ pub const App = struct {
     }
 
     fn reloadPluginsFromPanel(self: *App) void {
+        self.fireHooks(.on_unload);
         self.plugins.reload() catch {
             self.setStatus("plugin reload failed");
             return;
@@ -2323,9 +2361,11 @@ pub const App = struct {
         for (pack) |item| {
             if (self.writePluginToml(item.name, item.toml)) installed += 1;
         }
+        installed += plugin_bundled.install(self.allocator, self.io, self.plugins.dir_path);
         self.reloadPluginsFromPanel();
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "installed {d} plugins", .{installed}) catch "plugins installed";
+        const n = self.plugins.count();
+        const msg = std.fmt.bufPrint(&buf, "installed {d} plugins", .{if (n > 0) n else installed}) catch "plugins installed";
         self.setStatus(msg);
     }
 
@@ -2537,8 +2577,8 @@ pub const App = struct {
     }
 
     fn runPluginCommand(self: *App, plugin_name: []const u8, command_id: []const u8) void {
-        if (self.plugins.findCommand(plugin_name, command_id)) |cmd| {
-            self.executePluginCommand(cmd);
+        if (self.plugins.findCommandRef(plugin_name, command_id)) |ref| {
+            self.executePluginCommand(ref.plugin, ref.command);
             return;
         }
         if (self.plugins.findTheme(command_id) != null) {
@@ -2548,7 +2588,7 @@ pub const App = struct {
         self.setStatus("plugin command missing");
     }
 
-    fn executePluginCommand(self: *App, cmd: *const PluginCommand) void {
+    fn executePluginCommand(self: *App, plugin: *const plugin_types.Plugin, cmd: *const PluginCommand) void {
         switch (cmd.kind) {
             .insert => {
                 if (plugin_audit.auditInsertPayload(cmd.payload)) |hit| {
@@ -2576,6 +2616,7 @@ pub const App = struct {
             .status => self.setStatus(cmd.payload),
             .theme => self.applyTheme(cmd.payload),
             .host => self.runHostPayload(cmd.payload),
+            .run => self.runPluginTool(plugin, cmd.payload),
         }
     }
 
@@ -2587,8 +2628,8 @@ pub const App = struct {
 
         const name = glfwKeyName(key) orelse return false;
         const command_id = self.plugins.matchBinding(name, ctrl, shift, super, alt) orelse return false;
-        if (self.plugins.findCommandById(command_id)) |cmd| {
-            self.executePluginCommand(cmd);
+        if (self.plugins.findCommandByIdRef(command_id)) |ref| {
+            self.executePluginCommand(ref.plugin, ref.command);
             return true;
         }
         if (self.plugins.findTheme(command_id) != null) {
@@ -2650,11 +2691,264 @@ pub const App = struct {
             self.runAction(.save_workspace);
         } else if (std.mem.eql(u8, payload, "split_right")) {
             self.runAction(.split_right);
+        } else if (std.mem.eql(u8, payload, "split_down")) {
+            self.runAction(.split_down);
         } else if (std.mem.eql(u8, payload, "search")) {
             self.runAction(.search);
         } else {
             self.setStatus(payload);
         }
+    }
+
+    fn runKindPlugin(self: *App, kind: PluginKind, action: []const u8) void {
+        const plugin = self.plugins.findByKind(kind) orelse {
+            const msg: []const u8 = switch (kind) {
+                .format => "no format plugin — Plugins → I to install",
+                .lint => "no lint plugin — Plugins → I to install",
+                .ai => "no AI plugin — Plugins → I to install",
+                else => "plugin not installed",
+            };
+            self.setStatus(msg);
+            return;
+        };
+        self.runPluginTool(plugin, action);
+    }
+
+    fn runPluginTool(self: *App, plugin: *const plugin_types.Plugin, action: []const u8) void {
+        if (!plugin.tool.hasRunner()) {
+            self.setStatus("plugin has no [tool]");
+            return;
+        }
+
+        var sel_buf: [32 * 1024]u8 = undefined;
+        const selection = self.capturePluginSelection(&sel_buf);
+
+        const file_path: []const u8 = if (self.viewer.abs_path) |p| p else "";
+        const language: []const u8 = if (self.viewer.active) @tagName(self.viewer.language) else "";
+        const buffer: []const u8 = if (self.viewer.content) |b| b else "";
+        const cwd = self.sessionCwd();
+        const prompt_t = plugin.tool.prompt orelse "";
+
+        const ctx = plugin_runner.Context{
+            .plugin = plugin.name,
+            .action = action,
+            .file = file_path,
+            .language = language,
+            .cwd = cwd,
+            .selection = selection,
+            .buffer = buffer,
+            .plugin_dir = plugin.dir,
+            .prompt = prompt_t,
+        };
+
+        if (plugin.kind == .format or plugin.kind == .lint) {
+            if (!self.viewer.active or !self.viewer.canEdit()) {
+                if (plugin.kind == .format or plugin.kind == .lint) {
+                    self.setStatus("open a file first (Search → Files / Code)");
+                    return;
+                }
+            }
+        }
+        if (plugin.kind == .format and !plugin.tool.matchesLanguage(language)) {
+            self.setStatus("format plugin does not handle this language");
+            return;
+        }
+
+        self.setStatus("running plugin…");
+        var result = plugin_runner.run(self.allocator, self.io, plugin, ctx) catch |err| {
+            const msg: []const u8 = switch (err) {
+                error.Timeout => "plugin timed out",
+                error.CommandNotFound => "plugin command not found — edit its script",
+                error.NoTool => "plugin has no [tool]",
+                error.UnsafeScriptPath => "plugin script path refused",
+                else => "plugin failed to run",
+            };
+            self.setStatus(msg);
+            return;
+        };
+        defer result.deinit();
+
+        self.applyToolResult(plugin, &result);
+    }
+
+    fn applyToolResult(self: *App, plugin: *const plugin_types.Plugin, result: *plugin_runner.Result) void {
+        const out = std.mem.trim(u8, result.stdout, " \t\r\n");
+        const err_txt = std.mem.trim(u8, result.stderr, " \t\r\n");
+
+        switch (plugin.tool.stdout) {
+            .replace => {
+                if (out.len > 0 and self.viewer.canEdit()) {
+                    self.viewer.replaceContent(self.allocator, result.stdout) catch {
+                        self.setStatus("formatted output too large");
+                        return;
+                    };
+                    self.setStatus("formatted");
+                    self.ui = .viewer;
+                    return;
+                }
+                if (self.viewer.active) {
+                    self.viewer.reloadFromDisk(self.allocator, self.io);
+                    self.setStatus("formatted");
+                    self.ui = .viewer;
+                    return;
+                }
+                self.setStatus(if (result.code == 0) "format ran" else "format failed");
+            },
+            .insert => {
+                if (out.len == 0) {
+                    self.setStatus(if (err_txt.len > 0) err_txt else "plugin produced no output");
+                    return;
+                }
+                if (self.focused()) |s| s.write(out);
+                self.setStatus("plugin inserted");
+            },
+            .status => {
+                const msg = if (out.len > 0) out else if (err_txt.len > 0) err_txt else "plugin done";
+                self.setStatus(msg);
+            },
+            .discard => {
+                self.setStatus(if (result.code == 0) "plugin done" else "plugin exited with error");
+            },
+            .overlay => {
+                var title_buf: [72]u8 = undefined;
+                const title = std.fmt.bufPrint(&title_buf, "{s} · {s}", .{ plugin.kind.badge(), plugin.name }) catch plugin.name;
+                const body = if (out.len > 0) result.stdout else if (err_txt.len > 0) result.stderr else "No output.";
+                const insertable = plugin.kind == .ai or plugin.tool.stdout == .overlay and plugin.kind != .lint;
+                self.plugin_result.open(title, body, insertable and plugin.kind == .ai);
+                self.plugin_result.return_to_viewer = self.viewer.active;
+                if (plugin.tool.parse == .unix) self.plugin_result.applyUnixDiagnostics();
+                self.ui = .plugin_result;
+            },
+        }
+    }
+
+    fn capturePluginSelection(self: *App, buf: []u8) []const u8 {
+        if (self.focused()) |session| {
+            if (session.selection.active) {
+                const n = session.selection.copyText(&session.screen, buf);
+                if (n > 0) return buf[0..n];
+            }
+            const n = App.copyVisibleScreen(&session.screen, buf);
+            if (n > 0) return buf[0..n];
+        }
+        if (self.viewer.content) |body| {
+            const n = @min(body.len, buf.len);
+            @memcpy(buf[0..n], body[0..n]);
+            return buf[0..n];
+        }
+        return "";
+    }
+
+    fn copyVisibleScreen(screen: *const @import("../terminal/screen.zig").Screen, buf: []u8) usize {
+        var out: usize = 0;
+        var row: u16 = 0;
+        while (row < screen.rows) : (row += 1) {
+            var col: u16 = 0;
+            var line_end = out;
+            while (col < screen.cols) : (col += 1) {
+                if (out >= buf.len) return out;
+                const cp = screen.visibleCell(col, row).codepoint;
+                const ch: u8 = if (cp >= 32 and cp < 127) @intCast(cp) else ' ';
+                buf[out] = ch;
+                out += 1;
+                if (ch != ' ') line_end = out;
+            }
+            out = line_end;
+            if (out < buf.len) {
+                buf[out] = '\n';
+                out += 1;
+            }
+        }
+        return out;
+    }
+
+    fn handlePluginResultKey(self: *App, key: c_int) void {
+        const visible = self.pluginResultVisibleLines();
+        switch (key) {
+            c.GLFW_KEY_ESCAPE => self.leaveOverlay(),
+            c.GLFW_KEY_UP => self.plugin_result.scrollBy(-1, visible),
+            c.GLFW_KEY_DOWN => self.plugin_result.scrollBy(1, visible),
+            c.GLFW_KEY_PAGE_UP => self.plugin_result.scrollBy(-@as(i32, @intCast(@max(visible, 1))), visible),
+            c.GLFW_KEY_PAGE_DOWN => self.plugin_result.scrollBy(@as(i32, @intCast(@max(visible, 1))), visible),
+            c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER => {
+                if (self.plugin_result.jump_line) |line| {
+                    if (self.viewer.active) {
+                        const col = if (self.plugin_result.jump_col) |c0| c0 -| 1 else 0;
+                        self.viewer.goTo(line -| 1, col);
+                        self.plugin_result.close();
+                        self.ui = .viewer;
+                        return;
+                    }
+                }
+                if (self.plugin_result.insertable and self.plugin_result.body.len > 0) {
+                    if (self.focused()) |s| s.write(self.plugin_result.body);
+                    self.setStatus("inserted plugin output");
+                    self.leaveOverlay();
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn pluginResultVisibleLines(self: *const App) usize {
+        const ch = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_h)));
+        const h = @max(ch * 8, self.window.fb_height - ch * 10);
+        return @max(1, @as(usize, @intCast(@divTrunc(h, ch + 4))));
+    }
+
+    fn drawPluginResult(self: *App) !void {
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+        const ui = ui_scale.uiScale(fb_w, fb_h, self.renderer.content_scale);
+        const title_s = ui * 1.12;
+        const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const cw = ui_scale.scaled(base_cw, ui);
+        const ch = ui_scale.scaled(base_ch, ui);
+        const title_ch = ui_scale.scaled(base_ch, title_s);
+        const chrome = self.overlayChrome();
+
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
+
+        const pad_x = @max(cw + 10, @as(i32, @intFromFloat(@round(26.0 * ui))));
+        const pad_y = @max(@divTrunc(ch, 2) + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
+        const w = ui_scale.panelWidth(fb_w, cw, 64, @as(i32, @intFromFloat(@round(720.0 * ui))));
+        const h = @min(fb_h - ch * 2, @max(ch * 16, @divTrunc(fb_h * 3, 4)));
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @max(ch, @divTrunc(fb_h - h, 2));
+
+        try self.renderer.drawRect(x, y, w, h, chrome.panel, 0.98);
+        try self.renderer.drawRect(x, y, w, @max(2, @divTrunc(ch, 10)), chrome.accent, 0.55);
+
+        var cy = y + pad_y;
+        try self.renderer.drawTextScaled(x + pad_x, cy, self.plugin_result.titleSlice(), chrome.fg, title_s);
+        cy += title_ch + @divTrunc(ch, 2);
+
+        const footer_h = ch + pad_y;
+        const list_h = h - (cy - y) - footer_h;
+        const row_h = ch + @max(4, @divTrunc(ch, 6));
+        const visible: usize = @max(1, @as(usize, @intCast(@divTrunc(list_h, row_h))));
+        const total = self.plugin_result.lineCount();
+        const start = self.plugin_result.scroll;
+        const shown = @min(visible, if (total > start) total - start else 0);
+        const max_chars = @max(8, @divTrunc(w - pad_x * 2, cw));
+
+        var i: usize = 0;
+        while (i < shown) : (i += 1) {
+            const text = self.plugin_result.line(start + i);
+            const clip = text[0..@min(text.len, @as(usize, @intCast(max_chars)))];
+            try self.renderer.drawTextScaled(x + pad_x, cy + @as(i32, @intCast(i)) * row_h, clip, chrome.muted, ui);
+        }
+
+        cy = y + h - footer_h;
+        try self.renderer.drawRect(x + pad_x - 4, cy - 8, w - pad_x * 2 + 8, 1, chrome.rule, 0.9);
+        const hint: []const u8 = if (self.plugin_result.insertable)
+            "Enter insert into shell    Esc close"
+        else if (self.plugin_result.jump_line != null)
+            "Enter jump to line    Esc close"
+        else
+            "Esc close";
+        try self.renderer.drawTextScaled(x + pad_x, cy, hint, chrome.dim, ui);
     }
 
     fn showPluginList(self: *App) void {
@@ -3631,6 +3925,11 @@ pub const App = struct {
         if (self.ui == .viewer) {
             const lines: i32 = @intFromFloat(-yoff * 3.0);
             self.viewer.scrollBy(lines, self.viewerVisibleLines());
+            return;
+        }
+        if (self.ui == .plugin_result) {
+            const lines: i32 = @intFromFloat(-yoff * 3.0);
+            self.plugin_result.scrollBy(lines, self.pluginResultVisibleLines());
             return;
         }
         if (self.ui != .normal) return;

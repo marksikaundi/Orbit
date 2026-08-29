@@ -27,6 +27,8 @@ comptime {
 
     _ = @import("tests/plugins/manifest_test.zig");
     _ = @import("tests/plugins/types_test.zig");
+    _ = @import("tests/plugins/runner_test.zig");
+    _ = @import("tests/plugins/diagnostics_test.zig");
 
     _ = @import("tests/security/scan_test.zig");
 

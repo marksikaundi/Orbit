@@ -1,0 +1,24 @@
+name = "format"
+version = "0.1.0"
+kind = "format"
+description = "Format the open file with your own tool — Prettier, zig fmt, or a fallback"
+
+[[commands]]
+id = "format.document"
+label = "Format: Document"
+hint = "ctrl+shift+i"
+action = "run"
+payload = "format"
+shortcut = "ctrl+shift+i"
+
+[tool]
+command = "sh"
+script = "run.sh"
+args = "{file}"
+stdin = "buffer"
+stdout = "replace"
+languages = "javascript,typescript,json,css,html,markdown,python,zig,go,rust,toml,yaml,shell,c,cpp"
+timeout_ms = 15000
+
+[hooks]
+on_load = "status:format plugin — edit run.sh to use your formatter"

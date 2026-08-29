@@ -452,6 +452,42 @@ pub const Viewer = struct {
         self.goTo(hit.row, hit.col);
     }
 
+    pub fn replaceContent(self: *Viewer, allocator: std.mem.Allocator, bytes: []const u8) !void {
+        if (!self.canEdit()) return error.CannotEdit;
+        if (bytes.len > max_file_bytes) return error.FileTooLarge;
+        const next = try allocator.dupe(u8, bytes);
+        if (self.content) |old| allocator.free(old);
+        self.content = next;
+        self.dirty = true;
+        self.discard_armed = false;
+        try self.rebuild(allocator);
+        self.clampCursor();
+        if (self.find_open) self.refreshFind();
+    }
+
+    pub fn reloadFromDisk(self: *Viewer, allocator: std.mem.Allocator, io: std.Io) void {
+        const path = self.abs_path orelse return;
+        if (self.content) |p| {
+            allocator.free(p);
+            self.content = null;
+        }
+        if (self.line_offsets.len > 0) {
+            allocator.free(self.line_offsets);
+            self.line_offsets = &.{};
+        }
+        if (self.line_states.len > 0) {
+            allocator.free(self.line_states);
+            self.line_states = &.{};
+        }
+        if (self.error_msg) |p| {
+            allocator.free(p);
+            self.error_msg = null;
+        }
+        self.binary = false;
+        self.too_large = false;
+        self.load(allocator, io, path);
+    }
+
     pub fn save(self: *Viewer, io: std.Io) bool {
         const path = self.abs_path orelse return false;
         const data = self.content orelse return false;
