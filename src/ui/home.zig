@@ -154,7 +154,7 @@ pub const help_rows = [_]HelpRow{
     .{ .item = .{ .keys = "Left/Right", .desc = "Change the selected Appearance value" } },
     .{ .item = .{ .keys = "Ctrl+=/-/0", .desc = "Font size up / down / reset (everywhere)" } },
     .{ .item = .{ .keys = "Ctrl+Shift+P", .desc = "Palette -> Theme: ... / Cursor: ..." } },
-    .{ .note = "Look: compact / comfortable / airy / glass (Ghostty-style padding + opacity)" },
+    .{ .note = "Look: compact / comfortable / airy / glass (Ghostty-style)" },
     .{ .spacer = {} },
 
     .{ .heading = "Custom keybindings" },
@@ -164,7 +164,7 @@ pub const help_rows = [_]HelpRow{
     .{ .item = .{ .keys = "ctrl+a>n", .desc = "Sequence (leader then key)" } },
     .{ .item = .{ .keys = "text: / csi: / esc:", .desc = "Send bytes to the shell" } },
     .{ .item = .{ .keys = "performable:", .desc = "Only consume the key if the action can run (e.g. copy)" } },
-    .{ .note = "Edit ~/.config/orbit/config.toml — Reload Config in the palette. User guide: docs/" },
+    .{ .note = "Edit ~/.config/orbit/config.toml — Reload Config" },
     .{ .spacer = {} },
     .{ .item = .{ .keys = "L / Plugins", .desc = "Manage plugins: format, lint, AI, shortcuts, themes" } },
     .{ .item = .{ .keys = "I", .desc = "Install / update the bundled plugin pack" } },
