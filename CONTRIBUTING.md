@@ -185,7 +185,7 @@ Application → Window → Input → PTY → ANSI Parser → Screen Buffer → R
 - Match the style of neighboring Zig code (naming, indentation, error handling).
 - Prefer explicit ownership and clear error paths over clever abstractions.
 - Do not add dependencies without discussion; Orbit aims to stay lightweight.
-- Avoid breaking shell semantics: chords like plain `Ctrl+W` / `Ctrl+C` belong to the shell unless documented otherwise. Shared app shortcuts live in `src/ui/bindings.zig` — keep palette hints and real key dispatch in sync.
+- Avoid breaking shell semantics: chords like plain `Ctrl+W` / `Ctrl+C` belong to the shell unless documented otherwise. Default app chords live in `src/ui/bindings.zig`; user overlays parse in `src/config/keybind.zig`. Keep palette hints and default chords in sync.
 - Keep the default UI minimal. Prefer palette commands and config over permanent chrome.
 - Comment *why*, not *what*, when intent is non-obvious.
 - Performance matters: avoid unnecessary allocations on hot paths (input, parse, render).

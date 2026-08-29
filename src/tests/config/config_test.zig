@@ -73,6 +73,7 @@ test "opacity is clamped" {
     );
     try std.testing.expectEqual(@as(f32, 1.0), cfg.opacity);
 
+    cfg.deinit(std.testing.allocator);
     cfg = .{};
     Config.parseInto(&cfg, std.testing.allocator,
         \\[window]

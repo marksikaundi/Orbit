@@ -4,9 +4,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 const theme_mod = @import("theme.zig");
 const look_mod = @import("look.zig");
+const keybind_mod = @import("keybind.zig");
 const faces = @import("../font/faces.zig");
 const paths = @import("../platform/paths.zig");
 const shell_guard = @import("../platform/shell.zig");
+
+pub const Keymap = keybind_mod.Keymap;
 
 pub const Look = look_mod.Look;
 pub const PromptStyle = look_mod.PromptStyle;
@@ -94,6 +97,10 @@ pub const Config = struct {
     fg_preset_owned: ?[]u8 = null,
     font_face_owned: ?[]u8 = null,
     shell_owned: ?[]u8 = null,
+    /// User `keybind = …` lines, in file order (Ghostty-compatible).
+    keybind_lines: [][]u8 = &.{},
+    /// Compiled defaults + user keybinds.
+    keymap: Keymap = .{},
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         if (self.theme_name_owned) |t| allocator.free(t);
@@ -105,6 +112,8 @@ pub const Config = struct {
         self.font_face_owned = null;
         self.shell_owned = null;
         self.shell = null;
+        self.freeKeybindLines(allocator);
+        self.keymap.deinit(allocator);
     }
 
     pub fn fontFaceDisplay(self: *const Config) []const u8 {
@@ -263,6 +272,7 @@ pub const Config = struct {
 
     pub fn load(allocator: std.mem.Allocator, io: std.Io) Config {
         var cfg: Config = .{};
+        cfg.rebuildKeymap(allocator);
         const path = paths.joinConfig(allocator, &.{"config.toml"}) catch return cfg;
         defer allocator.free(path);
 
@@ -326,13 +336,37 @@ pub const Config = struct {
                 "# shell = \"$SHELL\"  # e.g. \"/bin/bash\" or \"/bin/zsh\"\n");
         }
 
+        try body.appendSlice(allocator,
+            \\
+            \\# Custom keybindings (Ghostty-compatible).
+            \\# keybind = trigger=action
+            \\# See https://ghostty.org/docs/config/keybind
+            \\
+        );
+        if (self.keybind_lines.len == 0) {
+            try body.appendSlice(allocator,
+                \\# keybind = ctrl+shift+t=new_tab
+                \\# keybind = performable:ctrl+c=copy_to_clipboard
+                \\# keybind = ctrl+a>n=new_tab
+                \\# keybind = ctrl+k=reload_config
+                \\
+            );
+        } else {
+            for (self.keybind_lines) |line| {
+                try appendFmt(&body, allocator, "keybind = {s}\n", .{line});
+            }
+        }
+
         const file = try std.Io.Dir.createFileAbsolute(io, path, .{});
         defer file.close(io);
         try file.writeStreamingAll(io, body.items);
     }
 
     pub fn parseInto(cfg: *Config, allocator: std.mem.Allocator, data: []const u8) void {
-        var section: enum { none, window, theme, terminal } = .none;
+        var keybinds: std.ArrayList([]u8) = .empty;
+        defer keybinds.deinit(allocator);
+
+        var section: enum { none, window, theme, terminal, keybind } = .none;
         var lines = std.mem.splitScalar(u8, data, '\n');
         while (lines.next()) |raw| {
             var line = std.mem.trim(u8, raw, " \t\r");
@@ -346,6 +380,8 @@ pub const Config = struct {
                         section = .theme;
                     } else if (std.mem.eql(u8, name, "terminal")) {
                         section = .terminal;
+                    } else if (std.mem.eql(u8, name, "keybind") or std.mem.eql(u8, name, "keybinds")) {
+                        section = .keybind;
                     } else {
                         section = .none;
                     }
@@ -353,10 +389,22 @@ pub const Config = struct {
                 continue;
             }
             const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
-            const key = std.mem.trim(u8, line[0..eq], " \t");
+            var key = std.mem.trim(u8, line[0..eq], " \t");
             var val = std.mem.trim(u8, line[eq + 1 ..], " \t");
+            if (key.len >= 2 and ((key[0] == '"' and key[key.len - 1] == '"') or (key[0] == '\'' and key[key.len - 1] == '\''))) {
+                key = key[1 .. key.len - 1];
+            }
             if (val.len >= 2 and ((val[0] == '"' and val[val.len - 1] == '"') or (val[0] == '\'' and val[val.len - 1] == '\''))) {
                 val = val[1 .. val.len - 1];
+            }
+
+            if (std.mem.eql(u8, key, "keybind") or std.mem.eql(u8, key, "keybinds")) {
+                appendKeybind(&keybinds, allocator, val);
+                continue;
+            }
+            if (section == .keybind) {
+                appendKeybindSpec(&keybinds, allocator, key, val);
+                continue;
             }
 
             switch (section) {
@@ -431,11 +479,18 @@ pub const Config = struct {
                         cfg.cursor_blink = parseBool(val);
                     }
                 },
-                .none => {},
+                .keybind, .none => {},
             }
         }
         cfg.opacity = @min(1.0, @max(0.15, cfg.opacity));
         cfg.line_height = @min(1.5, @max(1.0, cfg.line_height));
+
+        cfg.freeKeybindLines(allocator);
+        cfg.keybind_lines = keybinds.toOwnedSlice(allocator) catch blk: {
+            for (keybinds.items) |l| allocator.free(l);
+            keybinds.clearRetainingCapacity();
+            break :blk &.{};
+        };
 
         // Drop configured shell if disallowed or missing (e.g. fish not installed).
         if (cfg.shell) |s| {
@@ -458,6 +513,23 @@ pub const Config = struct {
                 cfg.font_face = fallback;
             }
         }
+
+        cfg.rebuildKeymap(allocator);
+    }
+
+    fn freeKeybindLines(self: *Config, allocator: std.mem.Allocator) void {
+        for (self.keybind_lines) |line| allocator.free(line);
+        if (self.keybind_lines.len > 0) allocator.free(self.keybind_lines);
+        self.keybind_lines = &.{};
+    }
+
+    fn rebuildKeymap(self: *Config, allocator: std.mem.Allocator) void {
+        self.keymap.deinit(allocator);
+        self.keymap = .{};
+        self.keymap.loadDefaults(allocator) catch {};
+        for (self.keybind_lines) |line| {
+            self.keymap.applyLine(allocator, line) catch {};
+        }
     }
 };
 
@@ -477,4 +549,16 @@ fn parseF32(s: []const u8) ?f32 {
 
 fn parseBool(s: []const u8) bool {
     return std.mem.eql(u8, s, "true") or std.mem.eql(u8, s, "1") or std.mem.eql(u8, s, "yes");
+}
+
+fn appendKeybind(list: *std.ArrayList([]u8), allocator: std.mem.Allocator, val: []const u8) void {
+    if (list.items.len >= keybind_mod.max_bindings) return;
+    const owned = allocator.dupe(u8, val) catch return;
+    list.append(allocator, owned) catch allocator.free(owned);
+}
+
+fn appendKeybindSpec(list: *std.ArrayList([]u8), allocator: std.mem.Allocator, trigger: []const u8, action: []const u8) void {
+    if (list.items.len >= keybind_mod.max_bindings) return;
+    const spec = std.fmt.allocPrint(allocator, "{s}={s}", .{ trigger, action }) catch return;
+    list.append(allocator, spec) catch allocator.free(spec);
 }

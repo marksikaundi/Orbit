@@ -36,3 +36,22 @@ prompt = "ghostty"
 # Cursor: block | underline | bar
 cursor_style = "block"
 cursor_blink = true
+
+# Custom keybindings — Ghostty-compatible: trigger=action
+# https://ghostty.org/docs/config/keybind
+# Defaults (new tab, copy/paste, font size, …) stay set unless you unbind or clear.
+#
+# keybind = ctrl+shift+t=new_tab
+# keybind = ctrl+shift+t=unbind
+# keybind = performable:ctrl+c=copy_to_clipboard
+# keybind = ctrl+a>n=new_tab
+# keybind = ctrl+k=reload_config
+# keybind = chain=go_home
+# keybind = up=csi:A
+# keybind = ctrl+u=text:\\x15
+#
+# keybind = clear          # wipe built-in chords, then add only yours
+#
+# [keybind]
+# ctrl+j = "new_tab"
+

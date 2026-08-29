@@ -1,7 +1,7 @@
 name = "keys"
 version = "0.1.0"
 kind = "keys"
-description = "Custom shortcuts starter — edit keys to make Orbit yours"
+description = "Custom shortcuts starter — or use keybind = in config.toml"
 
 # Tip: use modifiers (ctrl/cmd/alt/shift) so normal typing still reaches the shell.
 # Built-in chords (Ctrl+Shift+P/H/T/F/O/S, Cmd+Q/W, …) stay reserved.

@@ -18,6 +18,7 @@ const Home = home_mod.Home;
 const ui_scale = @import("../ui/scale.zig");
 const ui_chrome = @import("../ui/chrome.zig");
 const Config = @import("../config/config.zig").Config;
+const keybind_mod = @import("../config/keybind.zig");
 const CursorStyle = @import("../config/config.zig").CursorStyle;
 const theme_mod = @import("../config/theme.zig");
 const WsManager = @import("../workspace/workspace.zig").Manager;
@@ -112,6 +113,9 @@ pub const App = struct {
     /// Selected plugin index in the Plugins panel.
     plugin_row: usize = 0,
     plugin_result: plugin_result_mod.ResultView = undefined,
+    /// In-progress key sequence (`ctrl+a` waiting for `n` in `ctrl+a>n`).
+    seq: [keybind_mod.max_sequence]keybind_mod.Trigger = undefined,
+    seq_len: u8 = 0,
 
     pub const LaunchOpts = struct {
         cwd: ?[]const u8 = null,
@@ -1529,22 +1533,13 @@ pub const App = struct {
         const alt = (mods & c.GLFW_MOD_ALT) != 0;
         const bmods: bindings.Mods = .{ .ctrl = ctrl, .shift = shift, .super = super, .alt = alt };
 
-        // Global: quit / close tab — must match the *actual* key, not only modifiers.
-        // (Matching "w" while Ctrl is held used to close on every Ctrl chord.)
-        if (glfwKeyName(key)) |name| {
-            if (bindings.match(name, bmods)) |act| {
-                if (act == .quit) {
-                    self.requestQuit();
-                    return;
-                }
-                if (act == .close_tab) {
-                    self.closeTabOrQuit();
-                    return;
-                }
-            }
-        }
+        // Quit / close tab work from every screen (including home).
+        if (self.fireQuitOrClose(key, bmods)) return;
 
         if (self.ui == .home) {
+            if (ctrl or super or alt) {
+                if (self.tryFireKeymap(key, bmods, action)) return;
+            }
             self.handleHomeKey(key, ctrl, shift, super);
             return;
         }
@@ -1585,72 +1580,14 @@ pub const App = struct {
             return;
         }
 
-        // Palette open is not a palette Action enum member.
-        if (ctrl and shift and key == c.GLFW_KEY_P) {
-            self.rebuildPalette();
-            self.palette.open();
-            self.ui = .palette;
-            self.clearStatus();
-            return;
-        }
-
         // Context menu: Esc closes without sending to the shell.
         if (self.context_menu != null and key == c.GLFW_KEY_ESCAPE) {
             self.closeContextMenu();
             return;
         }
 
-        // Clipboard — works the same idea on every OS:
-        //   macOS:           Cmd+C / Cmd+V
-        //   Windows / Linux: Ctrl+V always pastes; Ctrl+C copies when text is
-        //                    selected, otherwise still interrupts the shell.
-        //   All platforms:   Ctrl/Cmd+Shift+C / V (never conflicts with ^C)
-        if (super and !ctrl and !alt and key == c.GLFW_KEY_C) {
-            self.closeContextMenu();
-            self.copySelection();
-            return;
-        }
-        if (super and !ctrl and !alt and key == c.GLFW_KEY_V) {
-            self.closeContextMenu();
-            self.pasteClipboard();
-            return;
-        }
-        if ((ctrl or super) and shift and key == c.GLFW_KEY_C) {
-            self.closeContextMenu();
-            self.copySelection();
-            return;
-        }
-        if ((ctrl or super) and shift and key == c.GLFW_KEY_V) {
-            self.closeContextMenu();
-            self.pasteClipboard();
-            return;
-        }
-        // Primary Ctrl chords on Windows/Linux (and other non-macOS).
-        if (builtin.os.tag != .macos and ctrl and !shift and !super and !alt) {
-            if (key == c.GLFW_KEY_V) {
-                self.closeContextMenu();
-                self.pasteClipboard();
-                return;
-            }
-            if (key == c.GLFW_KEY_C) {
-                if (self.focused()) |s| {
-                    if (s.selection.active) {
-                        self.closeContextMenu();
-                        self.copySelection();
-                        return;
-                    }
-                }
-                // No selection → fall through so ^C still interrupts.
-            }
-        }
+        if (self.tryFireKeymap(key, bmods, action)) return;
 
-        // Built-in chords from the shared bindings table (palette hints stay in sync).
-        if (glfwKeyName(key)) |name| {
-            if (bindings.match(name, bmods)) |act| {
-                self.runAction(act);
-                return;
-            }
-        }
         // Keypad font shortcuts share equal/minus/0 actions.
         if ((ctrl or super) and !shift) {
             switch (key) {
@@ -1670,7 +1607,7 @@ pub const App = struct {
             }
         }
 
-        // Plugin shortcuts (after built-ins so Ctrl+Shift+P etc. stay reserved)
+        // Plugin shortcuts (after config keybinds so users can reserve chords)
         if (self.tryPluginBinding(key, ctrl, shift, super, alt)) return;
 
         const session = self.focused() orelse return;
@@ -1695,13 +1632,110 @@ pub const App = struct {
             c.GLFW_KEY_HOME => session.write("\x1b[H"),
             c.GLFW_KEY_END => session.write("\x1b[F"),
             c.GLFW_KEY_DELETE => session.write("\x1b[3~"),
-            c.GLFW_KEY_PAGE_UP => session.screen.scrollView(10),
-            c.GLFW_KEY_PAGE_DOWN => session.screen.scrollView(-10),
             else => {},
         }
     }
 
+    fn fireQuitOrClose(self: *App, key: c_int, bmods: bindings.Mods) bool {
+        const name = glfwKeyName(key) orelse return false;
+        const trigger = keybind_mod.Trigger.from(bmods, name);
+        return switch (self.config.keymap.advance(&.{}, trigger)) {
+            .fire => |binding| {
+                if (!binding.isQuitOrClose()) return false;
+                if (binding.prefixes.performable and !self.canPerform(binding)) return false;
+                self.seq_len = 0;
+                self.runBinding(binding);
+                return true;
+            },
+            else => false,
+        };
+    }
+
+    fn tryFireKeymap(self: *App, key: c_int, bmods: bindings.Mods, glfw_action: c_int) bool {
+        const name = glfwKeyName(key) orelse return false;
+        const trigger = keybind_mod.Trigger.from(bmods, name);
+
+        if (glfw_action == c.GLFW_REPEAT and self.seq_len > 0) return true;
+
+        switch (self.config.keymap.advance(self.seq[0..self.seq_len], trigger)) {
+            .wait => {
+                if (self.seq_len < keybind_mod.max_sequence) {
+                    self.seq[self.seq_len] = trigger;
+                    self.seq_len += 1;
+                }
+                return true;
+            },
+            .miss => {
+                self.seq_len = 0;
+                return false;
+            },
+            .fire => |binding| {
+                self.seq_len = 0;
+                if (binding.prefixes.performable and !self.canPerform(binding)) return false;
+                self.closeContextMenu();
+                self.runBinding(binding);
+                if (binding.prefixes.unconsumed) {
+                    if (self.focused()) |s| {
+                        var buf: [8]u8 = undefined;
+                        const bytes = keybind_mod.encodeTrigger(trigger, &buf);
+                        if (bytes.len > 0) s.write(bytes);
+                    }
+                }
+                return true;
+            },
+        }
+    }
+
+    fn canPerform(self: *App, binding: *const keybind_mod.Binding) bool {
+        for (binding.actionsSlice()) |act| {
+            switch (act) {
+                .app => |a| switch (a) {
+                    .copy_selection => {
+                        const s = self.focused() orelse return false;
+                        if (!s.selection.active) return false;
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+        return true;
+    }
+
+    fn runBinding(self: *App, binding: *const keybind_mod.Binding) void {
+        var reload = false;
+        for (binding.actionsSlice()) |act| {
+            switch (act) {
+                .ignore, .unbind => {},
+                .app => |a| {
+                    if (a == .reload_config) {
+                        reload = true;
+                    } else {
+                        self.runAction(a);
+                    }
+                },
+                .text => |t| {
+                    if (self.focused()) |s| s.write(t);
+                },
+                .csi => |t| {
+                    if (self.focused()) |s| {
+                        s.write("\x1b[");
+                        s.write(t);
+                    }
+                },
+                .esc => |t| {
+                    if (self.focused()) |s| {
+                        s.write("\x1b");
+                        s.write(t);
+                    }
+                },
+            }
+        }
+        if (reload) self.runAction(.reload_config);
+    }
+
     fn goHome(self: *App) void {
+        self.seq_len = 0;
         self.home = .{};
         self.ui = .home;
         self.closeContextMenu();
@@ -1767,12 +1801,12 @@ pub const App = struct {
             }
             return;
         }
-        if (ctrl and shift and key == c.GLFW_KEY_P) {
-            self.runHomeAction(.command_palette);
-            return;
-        }
-        if ((ctrl or super) and shift and key == c.GLFW_KEY_F) {
-            self.openSearch();
+        if (ctrl or super or shift) {
+            switch (key) {
+                c.GLFW_KEY_UP => self.home.moveUp(),
+                c.GLFW_KEY_DOWN => self.home.moveDown(),
+                else => {},
+            }
             return;
         }
         switch (key) {
@@ -1919,6 +1953,31 @@ pub const App = struct {
             .search => {
                 self.openSearch();
             },
+            .toggle_palette => {
+                if (self.ui == .palette) {
+                    self.palette.close();
+                    self.leaveOverlay();
+                } else {
+                    self.rebuildPalette();
+                    self.palette.open();
+                    self.ui = .palette;
+                    self.clearStatus();
+                }
+            },
+            .copy_selection => self.copySelection(),
+            .paste_clipboard => self.pasteClipboard(),
+            .scroll_page_up => {
+                if (self.focused()) |s| s.screen.scrollView(10);
+            },
+            .scroll_page_down => {
+                if (self.focused()) |s| s.screen.scrollView(-10);
+            },
+            .scroll_to_top => {
+                if (self.focused()) |s| s.screen.scrollView(32767);
+            },
+            .scroll_to_bottom => {
+                if (self.focused()) |s| s.screen.scrollView(-32767);
+            },
             .open_file => {
                 self.openSearch();
                 if (self.ui == .search) {
@@ -1952,6 +2011,7 @@ pub const App = struct {
             .go_home => self.goHome(),
             .reload_config => {
                 self.config.reload(self.allocator, self.io);
+                self.seq_len = 0;
                 self.renderer.setContentScale(self.window.contentScale());
                 self.renderer.setFontSize(self.config.font_size);
                 self.renderer.setFontFace(self.config.font_face);

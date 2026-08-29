@@ -196,6 +196,54 @@ prompt = "ghostty"
 
 Ghostty-compatible keys also work: `background-opacity`, `window-padding-x`, `adjust-cell-height`.
 
+## Custom keybindings
+
+Same idea as [Ghostty](https://ghostty.org/docs/config/keybind): `trigger=action`. Add lines to `~/.config/orbit/config.toml` (then palette → **Reload Config**, or restart).
+
+```toml
+# Overlay the defaults (new tab, copy/paste, font size, … still work)
+keybind = ctrl+k=reload_config
+keybind = ctrl+shift+t=unbind
+keybind = performable:ctrl+c=copy_to_clipboard
+keybind = ctrl+a>n=new_tab
+keybind = ctrl+u=text:\x15
+keybind = up=csi:A
+```
+
+Or a `[keybind]` table:
+
+```toml
+[keybind]
+ctrl+j = "new_tab"
+"ctrl+shift+g" = "search"
+```
+
+| Piece | What it means |
+| --- | --- |
+| Trigger | `key`, `ctrl+key`, `ctrl+shift+key`, `cmd+w` — modifiers in any order |
+| Sequence | `ctrl+a>n` — leader, then the next key (no timeout) |
+| `unbind` | Remove that trigger so the key reaches the shell |
+| `clear` | Wipe **all** bindings (including defaults), then add only yours |
+| `ignore` | Swallow the key |
+| `text:` / `csi:` / `esc:` | Send bytes / CSI / ESC to the PTY |
+| `performable:` | Only consume the key if the action can run (copy needs a selection) |
+| `unconsumed:` | Run the action **and** still send the key to the shell |
+| `chain=` | Extra action on the previous `keybind` line |
+
+Modifiers: `shift`, `ctrl` (`control`), `alt` (`opt`, `option`), `super` (`cmd`, `command`).
+
+Common actions (Ghostty names work too): `new_tab`, `close_tab` / `close_surface`, `quit`, `new_split:right`, `new_split:down`, `goto_tab:next`, `copy_to_clipboard`, `paste_from_clipboard`, `toggle_command_palette`, `increase_font_size`, `reload_config`, `go_home`, `search`, `scroll_page_up`, `theme:nord`.
+
+```toml
+keybind = clear
+keybind = ctrl+shift+t=new_tab
+keybind = ctrl+q=quit
+```
+
+`global:` / `all:` are parsed (Ghostty configs copy-paste) but are not OS-global yet — they still work while Orbit is focused. Plugin `shortcut =` chords run after config keybinds.
+
+Full example comments: `assets/config.example.toml`. Action list: command palette.
+
 ## Plugins
 
 On home press **L** (or **5**) to open the Plugins panel:
@@ -226,7 +274,9 @@ Then **R** in the Plugins panel. Commands and themes appear in **Ctrl+Shift+P**.
 
 ### Make it yours (shortcuts, format, lint, AI)
 
-Edit `~/.config/orbit/plugins/keys/plugin.toml`, or the **scripts**:
+App shortcuts: `keybind =` in `~/.config/orbit/config.toml` (see [Custom keybindings](#custom-keybindings)). Plugin command chords: `~/.config/orbit/plugins/keys/plugin.toml`.
+
+Scripts:
 
 - `format/run.sh` — point at Prettier, `zig fmt`, rustfmt, …
 - `lint/run.sh` — point at ESLint, ruff, …

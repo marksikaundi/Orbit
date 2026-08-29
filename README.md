@@ -79,7 +79,7 @@ Everything revolves around the developer’s workflow — Backend, Frontend, Pro
 - Colors, cursor, scrolling, selection, clipboard
 - **Syntax-highlighted file editor** (JS, Python, Java, Zig, and more) with autocomplete and short docs
 - Tabs, split panes, search, themes, transparency
-- TOML config with **live reload** (no restart)
+- TOML config with **live reload** and **Ghostty-compatible keybinds** (`keybind = trigger=action`)
 
 ### Orbit Workspaces
 
@@ -199,6 +199,18 @@ line_height = 1.12
 prompt = "ghostty"
 cursor_style = "bar"
 ```
+
+### Custom keybindings
+
+Ghostty-compatible `keybind = trigger=action` in the same file. Defaults keep the table below; overlay, unbind, or `keybind = clear` and start from scratch.
+
+```toml
+keybind = ctrl+k=reload_config
+keybind = performable:ctrl+c=copy_to_clipboard
+keybind = ctrl+a>n=new_tab
+```
+
+See [how-to-use.md](how-to-use.md#custom-keybindings) and [Ghostty keybindings](https://ghostty.org/docs/config/keybind).
 
 Workspaces live in `~/.config/orbit/workspaces/<name>.toml`.
 

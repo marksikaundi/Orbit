@@ -12,6 +12,7 @@ comptime {
 
     _ = @import("tests/config/config_test.zig");
     _ = @import("tests/config/theme_test.zig");
+    _ = @import("tests/config/keybind_test.zig");
     _ = @import("config/look.zig");
 
     _ = @import("tests/ui/palette_test.zig");

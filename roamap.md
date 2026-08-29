@@ -70,6 +70,7 @@ Shell:
 
 Configuration:
 - TOML
+- Ghostty-compatible `keybind = trigger=action`
 
 Testing:
 - Zig Test

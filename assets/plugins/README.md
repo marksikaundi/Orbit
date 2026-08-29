@@ -93,7 +93,7 @@ Modifiers: `ctrl`, `cmd` / `super`, `alt` / `option`, `shift` (combine with `+`)
 Keys: `a`–`z`, `0`–`9`, `f1`–`f12`, `enter`, `escape`, `space`, `tab`, `;`, …
 
 **Use at least one modifier** (or an F-key) so normal typing still reaches the shell.
-Built-in Orbit chords (`Ctrl+Shift+P`, `Cmd+Q`, …) always win.
+App chords from `config.toml` (`keybind = …`) win over plugin shortcuts. Unbind a built-in first if you want a plugin to own that chord.
 
 ## Custom themes / colors
 
