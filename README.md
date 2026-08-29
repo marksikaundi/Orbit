@@ -19,7 +19,7 @@
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="INSTALL.md">Install guide</a> ·
-  <a href="how-to-use.md">How to use</a> ·
+  <a href="docs/README.md">Docs</a> ·
   <a href="CONTRIBUTING.md">Contribute</a> ·
   <a href="https://github.com/marksikaundi/Orbit/releases">Releases</a>
 </p>
@@ -158,7 +158,7 @@ Connect Orbit as an **external** terminal (the editor’s built-in panel stays):
 orbit ide-setup          # Cursor, VS Code, and others it finds
 ```
 
-Details: [how-to-use.md](how-to-use.md#connect-to-cursor-vs-code-and-other-ides).
+Details: [docs — CLI & IDEs](docs/cli-and-ides.md).
 
 Optional config:
 
@@ -174,13 +174,13 @@ Copy-Item assets\config.example.toml "$env:APPDATA\orbit\config.toml"
 
 > **Windows:** native ConPTY build is supported — see [INSTALL.md § Windows](INSTALL.md#windows). WSL2 remains an alternative.
 
-Day-to-day usage: [how-to-use.md](how-to-use.md).
+Day-to-day usage: **[docs/](docs/README.md)** (how to use and configure every feature).
 
 ---
 
 ## Configuration
 
-Orbit watches config changes and reloads automatically — no restart required.
+Orbit watches config changes and reloads automatically — no restart required. Full key list: [docs — Configuration](docs/configuration.md).
 
 ```toml
 [window]
@@ -210,7 +210,7 @@ keybind = performable:ctrl+c=copy_to_clipboard
 keybind = ctrl+a>n=new_tab
 ```
 
-See [how-to-use.md](how-to-use.md#custom-keybindings) and [Ghostty keybindings](https://ghostty.org/docs/config/keybind).
+See [docs — Keybindings](docs/keybindings.md) and [Ghostty keybindings](https://ghostty.org/docs/config/keybind).
 
 Workspaces live in `~/.config/orbit/workspaces/<name>.toml`.
 
@@ -263,7 +263,7 @@ shortcut = "ctrl+shift+g"
 [[bindings]]
 ```
 
-Format / lint / AI are plugins you own — edit `run.sh` / `ask.sh` under `~/.config/orbit/plugins/`. Guide: [`assets/plugins/README.md`](assets/plugins/README.md).
+Format / lint / AI are plugins you own — edit `run.sh` / `ask.sh` under `~/.config/orbit/plugins/`. Guide: [docs — Plugins](docs/plugins.md).
 
 ---
 
@@ -355,6 +355,7 @@ See [roamap.md](roamap.md) for full phase detail · [CHANGELOG.md](CHANGELOG.md)
 src/          app, renderer, parser, terminal, workspace, config,
               platform, window, pty, font, clipboard, ui, plugins, tests
 assets/       icons, config example, plugins, shell hooks
+docs/         user guide — how to use and configure every feature
 scripts/      setup, launch, macOS bundle, version bump
 build.zig
 ```

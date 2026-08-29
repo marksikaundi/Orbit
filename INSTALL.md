@@ -426,7 +426,7 @@ zig build run      # same, from almost any folder
 ORBIT_FOREGROUND=1 orbit   # logs in this terminal
 ```
 
-Details: [how-to-use.md](how-to-use.md).
+Details: [docs — Getting started](docs/getting-started.md).
 
 ---
 
@@ -438,7 +438,7 @@ Orbit is added as the **external** terminal only. The built-in panel (`` Ctrl+` 
 orbit ide-setup
 ```
 
-Reload the editor. Full steps, including a manual JSON paste that does not touch integrated profiles: [how-to-use.md — Connect to IDEs](how-to-use.md#connect-to-cursor-vs-code-and-other-ides).
+Reload the editor. Full steps, including a manual JSON paste that does not touch integrated profiles: [docs — CLI & IDEs](docs/cli-and-ides.md#connect-to-cursor-vs-code-and-other-ides).
 
 ---
 
@@ -451,7 +451,7 @@ mkdir -p ~/.config/orbit
 cp assets/config.example.toml ~/.config/orbit/config.toml
 ```
 
-Edit themes, font size, opacity, and more. Orbit reloads config without a restart.
+Edit themes, font size, opacity, and more. Orbit reloads config without a restart. Keys: [docs — Configuration](docs/configuration.md).
 
 ### Plugins
 
@@ -460,7 +460,7 @@ mkdir -p ~/.config/orbit/plugins
 cp -R assets/plugins/* ~/.config/orbit/plugins/
 ```
 
-Or from Orbit’s home screen: **Plugins → I** to install the bundled pack. Guide: [assets/plugins/README.md](assets/plugins/README.md).
+Or from Orbit’s home screen: **Plugins → I** to install the bundled pack. Guide: [docs — Plugins](docs/plugins.md).
 
 ---
 
@@ -538,8 +538,8 @@ Still stuck? Open an issue at [github.com/marksikaundi/Orbit/issues](https://git
 
 ## Next steps
 
-- Day-to-day usage: [how-to-use.md](how-to-use.md)
-- Shortcuts, workspaces, plugins: [README.md](README.md)
+- Day-to-day usage and configuration: **[docs/](docs/README.md)**
+- Shortcuts, workspaces, plugins: [docs index](docs/README.md) · [README.md](README.md)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 **Orbit — Stay in the flow.**

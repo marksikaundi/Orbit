@@ -153,7 +153,7 @@ pub const help_rows = [_]HelpRow{
     .{ .item = .{ .keys = "ctrl+a>n", .desc = "Sequence (leader then key)" } },
     .{ .item = .{ .keys = "text: / csi: / esc:", .desc = "Send bytes to the shell" } },
     .{ .item = .{ .keys = "performable:", .desc = "Only consume the key if the action can run (e.g. copy)" } },
-    .{ .note = "Edit ~/.config/orbit/config.toml — Reload Config in the palette. See how-to-use.md" },
+    .{ .note = "Edit ~/.config/orbit/config.toml — Reload Config in the palette. User guide: docs/" },
     .{ .spacer = {} },
     .{ .item = .{ .keys = "L / Plugins", .desc = "Manage plugins: format, lint, AI, shortcuts, themes" } },
     .{ .item = .{ .keys = "I", .desc = "Install / update the bundled plugin pack" } },

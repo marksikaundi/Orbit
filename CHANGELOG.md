@@ -11,6 +11,7 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 ## [Unreleased]
 
 ### Added
+- **User docs hub** — `docs/` covers how to use and configure every feature (home, config, appearance, keybindings, palette, tabs, workspaces, search/editor, plugins, CLI/IDEs)
 - **Custom keybindings** — Ghostty-compatible `keybind = trigger=action` in `config.toml` (unbind, clear, sequences, `text:` / `csi:` / `esc:`, `performable:`, chained actions). Defaults match the previous built-in chords.
 - **IDE connect** — `orbit ide-setup` registers Orbit as the external terminal in Cursor, VS Code, VSCodium, and Windsurf, and installs an **Open in Orbit Terminal** explorer command
 - CLI flags editors already send: `--working-directory`, `-e` / `--command`, positional folder (Ghostty / Alacritty / Kitty compatible)

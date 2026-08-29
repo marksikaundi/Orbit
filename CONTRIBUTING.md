@@ -35,7 +35,7 @@ You do not need to write core terminal code to help. Useful contributions includ
 | ---- | -------- |
 | Code | Bug fixes, features, refactors aligned with the roadmap |
 | Tests | Unit tests under `src/tests/`, edge cases, regressions |
-| Docs | README, how-to-use, plugin guides, comments that clarify intent |
+| Docs | `docs/`, README, plugin guides, comments that clarify intent |
 | Plugins | Bundled plugins under `assets/plugins/` (commands, themes, shortcuts) |
 | Issues | Clear bug reports, reproductions, triage comments |
 | Design / UX | Feedback on home, palette, workspaces — keep it minimal |
@@ -96,7 +96,7 @@ Optional one-time global setup (so `orbit` / `zig build run` work from any direc
 zig build setup
 ```
 
-See [INSTALL.md](INSTALL.md) for OS-specific download/install steps, and [how-to-use.md](how-to-use.md) for detached launch, config paths, and day-to-day usage.
+See [INSTALL.md](INSTALL.md) for OS-specific download/install steps, and **[docs/](docs/README.md)** for detached launch, config paths, and day-to-day usage.
 
 ### Useful build steps
 
@@ -289,7 +289,7 @@ Guidelines:
 - [ ] `zig build test` passes
 - [ ] `zig build security-scan` passes (no HIGH/CRITICAL findings)
 - [ ] New behavior has tests (or a clear reason why not)
-- [ ] Docs updated if user-facing behavior changed (`README.md`, `how-to-use.md`, plugin README)
+- [ ] Docs updated if user-facing behavior changed (`docs/`, `README.md`, plugin README)
 - [ ] `[Unreleased]` section in `CHANGELOG.md` updated for user-visible changes
 - [ ] No unrelated formatting or drive-by edits
 - [ ] PR description explains motivation, approach, and how to verify
@@ -424,7 +424,7 @@ See [NOTICE](NOTICE) for attribution. Do not add code you are not entitled to co
 ## Getting help
 
 - Product and phase context: [roamap.md](roamap.md)
-- End-user usage: [how-to-use.md](how-to-use.md)
+- End-user usage: [docs/](docs/README.md)
 - Build and overview: [README.md](README.md)
 - Plugin authoring: [assets/plugins/README.md](assets/plugins/README.md)
 

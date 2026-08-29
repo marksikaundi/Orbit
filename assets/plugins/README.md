@@ -1,5 +1,7 @@
 # Orbit plugins — make it yours
 
+User-facing guide: **[docs/plugins.md](../../docs/plugins.md)**.
+
 Drop a folder under `~/.config/orbit/plugins/<name>/` with a `plugin.toml`.
 Orbit loads it on start and when you press **R** in the Plugins panel (home → **L**).
 

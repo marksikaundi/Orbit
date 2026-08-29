@@ -102,7 +102,8 @@ src/
     tests/
 
 assets/
-docs/
+docs/          user guide — how to use and configure every feature
+               (start at docs/README.md)
 
 build.zig
 
