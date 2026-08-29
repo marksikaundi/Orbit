@@ -19,7 +19,7 @@ Install first: **[INSTALL.md](../INSTALL.md)**. Then come back here.
 | Open a folder and save the layout | [Workspaces](workspaces.md) |
 | Search the screen, files, or code | [Search & editor](search-and-editor.md) |
 | Format, lint, Git, AI, custom commands | [Plugins](plugins.md) |
-| Connect Cursor / VS Code, or use CLI flags | [CLI & IDEs](cli-and-ides.md) |
+| Connect Cursor / VS Code, or use CLI flags | [CLI & IDEs](cli-and-ides.md) (`orbit --help`) |
 
 ---
 
@@ -35,7 +35,7 @@ Install first: **[INSTALL.md](../INSTALL.md)**. Then come back here.
 8. [Search & editor](search-and-editor.md) — terminal / files / code search, in-file editor
 9. [Plugins](plugins.md) — bundled pack, shortcuts, format / lint / AI, write your own
 10. [Terminal](terminal.md) — PTY, scrollback, selection, clipboard, `vi` / `less`
-11. [CLI & IDEs](cli-and-ides.md) — `orbit` flags, `ide-setup`, opening a path
+11. [CLI & IDEs](cli-and-ides.md) — `orbit --help`, flags, `ide-setup`, developer commands
 
 ---
 

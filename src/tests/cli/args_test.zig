@@ -61,9 +61,30 @@ test "help and version" {
     defer h.deinit(std.testing.allocator);
     try std.testing.expectEqual(args.Action.help, h.action);
 
+    var dash_h = try args.parse(std.testing.allocator, &.{ "orbit", "-h" });
+    defer dash_h.deinit(std.testing.allocator);
+    try std.testing.expectEqual(args.Action.help, dash_h.action);
+
+    var sub = try args.parse(std.testing.allocator, &.{ "orbit", "help" });
+    defer sub.deinit(std.testing.allocator);
+    try std.testing.expectEqual(args.Action.help, sub.action);
+    try std.testing.expect(sub.cwd == null);
+
     var v = try args.parse(std.testing.allocator, &.{ "orbit", "-V" });
     defer v.deinit(std.testing.allocator);
     try std.testing.expectEqual(args.Action.version, v.action);
+}
+
+test "help catalog covers launch, developer, and plugin commands" {
+    try std.testing.expect(std.mem.indexOf(u8, args.help_text, "orbit help") != null);
+    try std.testing.expect(std.mem.indexOf(u8, args.help_text, "zig build run") != null);
+    try std.testing.expect(std.mem.indexOf(u8, args.help_text, "zig build test") != null);
+    try std.testing.expect(std.mem.indexOf(u8, args.help_text, "zig build security-scan") != null);
+    try std.testing.expect(std.mem.indexOf(u8, args.help_text, "ide-setup") != null);
+    try std.testing.expect(std.mem.indexOf(u8, args.help_text, "ORBIT_FOREGROUND") != null);
+    try std.testing.expect(std.mem.indexOf(u8, args.help_text, "git status") != null);
+    try std.testing.expect(std.mem.indexOf(u8, args.help_text, "Ctrl+Shift+P") != null);
+    try std.testing.expect(std.mem.indexOf(u8, args.help_text, "Format: Document") != null);
 }
 
 test "ide-setup with editor" {

@@ -22,7 +22,7 @@ mkdir -p "$LOG_DIR"
 
 # CLI that prints to this terminal (not a GUI window).
 case "${1:-}" in
-  ide-setup|--ide-setup|-h|--help|-V|--version)
+  help|ide-setup|--ide-setup|-h|--help|-V|--version)
     exec "$EXE" "$@"
     ;;
 esac

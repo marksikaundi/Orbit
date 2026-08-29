@@ -141,6 +141,8 @@ zig build security-scan
 After `zig build setup`, open a new terminal tab:
 
 ```bash
+--help             # all commands and how to use them
+orbit --help       # same catalog
 orbit              # launch from any folder
 zig build run      # same — builds & launches detached
 ```

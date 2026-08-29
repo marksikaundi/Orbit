@@ -14,6 +14,7 @@ $foreground = $env:ORBIT_FOREGROUND -eq "1"
 $cli = $false
 if ($args.Count -gt 0) {
     switch ($args[0]) {
+        "help" { $cli = $true }
         "ide-setup" { $cli = $true }
         "--ide-setup" { $cli = $true }
         "-h" { $cli = $true }

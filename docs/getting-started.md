@@ -11,6 +11,8 @@ If Orbit is not installed yet, see **[INSTALL.md](../INSTALL.md)**.
 After `zig build setup` (once, from the Orbit repo), open a new terminal tab:
 
 ```bash
+--help                # all commands and how to use them
+orbit --help          # same catalog
 orbit                 # detached — prints “Orbit terminal opened successfully”
 zig build run         # same, from any folder (unless that folder has its own build.zig)
 ```

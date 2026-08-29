@@ -50,7 +50,7 @@ fi
 LAUNCH="$ROOT/scripts/launch-detached.sh"
 if [[ -x "$LAUNCH" ]]; then
   case "${1:-}" in
-    ide-setup|--ide-setup|-h|--help|-V|--version)
+    help|ide-setup|--ide-setup|-h|--help|-V|--version)
       export ORBIT_FOREGROUND=1
       ;;
   esac
@@ -74,7 +74,7 @@ if [[ "${ORBIT_FOREGROUND:-}" == "1" ]]; then
   exec "$EXE" "$@"
 fi
 case "${1:-}" in
-  ide-setup|--ide-setup|-h|--help|-V|--version)
+  help|ide-setup|--ide-setup|-h|--help|-V|--version)
     exec "$EXE" "$@"
     ;;
 esac
@@ -138,6 +138,8 @@ echo "  config      : $CONF"
 echo "  command     : $LAUNCHER"
 echo ""
 echo "Open a new terminal tab/window (or: source $SHELL_DST), then from any directory:"
+echo "  --help           # all commands and how to use them"
+echo "  orbit --help     # same catalog"
 echo "  zig build run    # build & launch Orbit"
 echo "  orbit            # launch the installed binary"
 echo ""

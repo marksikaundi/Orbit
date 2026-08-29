@@ -47,6 +47,25 @@ if [ -d "$_orbit_local_bin" ]; then
 fi
 unset _orbit_local_bin
 
+# Command catalog: `orbit --help`, `orbit help`, or a bare `--help` at the prompt.
+# Bare `--help` does not intercept `git --help` / `ls --help`.
+orbit-help() {
+  if command -v orbit >/dev/null 2>&1; then
+    command orbit --help
+    return $?
+  fi
+  echo "orbit: not on PATH. From the Orbit repo run: zig build setup" >&2
+  return 1
+}
+
+if [ -n "${ZSH_VERSION:-}" ]; then
+  # Function works in scripts and interactive shells; alias covers interactive too.
+  --help() { orbit-help; }
+  alias -- --help='orbit-help' 2>/dev/null || true
+elif [ -n "${BASH_VERSION:-}" ]; then
+  alias -- --help='orbit-help' 2>/dev/null || true
+fi
+
 zig() {
   if [ "${1:-}" != "build" ]; then
     command zig "$@"

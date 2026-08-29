@@ -142,6 +142,8 @@ zig build setup
 Open a **new** terminal tab, then from any directory:
 
 ```bash
+--help            # all commands and how to use them
+orbit --help      # same catalog
 orbit
 # or
 zig build run
@@ -230,6 +232,8 @@ zig build setup
 Open a new terminal, then:
 
 ```bash
+--help            # all commands and how to use them
+orbit --help
 orbit
 ```
 
@@ -320,6 +324,7 @@ This writes `%APPDATA%\orbit\source_root`, installs `orbit.cmd` under `%LOCALAPP
 Open a **new** PowerShell or Command Prompt, then:
 
 ```powershell
+orbit --help      # all commands and how to use them
 orbit
 ```
 
@@ -421,6 +426,8 @@ This:
 Then open a **new** tab (or `source ~/.config/orbit/shell/orbit.sh`):
 
 ```bash
+--help             # all commands, zig build steps, plugins, shortcuts
+orbit --help       # same catalog
 orbit              # detached launch
 zig build run      # same, from almost any folder
 ORBIT_FOREGROUND=1 orbit   # logs in this terminal

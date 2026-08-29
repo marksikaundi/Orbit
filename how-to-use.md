@@ -30,6 +30,8 @@ zig build setup
 Then open a new terminal tab (or `source ~/.config/orbit/shell/orbit.sh`).
 
 ```bash
+--help          # all commands, flags, zig build steps, plugins
+orbit --help    # same
 zig build run   # from anywhere — builds & launches Orbit (detached)
 orbit           # launch Orbit (detached); shell returns immediately
 ```

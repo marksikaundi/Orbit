@@ -45,6 +45,17 @@ pub const HelpRow = union(enum) {
 
 /// Full keyboard / usage reference (scrollable in the Help overlay).
 pub const help_rows = [_]HelpRow{
+    .{ .heading = "CLI (new terminal after setup)" },
+    .{ .item = .{ .keys = "--help", .desc = "Print every command and how to use it" } },
+    .{ .item = .{ .keys = "orbit --help", .desc = "Same catalog from any folder" } },
+    .{ .item = .{ .keys = "orbit help", .desc = "Same catalog (subcommand)" } },
+    .{ .item = .{ .keys = "orbit --version", .desc = "Print the Orbit version" } },
+    .{ .item = .{ .keys = "orbit ide-setup", .desc = "Register as the external terminal in Cursor / VS Code" } },
+    .{ .item = .{ .keys = "zig build run", .desc = "Build and launch (any folder after setup)" } },
+    .{ .item = .{ .keys = "zig build test", .desc = "Run unit tests" } },
+    .{ .item = .{ .keys = "zig build security-scan", .desc = "Scan the repo for secrets / injection" } },
+    .{ .spacer = {} },
+
     .{ .heading = "Home screen" },
     .{ .item = .{ .keys = "Enter / 1", .desc = "Open a new terminal tab" } },
     .{ .item = .{ .keys = "O / 2", .desc = "Open a folder as workspace" } },

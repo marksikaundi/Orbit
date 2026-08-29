@@ -2,10 +2,16 @@
 
 The `orbit` binary launches the app, opens a folder or file, runs a command, or registers itself as an **external** terminal in editors.
 
+After `zig build setup`, open a **new** terminal and run:
+
 ```bash
-orbit --help
+--help              # shell helper — full catalog
+orbit --help        # same
+orbit help          # same
 orbit --version
 ```
+
+That catalog lists every launch flag, `zig build` step, environment variable, in-app shortcut, plugin command, and developer shell command.
 
 ---
 
@@ -13,6 +19,7 @@ orbit --version
 
 ```text
 orbit [path] [options]
+orbit help | --help | -h
 orbit ide-setup [--editor cursor|code|codium|windsurf|all]
 ```
 
@@ -27,7 +34,7 @@ orbit ide-setup [--editor cursor|code|codium|windsurf|all]
 | `--` | Rest of argv is the command |
 | `--wait-after-command` | Keep a shell open after `-e` exits |
 | `-t`, `--title TITLE` | First tab title |
-| `-h`, `--help` | Help |
+| `help`, `-h`, `--help` | Full command catalog |
 | `-V`, `--version` | Version |
 
 `=` form works: `--working-directory=/tmp`.
@@ -44,6 +51,40 @@ orbit app.js
 macOS: `open -a Orbit.app /folder` opens a shell in that folder (`zig build` / `zig build setup` must leave `Orbit.app` resolvable; copy to `~/Applications` if needed).
 
 Detached vs foreground: [Getting started](getting-started.md#launch).
+
+---
+
+## Developer commands
+
+These work from the Orbit repo, and from **any folder** after `zig build setup` (the shell helper forwards `zig build …` to the Orbit tree unless the current directory has its own `build.zig`).
+
+| Command | What it does |
+| --- | --- |
+| `zig build` | Compile `zig-out/bin/orbit` |
+| `zig build run` | Build and launch detached |
+| `zig build run-fg` | Build and launch in the foreground (logs here) |
+| `zig build setup` | Install global `orbit` + `--help` shell helper |
+| `zig build test` | Unit tests |
+| `zig build security-scan` | Scan `src/`, `scripts/`, plugins for secrets / injection |
+| `zig build -Doptimize=ReleaseSafe` | Optimized build |
+| `./scripts/bump-version.sh patch` | Bump `VERSION` (`minor` / `major` also) |
+
+Useful **inside a shell tab** (also on the command palette if the bundled plugins are installed):
+
+```bash
+git status
+git diff
+git log --oneline -20
+git branch -vv
+git pull
+git push
+pwd
+ls -la
+```
+
+Palette: **Git: Status**, **Dev: Tree**, **Format: Document** (`Ctrl+Shift+I`), **Lint: File** (`Ctrl+Shift+;`), **AI: Explain** (`Ctrl+Shift+A`). AI never auto-runs.
+
+Environment: `ORBIT_FOREGROUND=1` (live logs), `ORBIT_SOURCE_ROOT`, `ORBIT_AI_BIN`, `ORBIT_AI_MODEL`. Full list: `orbit --help`.
 
 ---
 
