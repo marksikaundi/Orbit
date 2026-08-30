@@ -150,7 +150,7 @@ Themes: `orbit-dark`, `orbit-light`, `nord`, `dracula`, `gruvbox-dark`, `solariz
 
 ---
 
-## Plugin shortcuts
+## Plugins shortcut
 
 In any `plugin.toml`:
 
