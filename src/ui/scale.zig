@@ -21,9 +21,18 @@ pub fn scaled(base: i32, scale: f32) i32 {
 
 /// Overlay panel width: grows with cell size and screen, capped ~48% of framebuffer.
 pub fn panelWidth(fb_w: i32, cw: i32, preferred_cols: i32, min_px: i32) i32 {
+    return panelWidthAt(fb_w, cw, preferred_cols, min_px, 12, 25);
+}
+
+/// Wider overlay (master-detail). Caps ~64% of framebuffer.
+pub fn panelWidthWide(fb_w: i32, cw: i32, preferred_cols: i32, min_px: i32) i32 {
+    return panelWidthAt(fb_w, cw, preferred_cols, min_px, 16, 25);
+}
+
+fn panelWidthAt(fb_w: i32, cw: i32, preferred_cols: i32, min_px: i32, frac_n: i32, frac_d: i32) i32 {
     const margin = @max(cw * 3, 24);
     const preferred = @max(cw * preferred_cols, min_px);
-    const max_by_frac = @divTrunc(fb_w * 12, 25); // ~48%
+    const max_by_frac = @divTrunc(fb_w * frac_n, frac_d);
     const max_w = fb_w - margin * 2;
     // Prefer a comfortable column count, but allow growth toward the fraction cap.
     const target = @max(preferred, @min(max_by_frac, cw * (preferred_cols + 12)));
@@ -45,4 +54,14 @@ test "panelWidth stays within framebuffer" {
     try std.testing.expect(w < fb_w);
     try std.testing.expect(w >= 560);
     try std.testing.expect(w <= @divTrunc(fb_w * 12, 25) + 1);
+}
+
+test "panelWidthWide is roomier than panelWidth" {
+    const cw: i32 = 16;
+    const fb_w: i32 = 2400;
+    const narrow = panelWidth(fb_w, cw, 52, 560);
+    const wide = panelWidthWide(fb_w, cw, 68, 760);
+    try std.testing.expect(wide >= narrow);
+    try std.testing.expect(wide < fb_w);
+    try std.testing.expect(wide <= @divTrunc(fb_w * 16, 25) + 1);
 }
