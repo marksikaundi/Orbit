@@ -1,4 +1,4 @@
-# How to use Orbit
+# How to use Orbit Terminal
 
 The full user guide is in **[docs/](docs/README.md)** — how to use every feature and how to configure it.
 
