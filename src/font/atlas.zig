@@ -22,11 +22,12 @@ pub const Atlas = struct {
         self.* = undefined;
     }
 
-    pub fn create(allocator: std.mem.Allocator, pixel_size: u32) !Atlas {
-        const px = @max(10, @min(64, pixel_size));
+    pub fn create(allocator: std.mem.Allocator, pixel_size: u32, font_path: ?[:0]const u8) !Atlas {
+        // Allow larger atlases so UI can stay sharp without stretch-scaling glyphs.
+        const px = @max(10, @min(96, pixel_size));
         if (builtin.os.tag == .macos or builtin.os.tag == .linux or builtin.os.tag == .windows) {
             const ttf = @import("ttf_atlas.zig");
-            if (ttf.build(allocator, px)) |atlas| return atlas else |_| {}
+            if (ttf.build(allocator, px, font_path)) |atlas| return atlas else |_| {}
         }
         return createBitmapScaled(allocator, px);
     }

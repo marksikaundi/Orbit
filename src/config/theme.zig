@@ -25,6 +25,8 @@ pub const builtin_names = [_][]const u8{
     "dracula",
     "gruvbox-dark",
     "solarized-dark",
+    "catppuccin-mocha",
+    "tokyo-night",
 };
 
 pub const orbit_dark: Theme = .{
@@ -183,12 +185,66 @@ pub const solarized_dark: Theme = .{
     },
 };
 
+pub const tokyo_night: Theme = .{
+    .name = "tokyo-night",
+    .foreground = Color.rgb(169, 177, 214),
+    .background = Color.rgb(26, 27, 38),
+    .cursor = Color.rgb(122, 162, 247),
+    .selection_bg = Color.rgb(51, 52, 76),
+    .ansi = .{
+        Color.rgb(21, 22, 30),
+        Color.rgb(247, 118, 142),
+        Color.rgb(158, 206, 106),
+        Color.rgb(224, 175, 104),
+        Color.rgb(122, 162, 247),
+        Color.rgb(187, 154, 247),
+        Color.rgb(125, 207, 255),
+        Color.rgb(169, 177, 214),
+        Color.rgb(86, 95, 137),
+        Color.rgb(247, 118, 142),
+        Color.rgb(158, 206, 106),
+        Color.rgb(224, 175, 104),
+        Color.rgb(122, 162, 247),
+        Color.rgb(187, 154, 247),
+        Color.rgb(125, 207, 255),
+        Color.rgb(192, 202, 245),
+    },
+};
+
+pub const catppuccin_mocha: Theme = .{
+    .name = "catppuccin-mocha",
+    .foreground = Color.rgb(205, 214, 244),
+    .background = Color.rgb(30, 30, 46),
+    .cursor = Color.rgb(245, 224, 220),
+    .selection_bg = Color.rgb(69, 71, 90),
+    .ansi = .{
+        Color.rgb(69, 71, 90),
+        Color.rgb(243, 139, 168),
+        Color.rgb(166, 227, 161),
+        Color.rgb(249, 226, 175),
+        Color.rgb(137, 180, 250),
+        Color.rgb(203, 166, 247),
+        Color.rgb(148, 226, 213),
+        Color.rgb(186, 194, 222),
+        Color.rgb(88, 91, 112),
+        Color.rgb(243, 139, 168),
+        Color.rgb(166, 227, 161),
+        Color.rgb(249, 226, 175),
+        Color.rgb(137, 180, 250),
+        Color.rgb(203, 166, 247),
+        Color.rgb(148, 226, 213),
+        Color.rgb(166, 173, 200),
+    },
+};
+
 pub fn byName(name: []const u8) Theme {
     if (std.mem.eql(u8, name, "orbit-light") or std.mem.eql(u8, name, "light")) return orbit_light;
     if (std.mem.eql(u8, name, "nord")) return nord;
     if (std.mem.eql(u8, name, "dracula")) return dracula;
     if (std.mem.eql(u8, name, "gruvbox-dark") or std.mem.eql(u8, name, "gruvbox")) return gruvbox_dark;
     if (std.mem.eql(u8, name, "solarized-dark") or std.mem.eql(u8, name, "solarized")) return solarized_dark;
+    if (std.mem.eql(u8, name, "tokyo-night") or std.mem.eql(u8, name, "tokyonight") or std.mem.eql(u8, name, "tokyo")) return tokyo_night;
+    if (std.mem.eql(u8, name, "catppuccin-mocha") or std.mem.eql(u8, name, "catppuccin") or std.mem.eql(u8, name, "mocha")) return catppuccin_mocha;
     if (std.mem.eql(u8, name, "orbit-dark") or std.mem.eql(u8, name, "dark")) return orbit_dark;
     return orbit_dark;
 }
@@ -201,6 +257,10 @@ pub fn indexOfName(name: []const u8) usize {
         if (std.mem.eql(u8, name, "gruvbox") and std.mem.eql(u8, n, "gruvbox-dark")) return i;
         if (std.mem.eql(u8, name, "solarized") and std.mem.eql(u8, n, "solarized-dark")) return i;
         if (std.mem.eql(u8, name, "dark") and std.mem.eql(u8, n, "orbit-dark")) return i;
+        if (std.mem.eql(u8, name, "tokyo") and std.mem.eql(u8, n, "tokyo-night")) return i;
+        if (std.mem.eql(u8, name, "tokyonight") and std.mem.eql(u8, n, "tokyo-night")) return i;
+        if (std.mem.eql(u8, name, "catppuccin") and std.mem.eql(u8, n, "catppuccin-mocha")) return i;
+        if (std.mem.eql(u8, name, "mocha") and std.mem.eql(u8, n, "catppuccin-mocha")) return i;
     }
     return 0;
 }

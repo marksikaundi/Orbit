@@ -50,3 +50,12 @@ test "parseShortcut cmd+alt+f1" {
     try std.testing.expect(b.alt);
     try std.testing.expectEqualStrings("f1", b.key_name);
 }
+
+test "plugin kind parse aliases" {
+    try std.testing.expectEqual(types.PluginKind.format, types.PluginKind.parse("formatter"));
+    try std.testing.expectEqual(types.PluginKind.lint, types.PluginKind.parse("linter"));
+    try std.testing.expectEqual(types.PluginKind.ai, types.PluginKind.parse("assistant"));
+    try std.testing.expectEqual(types.PluginKind.theme, types.PluginKind.parse("themes"));
+    try std.testing.expectEqualStrings("FMT", types.PluginKind.format.badge());
+    try std.testing.expectEqualStrings("AI", types.PluginKind.ai.badge());
+}

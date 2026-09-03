@@ -15,10 +15,11 @@ Orbit is currently distributed as **source**. You clone the repository, install 
 5. [Windows](#windows)
 6. [Verify the install](#verify-the-install)
 7. [Optional: global launcher](#optional-global-launcher)
-8. [Optional: config & plugins](#optional-config--plugins)
-9. [Update Orbit](#update-orbit)
-10. [Uninstall](#uninstall)
-11. [Troubleshooting](#troubleshooting)
+8. [Optional: connect to Cursor / VS Code](#optional-connect-to-cursor--vs-code)
+9. [Optional: config & plugins](#optional-config--plugins)
+10. [Update Orbit](#update-orbit)
+11. [Uninstall](#uninstall)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -141,6 +142,8 @@ zig build setup
 Open a **new** terminal tab, then from any directory:
 
 ```bash
+--help            # all commands and how to use them
+orbit --help      # same catalog
 orbit
 # or
 zig build run
@@ -229,6 +232,8 @@ zig build setup
 Open a new terminal, then:
 
 ```bash
+--help            # all commands and how to use them
+orbit --help
 orbit
 ```
 
@@ -319,6 +324,7 @@ This writes `%APPDATA%\orbit\source_root`, installs `orbit.cmd` under `%LOCALAPP
 Open a **new** PowerShell or Command Prompt, then:
 
 ```powershell
+orbit --help      # all commands and how to use them
 orbit
 ```
 
@@ -420,12 +426,26 @@ This:
 Then open a **new** tab (or `source ~/.config/orbit/shell/orbit.sh`):
 
 ```bash
+--help             # all commands, zig build steps, plugins, shortcuts
+orbit --help       # same catalog
 orbit              # detached launch
 zig build run      # same, from almost any folder
 ORBIT_FOREGROUND=1 orbit   # logs in this terminal
 ```
 
-Details: [how-to-use.md](how-to-use.md).
+Details: [docs — Getting started](docs/getting-started.md).
+
+---
+
+## Optional: connect to Cursor / VS Code
+
+Orbit is added as the **external** terminal only. The built-in panel (`` Ctrl+` `` / `` Cmd+` ``) is not replaced.
+
+```bash
+orbit ide-setup
+```
+
+Reload the editor. Full steps, including a manual JSON paste that does not touch integrated profiles: [docs — CLI & IDEs](docs/cli-and-ides.md#connect-to-cursor-vs-code-and-other-ides).
 
 ---
 
@@ -438,7 +458,7 @@ mkdir -p ~/.config/orbit
 cp assets/config.example.toml ~/.config/orbit/config.toml
 ```
 
-Edit themes, font size, opacity, and more. Orbit reloads config without a restart.
+Edit themes, font size, opacity, and more. Orbit reloads config without a restart. Keys: [docs — Configuration](docs/configuration.md).
 
 ### Plugins
 
@@ -447,7 +467,7 @@ mkdir -p ~/.config/orbit/plugins
 cp -R assets/plugins/* ~/.config/orbit/plugins/
 ```
 
-Or from Orbit’s home screen: **Plugins → I** to install the bundled pack. Guide: [assets/plugins/README.md](assets/plugins/README.md).
+Or from Orbit’s home screen: **Plugins → I** to install the bundled pack. Guide: [docs — Plugins](docs/plugins.md).
 
 ---
 
@@ -525,8 +545,8 @@ Still stuck? Open an issue at [github.com/marksikaundi/Orbit/issues](https://git
 
 ## Next steps
 
-- Day-to-day usage: [how-to-use.md](how-to-use.md)
-- Shortcuts, workspaces, plugins: [README.md](README.md)
+- Day-to-day usage and configuration: **[docs/](docs/README.md)**
+- Shortcuts, workspaces, plugins: [docs index](docs/README.md) · [README.md](README.md)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 **Orbit — Stay in the flow.**

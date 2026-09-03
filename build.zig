@@ -48,6 +48,10 @@ pub fn build(b: *std.Build) void {
             .file = b.path("src/platform/macos_icon.m"),
             .flags = &.{ "-fobjc-arc", "-fno-sanitize=undefined" },
         });
+        root_module.addCSourceFile(.{
+            .file = b.path("src/platform/macos_open.m"),
+            .flags = &.{ "-fobjc-arc", "-fno-sanitize=undefined" },
+        });
     } else if (target.result.os.tag == .windows) {
         root_module.addIncludePath(b.path("vendor/glad"));
         root_module.addCSourceFile(.{
@@ -214,6 +218,10 @@ pub fn build(b: *std.Build) void {
         test_module.linkFramework("CoreVideo", .{});
         test_module.addCSourceFile(.{
             .file = b.path("src/platform/macos_icon.m"),
+            .flags = &.{ "-fobjc-arc", "-fno-sanitize=undefined" },
+        });
+        test_module.addCSourceFile(.{
+            .file = b.path("src/platform/macos_open.m"),
             .flags = &.{ "-fobjc-arc", "-fno-sanitize=undefined" },
         });
         test_module.linkFramework("AppKit", .{});

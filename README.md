@@ -19,14 +19,14 @@
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="INSTALL.md">Install guide</a> ·
-  <a href="how-to-use.md">How to use</a> ·
+  <a href="docs/README.md">Docs</a> ·
   <a href="CONTRIBUTING.md">Contribute</a> ·
   <a href="https://github.com/marksikaundi/Orbit/releases">Releases</a>
 </p>
 
 ---
 
-Orbit is a GPU-accelerated terminal inspired by Ghostty’s performance focus, with one core idea: **keep developers in the flow by organizing everything around projects.**
+Orbit is a GPU accelerated terminal inspired by Ghostty’s performance focus, with one core idea: **keep developers in the flow by organizing everything around projects.**
 
 Unlike traditional terminals that only launch shells, Orbit remembers workspaces, restores sessions, and stays out of your way.
 
@@ -77,12 +77,13 @@ Everything revolves around the developer’s workflow — Backend, Frontend, Pro
 - POSIX PTY (Linux / macOS) and ConPTY (Windows)
 - Full ANSI parsing — CSI, OSC, SGR, DEC, DCS, UTF-8
 - Colors, cursor, scrolling, selection, clipboard
+- **Syntax-highlighted file editor** (JS, Python, Java, Zig, and more) with autocomplete and short docs
 - Tabs, split panes, search, themes, transparency
-- TOML config with **live reload** (no restart)
+- TOML config with **live reload** and **Ghostty-compatible keybinds** (`keybind = trigger=action`)
 
 ### Orbit Workspaces
 
-Projects are first-class. Each workspace can remember:
+Projects are first class. Each workspace can remember:
 
 | Remembers | Examples |
 | :-------- | :------- |
@@ -94,16 +95,16 @@ Projects are first-class. Each workspace can remember:
 ### Extensibility
 
 - **Command palette** — jump to any action fast
-- **Plugin system** — commands, themes, custom shortcuts, hooks
-- **Optional AI** (Phase 7) — explain errors & suggest commands; never executes automatically
+- **Plugin system** — commands, themes, shortcuts, plus format / lint / AI tools you own
+- **Optional AI** — a plugin that runs *your* CLI (Ollama or `ORBIT_AI_BIN`); never executes automatically
 
 ---
 
 ## Status
 
-**Phases 1–6 are implemented** — terminal foundations through the command palette, plus a manifest-based plugin system (commands, themes, custom shortcuts, hooks).
+**Phases 1–7 are implemented** — terminal foundations through the command palette, a plugin system you own (commands, themes, format, lint, AI tools), and an optional local AI plugin that never auto-runs.
 
-Next up: optional AI assistant (**Phase 7**). Full detail in [roamap.md](roamap.md).
+Full detail in [roamap.md](roamap.md).
 
 | Phase | Focus | |
 | :---: | :---- | :-: |
@@ -113,7 +114,7 @@ Next up: optional AI assistant (**Phase 7**). Full detail in [roamap.md](roamap.
 | 4 | Orbit Workspaces | done |
 | 5 | Command palette | done |
 | 6 | Plugin system | done |
-| 7 | Optional AI assistant | next |
+| 7 | Optional AI assistant (plugin; local CLI) | done |
 
 ---
 
@@ -140,6 +141,8 @@ zig build security-scan
 After `zig build setup`, open a new terminal tab:
 
 ```bash
+--help             # all commands and how to use them
+orbit --help       # same catalog
 orbit              # launch from any folder
 zig build run      # same — builds & launches detached
 ```
@@ -150,6 +153,14 @@ Both print `Orbit terminal opened successfully` and return to your prompt.
 ORBIT_FOREGROUND=1 orbit   # live logs in this terminal (Unix)
 # Windows:  $env:ORBIT_FOREGROUND=1; orbit
 ```
+
+Connect Orbit as an **external** terminal (the editor’s built-in panel stays):
+
+```bash
+orbit ide-setup          # Cursor, VS Code, and others it finds
+```
+
+Details: [docs — CLI & IDEs](docs/cli-and-ides.md).
 
 Optional config:
 
@@ -165,22 +176,43 @@ Copy-Item assets\config.example.toml "$env:APPDATA\orbit\config.toml"
 
 > **Windows:** native ConPTY build is supported — see [INSTALL.md § Windows](INSTALL.md#windows). WSL2 remains an alternative.
 
-Day-to-day usage: [how-to-use.md](how-to-use.md).
+Day-to-day usage: **[docs/](docs/README.md)** (how to use and configure every feature).
 
 ---
 
 ## Configuration
 
-Orbit watches config changes and reloads automatically — no restart required.
+Orbit watches config changes and reloads automatically — no restart required. Full key list: [docs — Configuration](docs/configuration.md).
 
 ```toml
-font = "JetBrains Mono"
-font_size = 14
-theme = "Orbit Dark"
+[window]
+look = "comfortable"
 opacity = 0.95
-cursor = "beam"
-padding = 10
+
+[theme]
+name = "catppuccin-mocha"
+
+[terminal]
+font_face = "jetbrains"
+font_size = 14
+padding_x = 16
+padding_y = 10
+line_height = 1.12
+prompt = "ghostty"
+cursor_style = "bar"
 ```
+
+### Custom keybindings
+
+Ghostty-compatible `keybind = trigger=action` in the same file. Defaults keep the table below; overlay, unbind, or `keybind = clear` and start from scratch.
+
+```toml
+keybind = ctrl+k=reload_config
+keybind = performable:ctrl+c=copy_to_clipboard
+keybind = ctrl+a>n=new_tab
+```
+
+See [docs — Keybindings](docs/keybindings.md) and [Ghostty keybindings](https://ghostty.org/docs/config/keybind).
 
 Workspaces live in `~/.config/orbit/workspaces/<name>.toml`.
 
@@ -223,7 +255,7 @@ cp -R assets/plugins/* ~/.config/orbit/plugins/
 # or: home → Plugins → I
 ```
 
-Then **R** in the Plugins panel (or restart). Commands and themes show up in the palette.
+Then **R** in the Plugins panel (or restart). Commands, themes, format, lint, and AI tools show up in the palette.
 
 Customize shortcuts in any `plugin.toml`:
 
@@ -233,7 +265,7 @@ shortcut = "ctrl+shift+g"
 [[bindings]]
 ```
 
-Start with the bundled **`keys`** plugin → [`assets/plugins/README.md`](assets/plugins/README.md).
+Format / lint / AI are plugins you own — edit `run.sh` / `ask.sh` under `~/.config/orbit/plugins/`. Guide: [docs — Plugins](docs/plugins.md).
 
 ---
 
@@ -325,6 +357,7 @@ See [roamap.md](roamap.md) for full phase detail · [CHANGELOG.md](CHANGELOG.md)
 src/          app, renderer, parser, terminal, workspace, config,
               platform, window, pty, font, clipboard, ui, plugins, tests
 assets/       icons, config example, plugins, shell hooks
+docs/         user guide — how to use and configure every feature
 scripts/      setup, launch, macOS bundle, version bump
 build.zig
 ```
@@ -336,6 +369,8 @@ build.zig
 Bug fixes, tests, docs, plugins, and features that fit Orbit’s design principles are welcome.
 
 → **[CONTRIBUTING.md](CONTRIBUTING.md)** — setup, coding standards, tests, commits, and PRs.
+
+→ **[SECURITY.md](.github/SECURITY.md)** — how to report vulnerabilities privately.
 
 Architecture feedback and roadmap discussion: [roamap.md](roamap.md).
 

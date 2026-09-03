@@ -70,6 +70,7 @@ Shell:
 
 Configuration:
 - TOML
+- Ghostty-compatible `keybind = trigger=action`
 
 Testing:
 - Zig Test
@@ -101,7 +102,8 @@ src/
     tests/
 
 assets/
-docs/
+docs/          user guide — how to use and configure every feature
+               (start at docs/README.md)
 
 build.zig
 
@@ -364,6 +366,8 @@ Commands
 
 Themes
 
+Format / lint / AI tools (user-owned `[tool]`)
+
 Renderer hooks
 
 Workspace hooks
@@ -372,15 +376,13 @@ Lifecycle
 
 ---
 
-## Phase 7
+## Phase 7 ✅
 
-AI Assistant
+AI Assistant (plugin)
 
 Optional
 
-Offline model
-
-Cloud providers
+Your CLI (Ollama / `ORBIT_AI_BIN`)
 
 Explain errors
 

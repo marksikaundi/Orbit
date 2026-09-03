@@ -16,6 +16,8 @@ pub const SessionOptions = struct {
     cwd: ?[]const u8 = null,
     shell: ?[]const u8 = null,
     env: []const []const u8 = &.{},
+    command: []const []const u8 = &.{},
+    wait_after_command: bool = false,
 };
 
 pub const Session = struct {
@@ -31,6 +33,8 @@ pub const Session = struct {
     read_buf: [8192]u8 = undefined,
     /// False after the shell exits (`exit`, Ctrl+D, crash).
     alive: bool = true,
+    /// True after the PTY has produced any output (prompt / MOTD). Used to defer injected commands.
+    output_seen: bool = false,
     /// Pending status toast from OSC notify or notable terminal lines.
     pending_status: [96]u8 = undefined,
     pending_status_len: usize = 0,
@@ -91,6 +95,8 @@ pub const Session = struct {
             .cwd = cwd_owned,
             .shell = shell_owned,
             .env = env_refs,
+            .command = opts.command,
+            .wait_after_command = opts.wait_after_command,
         });
         errdefer pty.deinit();
 
@@ -137,14 +143,23 @@ pub const Session = struct {
         self.pty.resize(cols, rows);
     }
 
+    /// Cap PTY drain per frame so a flood (`yes`, `cat` huge file) cannot stall the UI.
+    pub const max_reads_per_tick: u8 = 8;
+
     pub fn tick(self: *Session) void {
         if (!self.alive) return;
-        // Drain all available output; shell exit surfaces as EOF.
-        while (true) {
+        // Drain a bounded amount; leftover stays in the kernel buffer for the next frame.
+        var reads: u8 = 0;
+        while (reads < max_reads_per_tick) : (reads += 1) {
             const result = self.pty.read(&self.read_buf);
             if (result.len > 0) {
+                self.output_seen = true;
                 const chunk = self.read_buf[0..result.len];
                 self.parser.feed(&self.screen, chunk);
+                if (self.parser.reply_len > 0) {
+                    self.pty.write(self.parser.reply_buf[0..self.parser.reply_len]);
+                    self.parser.reply_len = 0;
+                }
                 self.ingestForStatus(chunk);
                 if (self.parser.notify_len > 0) {
                     self.pushStatus(self.parser.notify_msg[0..self.parser.notify_len]);

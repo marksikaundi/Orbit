@@ -57,13 +57,17 @@ test "refreshTerminal empty query has no hits" {
     try std.testing.expectEqual(@as(usize, 0), s.term_count);
 }
 
-test "toggleMode switches terminal and files" {
+test "toggleMode cycles terminal, files, and code" {
     var s: Search = .{};
     s.open(std.testing.allocator, "/tmp");
     defer s.close(std.testing.allocator);
     try std.testing.expectEqual(Mode.terminal, s.mode);
     s.toggleMode();
     try std.testing.expectEqual(Mode.files, s.mode);
+    s.toggleMode();
+    try std.testing.expectEqual(Mode.code, s.mode);
+    s.toggleMode();
+    try std.testing.expectEqual(Mode.terminal, s.mode);
 }
 
 test "indexOfIgnoreCase" {
@@ -71,4 +75,50 @@ test "indexOfIgnoreCase" {
     try std.testing.expectEqual(@as(?usize, 0), search.indexOfIgnoreCase("Hello", "hello"));
     try std.testing.expectEqual(@as(?usize, 6), search.indexOfIgnoreCase("abcde Hello", "hello"));
     try std.testing.expectEqual(@as(?usize, null), search.indexOfIgnoreCase("abc", "zzz"));
+}
+
+test "refreshFiles matches names under a folder" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    {
+        const file = try tmp.dir.createFile(io, "Hello.java", .{});
+        defer file.close(io);
+        try file.writeStreamingAll(io, "class Hello {}\n");
+    }
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const n = try tmp.dir.realPath(io, &buf);
+
+    var s: Search = .{};
+    s.open(std.testing.allocator, buf[0..n]);
+    defer s.close(std.testing.allocator);
+    s.mode = .files;
+    for ("hello") |ch| s.inputChar(ch);
+    s.refreshFiles(std.testing.allocator, io);
+    try std.testing.expect(s.file_count >= 1);
+    try std.testing.expect(std.mem.indexOf(u8, s.file_hits[0], "Hello.java") != null);
+}
+
+test "refreshCode finds text inside a file" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    {
+        const file = try tmp.dir.createFile(io, "App.java", .{});
+        defer file.close(io);
+        try file.writeStreamingAll(io, "public class App {\n    System.out.println(\"hi\");\n}\n");
+    }
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const n = try tmp.dir.realPath(io, &buf);
+
+    var s: Search = .{};
+    s.open(std.testing.allocator, buf[0..n]);
+    defer s.close(std.testing.allocator);
+    s.mode = .code;
+    for ("println") |ch| s.inputChar(ch);
+    s.refreshCode(std.testing.allocator, io);
+    try std.testing.expect(s.code_count >= 1);
+    try std.testing.expectEqual(@as(usize, 1), s.code_hits[0].line);
+    try std.testing.expect(std.mem.indexOf(u8, s.code_hits[0].rel, "App.java") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.code_hits[0].snippetSlice(), "println") != null);
 }

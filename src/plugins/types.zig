@@ -1,8 +1,86 @@
-//! Plugin types — commands, themes, keybindings, hooks, lifecycle.
+//! Plugin types — commands, themes, keybindings, hooks, user-owned tools.
 
 const std = @import("std");
 const Color = @import("../terminal/cell.zig").Color;
 const Theme = @import("../config/theme.zig").Theme;
+
+pub const PluginKind = enum {
+    commands,
+    theme,
+    keys,
+    format,
+    lint,
+    ai,
+
+    pub fn parse(s: []const u8) PluginKind {
+        if (eql(s, "theme") or eql(s, "themes")) return .theme;
+        if (eql(s, "keys") or eql(s, "keybindings") or eql(s, "shortcuts")) return .keys;
+        if (eql(s, "format") or eql(s, "formatter") or eql(s, "fmt")) return .format;
+        if (eql(s, "lint") or eql(s, "linter") or eql(s, "lints")) return .lint;
+        if (eql(s, "ai") or eql(s, "assistant")) return .ai;
+        return .commands;
+    }
+
+    pub fn label(self: PluginKind) []const u8 {
+        return switch (self) {
+            .commands => "commands",
+            .theme => "theme",
+            .keys => "keys",
+            .format => "format",
+            .lint => "lint",
+            .ai => "ai",
+        };
+    }
+
+    pub fn badge(self: PluginKind) []const u8 {
+        return switch (self) {
+            .commands => "CMD",
+            .theme => "THEME",
+            .keys => "KEYS",
+            .format => "FMT",
+            .lint => "LINT",
+            .ai => "AI",
+        };
+    }
+};
+
+pub const StdinSource = enum {
+    none,
+    buffer,
+    selection,
+
+    pub fn parse(s: []const u8) StdinSource {
+        if (eql(s, "buffer") or eql(s, "file") or eql(s, "stdin")) return .buffer;
+        if (eql(s, "selection") or eql(s, "sel")) return .selection;
+        return .none;
+    }
+};
+
+pub const StdoutMode = enum {
+    discard,
+    replace,
+    insert,
+    overlay,
+    status,
+
+    pub fn parse(s: []const u8) StdoutMode {
+        if (eql(s, "replace") or eql(s, "rewrite")) return .replace;
+        if (eql(s, "insert")) return .insert;
+        if (eql(s, "status")) return .status;
+        if (eql(s, "discard") or eql(s, "none")) return .discard;
+        return .overlay;
+    }
+};
+
+pub const ParseFormat = enum {
+    none,
+    unix,
+
+    pub fn parse(s: []const u8) ParseFormat {
+        if (eql(s, "unix") or eql(s, "gcc")) return .unix;
+        return .none;
+    }
+};
 
 pub const CommandActionKind = enum {
     /// Type payload into the focused PTY (e.g. "ls\r").
@@ -13,7 +91,13 @@ pub const CommandActionKind = enum {
     theme,
     /// Open workspace picker / save — host builtins via id.
     host,
+    /// Run this plugin's `[tool]` with the user's own command/script.
+    run,
 };
+
+fn eql(a: []const u8, b: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(a, b);
+}
 
 pub const PluginCommand = struct {
     id: []u8,
@@ -80,16 +164,62 @@ pub const Hooks = struct {
     }
 };
 
+/// User-owned executable. Orbit never ships an AI/lint/format engine — it runs yours.
+pub const ToolSpec = struct {
+    command: ?[]u8 = null,
+    script: ?[]u8 = null,
+    args: [][]u8 = &.{},
+    languages: [][]u8 = &.{},
+    stdin: StdinSource = .none,
+    stdout: StdoutMode = .overlay,
+    parse: ParseFormat = .none,
+    timeout_ms: u32 = 20_000,
+    prompt: ?[]u8 = null,
+
+    pub fn hasRunner(self: *const ToolSpec) bool {
+        if (self.command) |c| {
+            if (c.len > 0) return true;
+        }
+        if (self.script) |s| {
+            if (s.len > 0) return true;
+        }
+        return false;
+    }
+
+    pub fn matchesLanguage(self: *const ToolSpec, lang: []const u8) bool {
+        if (self.languages.len == 0) return true;
+        if (lang.len == 0) return true;
+        for (self.languages) |item| {
+            if (eql(item, "*") or eql(item, "any") or eql(item, "all")) return true;
+            if (eql(item, lang)) return true;
+        }
+        return false;
+    }
+
+    pub fn deinit(self: *ToolSpec, allocator: std.mem.Allocator) void {
+        if (self.command) |s| allocator.free(s);
+        if (self.script) |s| allocator.free(s);
+        if (self.prompt) |s| allocator.free(s);
+        for (self.args) |a| allocator.free(a);
+        if (self.args.len > 0) allocator.free(self.args);
+        for (self.languages) |l| allocator.free(l);
+        if (self.languages.len > 0) allocator.free(self.languages);
+        self.* = .{};
+    }
+};
+
 pub const Plugin = struct {
     allocator: std.mem.Allocator,
     name: []u8,
     version: []u8,
     description: []u8,
     dir: []u8,
+    kind: PluginKind = .commands,
     commands: []PluginCommand,
     themes: []PluginTheme,
     bindings: []KeyBinding,
     hooks: Hooks,
+    tool: ToolSpec = .{},
     enabled: bool = true,
 
     pub fn deinit(self: *Plugin) void {
@@ -100,6 +230,7 @@ pub const Plugin = struct {
         for (self.bindings) |*b| b.deinit(self.allocator);
         if (self.bindings.len > 0) self.allocator.free(self.bindings);
         self.hooks.deinit(self.allocator);
+        self.tool.deinit(self.allocator);
         self.allocator.free(self.name);
         self.allocator.free(self.version);
         self.allocator.free(self.description);

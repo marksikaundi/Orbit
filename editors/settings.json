@@ -1,0 +1,7 @@
+{
+  // External terminal only. Do not add Orbit to terminal.integrated.profiles.
+  "terminal.external.osxExec": "Orbit.app",
+  "terminal.external.linuxExec": "orbit-ide",
+  "terminal.external.windowsExec": "orbit-ide.cmd",
+  "terminal.explorerKind": "both"
+}

@@ -35,7 +35,7 @@ You do not need to write core terminal code to help. Useful contributions includ
 | ---- | -------- |
 | Code | Bug fixes, features, refactors aligned with the roadmap |
 | Tests | Unit tests under `src/tests/`, edge cases, regressions |
-| Docs | README, how-to-use, plugin guides, comments that clarify intent |
+| Docs | `docs/`, README, plugin guides, comments that clarify intent |
 | Plugins | Bundled plugins under `assets/plugins/` (commands, themes, shortcuts) |
 | Issues | Clear bug reports, reproductions, triage comments |
 | Design / UX | Feedback on home, palette, workspaces — keep it minimal |
@@ -96,7 +96,7 @@ Optional one-time global setup (so `orbit` / `zig build run` work from any direc
 zig build setup
 ```
 
-See [INSTALL.md](INSTALL.md) for OS-specific download/install steps, and [how-to-use.md](how-to-use.md) for detached launch, config paths, and day-to-day usage.
+See [INSTALL.md](INSTALL.md) for OS-specific download/install steps, and **[docs/](docs/README.md)** for detached launch, config paths, and day-to-day usage.
 
 ### Useful build steps
 
@@ -185,7 +185,7 @@ Application → Window → Input → PTY → ANSI Parser → Screen Buffer → R
 - Match the style of neighboring Zig code (naming, indentation, error handling).
 - Prefer explicit ownership and clear error paths over clever abstractions.
 - Do not add dependencies without discussion; Orbit aims to stay lightweight.
-- Avoid breaking shell semantics: chords like plain `Ctrl+W` / `Ctrl+C` belong to the shell unless documented otherwise. Shared app shortcuts live in `src/ui/bindings.zig` — keep palette hints and real key dispatch in sync.
+- Avoid breaking shell semantics: chords like plain `Ctrl+W` / `Ctrl+C` belong to the shell unless documented otherwise. Default app chords live in `src/ui/bindings.zig`; user overlays parse in `src/config/keybind.zig`. Keep palette hints and default chords in sync.
 - Keep the default UI minimal. Prefer palette commands and config over permanent chrome.
 - Comment *why*, not *what*, when intent is non-obvious.
 - Performance matters: avoid unnecessary allocations on hot paths (input, parse, render).
@@ -289,7 +289,7 @@ Guidelines:
 - [ ] `zig build test` passes
 - [ ] `zig build security-scan` passes (no HIGH/CRITICAL findings)
 - [ ] New behavior has tests (or a clear reason why not)
-- [ ] Docs updated if user-facing behavior changed (`README.md`, `how-to-use.md`, plugin README)
+- [ ] Docs updated if user-facing behavior changed (`docs/`, `README.md`, plugin README)
 - [ ] `[Unreleased]` section in `CHANGELOG.md` updated for user-visible changes
 - [ ] No unrelated formatting or drive-by edits
 - [ ] PR description explains motivation, approach, and how to verify
@@ -343,7 +343,7 @@ Plugins are a supported extension path (Phase 6).
 
 - Bundled examples: `assets/plugins/`
 - Authoring guide: [`assets/plugins/README.md`](assets/plugins/README.md)
-- Manifest format: `plugin.toml` (commands, themes, `shortcut` / `[[bindings]]`)
+- Manifest format: `plugin.toml` (`kind`, `[tool]`, commands, themes, `shortcut` / `[[bindings]]`)
 
 When contributing a plugin:
 
@@ -383,12 +383,14 @@ Large ideas should map to a phase in [roamap.md](roamap.md) or be discussed befo
 
 ## Security
 
+How to report vulnerabilities, which versions we patch, and what is in scope is documented in **[SECURITY.md](.github/SECURITY.md)**.
+
 ### Reporting vulnerabilities
 
 If you believe you found a security vulnerability:
 
 1. **Do not** open a public issue with exploit details.
-2. Contact the maintainer privately via GitHub security advisories (if enabled) or another private channel listed on the repository.
+2. Report it privately via [GitHub security advisories](https://github.com/marksikaundi/Orbit/security/advisories/new) — see [SECURITY.md](.github/SECURITY.md).
 3. Allow reasonable time for a fix before public disclosure.
 
 ### Automated scans
@@ -422,7 +424,7 @@ See [NOTICE](NOTICE) for attribution. Do not add code you are not entitled to co
 ## Getting help
 
 - Product and phase context: [roamap.md](roamap.md)
-- End-user usage: [how-to-use.md](how-to-use.md)
+- End-user usage: [docs/](docs/README.md)
 - Build and overview: [README.md](README.md)
 - Plugin authoring: [assets/plugins/README.md](assets/plugins/README.md)
 

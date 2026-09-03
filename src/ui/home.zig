@@ -5,6 +5,7 @@ const Renderer = @import("../renderer/renderer.zig").Renderer;
 const Color = @import("../terminal/cell.zig").Color;
 const app_version = @import("../version.zig");
 const ui_scale = @import("scale.zig");
+const ui_chrome = @import("chrome.zig");
 
 pub const version = app_version.string;
 
@@ -44,12 +45,23 @@ pub const HelpRow = union(enum) {
 
 /// Full keyboard / usage reference (scrollable in the Help overlay).
 pub const help_rows = [_]HelpRow{
+    .{ .heading = "CLI (new terminal after setup)" },
+    .{ .item = .{ .keys = "--help", .desc = "Print every command and how to use it" } },
+    .{ .item = .{ .keys = "orbit --help", .desc = "Same catalog from any folder" } },
+    .{ .item = .{ .keys = "orbit help", .desc = "Same catalog (subcommand)" } },
+    .{ .item = .{ .keys = "orbit --version", .desc = "Print the Orbit version" } },
+    .{ .item = .{ .keys = "orbit ide-setup", .desc = "Register as the external terminal in Cursor / VS Code" } },
+    .{ .item = .{ .keys = "zig build run", .desc = "Build and launch (any folder after setup)" } },
+    .{ .item = .{ .keys = "zig build test", .desc = "Run unit tests" } },
+    .{ .item = .{ .keys = "zig build security-scan", .desc = "Scan the repo for secrets / injection" } },
+    .{ .spacer = {} },
+
     .{ .heading = "Home screen" },
     .{ .item = .{ .keys = "Enter / 1", .desc = "Open a new terminal tab" } },
     .{ .item = .{ .keys = "O / 2", .desc = "Open a folder as workspace" } },
     .{ .item = .{ .keys = "P / 3", .desc = "Open the command palette" } },
     .{ .item = .{ .keys = "S / 4", .desc = "Show settings / config paths" } },
-    .{ .item = .{ .keys = "L / 5", .desc = "Plugins — shortcuts, themes, commands you can edit" } },
+    .{ .item = .{ .keys = "L / 5", .desc = "Plugins — format, lint, AI, shortcuts, themes you own" } },
     .{ .item = .{ .keys = "H / 6", .desc = "Open this Help reference" } },
     .{ .item = .{ .keys = "Q / 7", .desc = "Quit Orbit" } },
     .{ .item = .{ .keys = "↑ ↓", .desc = "Move selection" } },
@@ -95,10 +107,23 @@ pub const help_rows = [_]HelpRow{
     .{ .item = .{ .keys = "Ctrl+V", .desc = "Paste (Windows/Linux)" } },
     .{ .item = .{ .keys = "Ctrl/Cmd+Shift+C / V", .desc = "Copy / paste (all platforms)" } },
     .{ .item = .{ .keys = "Right-click", .desc = "Copy / Paste context menu" } },
-    .{ .item = .{ .keys = "Cmd/Ctrl+Shift+F", .desc = "Search terminal text or workspace files" } },
-    .{ .item = .{ .keys = "Tab", .desc = "Switch Terminal / Files mode in search" } },
-    .{ .item = .{ .keys = "Up/Down Enter", .desc = "Move hits / jump or insert file path" } },
+    .{ .item = .{ .keys = "Cmd/Ctrl+Shift+F", .desc = "Search terminal, file names, or code in files" } },
+    .{ .item = .{ .keys = "Tab", .desc = "Switch Terminal / Files / Code in search" } },
+    .{ .item = .{ .keys = "Enter (Files / Code)", .desc = "Open the file in the editor (Code jumps to the line)" } },
+    .{ .item = .{ .keys = "Shift+Enter (Files)", .desc = "Insert the file path into the shell" } },
+    .{ .item = .{ .keys = "Up/Down Enter", .desc = "Move hits / jump to a terminal match" } },
     .{ .item = .{ .keys = "Esc", .desc = "Close search" } },
+    .{ .spacer = {} },
+
+    .{ .heading = "File editor" },
+    .{ .item = .{ .keys = "Palette → Open File", .desc = "Open a file with language colors, then type to edit" } },
+    .{ .item = .{ .keys = "Type / arrows", .desc = "Insert text and move the caret" } },
+    .{ .item = .{ .keys = "Autocomplete popup", .desc = "Keywords, common APIs, and names already in the file (with a short meaning)" } },
+    .{ .item = .{ .keys = "Ctrl+Space", .desc = "Show completions (Tab or Enter to insert)" } },
+    .{ .item = .{ .keys = "⌘/Ctrl+S", .desc = "Save the file" } },
+    .{ .item = .{ .keys = "⌘/Ctrl+F", .desc = "Find text in the open file (Enter next, Esc close find)" } },
+    .{ .item = .{ .keys = "⌘/Ctrl+Shift+F", .desc = "Search code across files, then Enter to open at the line" } },
+    .{ .item = .{ .keys = "Esc", .desc = "Close the editor (twice if unsaved)" } },
     .{ .spacer = {} },
 
     .{ .heading = "Workspaces" },
@@ -125,17 +150,34 @@ pub const help_rows = [_]HelpRow{
     .{ .spacer = {} },
 
     .{ .heading = "Appearance" },
-    .{ .item = .{ .keys = "S / Settings", .desc = "Theme, text color, cursor, shell (Left/Right to change)" } },
+    .{ .item = .{ .keys = "S / Settings", .desc = "Theme, look, opacity, padding, prompt, shell" } },
+    .{ .item = .{ .keys = "Left/Right", .desc = "Change the selected Appearance value" } },
+    .{ .item = .{ .keys = "Ctrl+=/-/0", .desc = "Font size up / down / reset (everywhere)" } },
     .{ .item = .{ .keys = "Ctrl+Shift+P", .desc = "Palette -> Theme: ... / Cursor: ..." } },
-    .{ .note = "Prompt text (zsh/bash) comes from your shell rc " },
+    .{ .note = "Look: compact / comfortable / airy / glass (Ghostty-style)" },
     .{ .spacer = {} },
 
-    .{ .heading = "Config & plugins" },
-    .{ .item = .{ .keys = "L / Plugins", .desc = "Manage plugins, install pack, reload" } },
-    .{ .item = .{ .keys = "config.toml", .desc = "~/.config/orbit/config.toml" } },
+    .{ .heading = "Custom keybindings" },
+    .{ .item = .{ .keys = "keybind =", .desc = "Ghostty syntax in config.toml: trigger=action" } },
+    .{ .item = .{ .keys = "ctrl+shift+t=new_tab", .desc = "Example — modifiers + key = action" } },
+    .{ .item = .{ .keys = "unbind / clear", .desc = "Remove one chord, or wipe all defaults first" } },
+    .{ .item = .{ .keys = "ctrl+a>n", .desc = "Sequence (leader then key)" } },
+    .{ .item = .{ .keys = "text: / csi: / esc:", .desc = "Send bytes to the shell" } },
+    .{ .item = .{ .keys = "performable:", .desc = "Only consume the key if the action can run (e.g. copy)" } },
+    .{ .note = "Edit ~/.config/orbit/config.toml — Reload Config" },
+    .{ .spacer = {} },
+    .{ .item = .{ .keys = "L / Plugins", .desc = "Manage plugins: format, lint, AI, shortcuts, themes" } },
+    .{ .item = .{ .keys = "I", .desc = "Install / update the bundled plugin pack" } },
+    .{ .item = .{ .keys = "U / Delete", .desc = "Uninstall the selected plugin from disk" } },
+    .{ .item = .{ .keys = "Space", .desc = "Enable / disable selected plugin" } },
+    .{ .item = .{ .keys = "R", .desc = "Reload plugins from ~/.config/orbit/plugins/" } },
+    .{ .item = .{ .keys = "Ctrl+Shift+I", .desc = "Format the open file (format plugin)" } },
+    .{ .item = .{ .keys = "Ctrl+Shift+A", .desc = "AI: Explain selection (ai plugin; never auto-runs)" } },
     .{ .item = .{ .keys = "shortcut=", .desc = "In plugin.toml: your own key chords" } },
+    .{ .item = .{ .keys = "[tool]", .desc = "Run your formatter, linter, or AI CLI" } },
     .{ .item = .{ .keys = "plugins/", .desc = "~/.config/orbit/plugins/<name>/" } },
-    .{ .note = "Plugins add shortcuts, themes, commands" },
+    .{ .item = .{ .keys = "config.toml", .desc = "~/.config/orbit/config.toml — appearance + keybind =" } },
+    .{ .note = "Plugins are yours — edit the script, press R" },
     .{ .spacer = {} },
 
     .{ .heading = "This Help panel" },
@@ -212,29 +254,23 @@ pub fn draw(
     font_size: f32,
     plugin_count: usize,
 ) !void {
-    const bg = renderer.theme.background;
-    const fg = renderer.theme.foreground;
-    const muted = Color.rgb(
-        @intCast(@divTrunc(@as(i32, fg.r) + @as(i32, bg.r) * 2, 3)),
-        @intCast(@divTrunc(@as(i32, fg.g) + @as(i32, bg.g) * 2, 3)),
-        @intCast(@divTrunc(@as(i32, fg.b) + @as(i32, bg.b) * 2, 3)),
-    );
-    const dim = Color.rgb(
-        @intCast(@divTrunc(@as(i32, fg.r) + @as(i32, bg.r) * 4, 5)),
-        @intCast(@divTrunc(@as(i32, fg.g) + @as(i32, bg.g) * 4, 5)),
-        @intCast(@divTrunc(@as(i32, fg.b) + @as(i32, bg.b) * 4, 5)),
-    );
-    const accent = Color.rgb(90, 175, 220);
+    const chrome = ui_chrome.fromTheme(renderer.theme);
+    const bg = chrome.bg;
+    const fg = chrome.fg;
+    const muted = chrome.muted;
+    const dim = chrome.dim;
+    const accent = chrome.accent;
 
     try renderer.drawRect(0, 0, fb_w, fb_h, bg, 1.0);
 
     // Grow with framebuffer so fullscreen isn't a tiny island of terminal-sized text.
-    const ui = ui_scale.uiScale(fb_w, fb_h);
+    const ui = ui_scale.uiScale(fb_w, fb_h, renderer.content_scale);
     const base_cw = @as(i32, @intFromFloat(renderer.cell_w));
     const base_ch = @as(i32, @intFromFloat(renderer.cell_h));
     const body: f32 = ui;
-    const brand_s: f32 = ui * 1.85;
-    const tag_s: f32 = ui * 1.2;
+    // Keep brand close to body size — heavy stretch looked soft/warped on Retina.
+    const brand_s: f32 = ui * 1.35;
+    const tag_s: f32 = ui * 1.1;
     const cw = ui_scale.scaled(base_cw, body);
     const ch = ui_scale.scaled(base_ch, body);
     const brand_cw = ui_scale.scaled(base_cw, brand_s);
@@ -244,7 +280,7 @@ pub fn draw(
     const cx = @divTrunc(fb_w, 2);
 
     if (home.show_help) {
-        try drawHelp(renderer, fb_w, fb_h, cx, home.help_scroll, bg, fg, muted, dim, body);
+        try drawHelp(renderer, fb_w, fb_h, cx, home.help_scroll, fg, muted, dim, body);
         return;
     }
 
@@ -290,11 +326,7 @@ pub fn draw(
     for (entries, 0..) |entry, i| {
         const ry = y + @as(i32, @intCast(i)) * row_h;
         if (i == home.selected) {
-            try renderer.drawRect(list_x - 10, ry - 4, list_w + 20, row_h - 2, Color.rgb(
-                @intCast(@min(255, @as(i32, bg.r) + 18)),
-                @intCast(@min(255, @as(i32, bg.g) + 22)),
-                @intCast(@min(255, @as(i32, bg.b) + 28)),
-            ), 1.0);
+            try renderer.drawRect(list_x - 10, ry - 4, list_w + 20, row_h - 2, chrome.sel_bg, 1.0);
             try renderer.drawRect(list_x - 10, ry - 4, @max(3, @divTrunc(cw, 3)), row_h - 2, accent, 1.0);
         }
         try renderer.drawTextScaled(list_x + 10, ry + 2, entry.label, fg, body);
@@ -327,7 +359,6 @@ fn drawHelp(
     fb_h: i32,
     cx: i32,
     scroll: usize,
-    bg: Color,
     fg: Color,
     muted: Color,
     dim: Color,
@@ -337,7 +368,8 @@ fn drawHelp(
     const base_ch = @as(i32, @intFromFloat(renderer.cell_h));
     const cw = ui_scale.scaled(base_cw, ui);
     const ch = ui_scale.scaled(base_ch, ui);
-    const accent = Color.rgb(90, 175, 220);
+    const chrome = ui_chrome.fromTheme(renderer.theme);
+    const accent = chrome.accent;
     const panel_w = ui_scale.panelWidth(fb_w, cw, 52, 560);
     const panel_x = cx - @divTrunc(panel_w, 2);
     const panel_y = @max(ch, @divTrunc(fb_h, 14));
@@ -352,11 +384,7 @@ fn drawHelp(
     const start = @min(scroll, max_scroll);
     const end = @min(start + visible, help_rows.len);
 
-    try renderer.drawRect(panel_x, panel_y, panel_w, panel_h, Color.rgb(
-        @intCast(@min(255, @as(i32, bg.r) + 8)),
-        @intCast(@min(255, @as(i32, bg.g) + 8)),
-        @intCast(@min(255, @as(i32, bg.b) + 10)),
-    ), 1.0);
+    try renderer.drawRect(panel_x, panel_y, panel_w, panel_h, chrome.panel, 1.0);
 
     try renderer.drawTextScaled(panel_x + cw, panel_y + @divTrunc(ch, 2), "Help & Shortcuts", fg, ui);
     var hint_buf: [48]u8 = undefined;

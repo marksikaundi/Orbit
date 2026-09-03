@@ -3,35 +3,22 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const atlas_root = @import("atlas.zig");
+const faces = @import("faces.zig");
 
 const c = @cImport({
     @cInclude("stb_truetype.h");
 });
 
-const font_paths = if (builtin.os.tag == .windows) [_][:0]const u8{
-    "C:\\Windows\\Fonts\\consola.ttf",
-    "C:\\Windows\\Fonts\\CascadiaMono.ttf",
-    "C:\\Windows\\Fonts\\cascadiamono.ttf",
-    "C:\\Windows\\Fonts\\lucon.ttf",
-    "C:\\Windows\\Fonts\\cour.ttf",
-} else if (builtin.os.tag == .linux) [_][:0]const u8{
-    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-    "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf",
-    "/usr/local/share/fonts/JetBrainsMono-Regular.ttf",
-} else [_][:0]const u8{
-    "/System/Library/Fonts/SFNSMono.ttf",
-    "/System/Library/Fonts/Menlo.ttc",
-    "/System/Library/Fonts/Supplemental/Andale Mono.ttf",
-    "/Library/Fonts/JetBrainsMono-Regular.ttf",
-};
-
-pub fn build(allocator: std.mem.Allocator, pixel_size: u32) !atlas_root.Atlas {
+pub fn build(allocator: std.mem.Allocator, pixel_size: u32, preferred_path: ?[:0]const u8) !atlas_root.Atlas {
     var font_data: ?[]u8 = null;
-    for (font_paths) |path| {
-        font_data = readAbsolute(allocator, path) catch continue;
-        break;
+    if (preferred_path) |path| {
+        font_data = readAbsolute(allocator, path) catch null;
+    }
+    if (font_data == null) {
+        for (faces.catalog) |face| {
+            font_data = readAbsolute(allocator, face.path) catch continue;
+            break;
+        }
     }
     const data = font_data orelse return error.FontNotFound;
     defer allocator.free(data);

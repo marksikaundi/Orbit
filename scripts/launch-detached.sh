@@ -20,6 +20,13 @@ fi
 
 mkdir -p "$LOG_DIR"
 
+# CLI that prints to this terminal (not a GUI window).
+case "${1:-}" in
+  help|ide-setup|--ide-setup|-h|--help|-V|--version)
+    exec "$EXE" "$@"
+    ;;
+esac
+
 # Foreground mode for debugging (keeps logs in this terminal).
 if [[ "${ORBIT_FOREGROUND:-}" == "1" ]]; then
   exec "$EXE" "$@"

@@ -49,6 +49,9 @@ pub const Window = struct {
         // Replace the generic macOS "exec" Dock icon with Orbit's.
         app_icon.apply(handle);
 
+        // Replace the generic macOS "exec" Dock icon with Orbit's.
+        app_icon.apply(handle);
+
         var self: Window = .{
             .handle = handle,
             .width = width,
@@ -95,6 +98,13 @@ pub const Window = struct {
 
     pub fn setTitle(self: *Window, title: [:0]const u8) void {
         c.glfwSetWindowTitle(self.handle, title);
+    }
+
+    /// Live window opacity (Ghostty background-opacity). 1.0 is solid.
+    pub fn setOpacity(self: *Window, opacity: f32) void {
+        if (self.handle) |h| {
+            c.glfwSetWindowOpacity(h, @min(1.0, @max(0.15, opacity)));
+        }
     }
 
     pub fn updateFramebufferSize(self: *Window) void {

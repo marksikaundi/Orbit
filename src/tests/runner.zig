@@ -4,7 +4,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub fn main() void {
+pub fn main(init: std.process.Init.Minimal) void {
     const test_fns = builtin.test_functions;
     var passed: usize = 0;
     var skipped: usize = 0;
@@ -16,12 +16,18 @@ pub fn main() void {
 
     for (test_fns, 0..) |t, i| {
         std.testing.allocator_instance = .{};
+        std.testing.io_instance = .init(std.testing.allocator, .{
+            .argv0 = .init(init.args),
+            .environ = init.environ,
+        });
         defer {
+            std.testing.io_instance.deinit();
             if (std.testing.allocator_instance.deinit() == .leak) {
                 leaks += 1;
                 std.debug.print("  ! memory leak\n", .{});
             }
         }
+        std.testing.environ = init.environ;
 
         const idx = i + 1;
         std.debug.print("[{d:>3}/{d}] {s} ... ", .{ idx, test_fns.len, t.name });

@@ -15,13 +15,23 @@ pub const Action = enum {
     load_saved_workspace,
     save_workspace,
     search,
+    open_file,
     ssh,
+    toggle_palette,
+    copy_selection,
+    paste_clipboard,
+    scroll_page_up,
+    scroll_page_down,
+    scroll_to_top,
+    scroll_to_bottom,
     theme_orbit_dark,
     theme_orbit_light,
     theme_nord,
     theme_dracula,
     theme_gruvbox,
     theme_solarized,
+    theme_catppuccin,
+    theme_tokyo_night,
     cursor_block,
     cursor_underline,
     cursor_bar,
@@ -35,6 +45,10 @@ pub const Action = enum {
     reload_config,
     reload_plugins,
     list_plugins,
+    format_document,
+    lint_file,
+    ai_explain,
+    ai_suggest,
 };
 
 pub const BuiltinEntry = struct {
@@ -55,6 +69,14 @@ pub const catalog = [_]BuiltinEntry{
     .{ .action = .load_saved_workspace, .label = "Load Saved Workspace", .hint = "saved" },
     .{ .action = .save_workspace, .label = "Save Workspace", .hint = "Ctrl+Shift+S" },
     .{ .action = .search, .label = "Search", .hint = "Ctrl+Shift+F" },
+    .{ .action = .toggle_palette, .label = "Command Palette", .hint = "Ctrl+Shift+P" },
+    .{ .action = .copy_selection, .label = "Copy Selection", .hint = "Ctrl+Shift+C" },
+    .{ .action = .paste_clipboard, .label = "Paste", .hint = "Ctrl+Shift+V" },
+    .{ .action = .scroll_page_up, .label = "Scroll Page Up", .hint = "" },
+    .{ .action = .scroll_page_down, .label = "Scroll Page Down", .hint = "" },
+    .{ .action = .scroll_to_top, .label = "Scroll to Top", .hint = "" },
+    .{ .action = .scroll_to_bottom, .label = "Scroll to Bottom", .hint = "" },
+    .{ .action = .open_file, .label = "Open File", .hint = "edit" },
     .{ .action = .ssh, .label = "SSH…", .hint = "ssh host" },
     .{ .action = .theme_orbit_dark, .label = "Theme: Orbit Dark", .hint = "" },
     .{ .action = .theme_orbit_light, .label = "Theme: Orbit Light", .hint = "" },
@@ -62,6 +84,8 @@ pub const catalog = [_]BuiltinEntry{
     .{ .action = .theme_dracula, .label = "Theme: Dracula", .hint = "" },
     .{ .action = .theme_gruvbox, .label = "Theme: Gruvbox Dark", .hint = "" },
     .{ .action = .theme_solarized, .label = "Theme: Solarized Dark", .hint = "" },
+    .{ .action = .theme_catppuccin, .label = "Theme: Catppuccin Mocha", .hint = "" },
+    .{ .action = .theme_tokyo_night, .label = "Theme: Tokyo Night", .hint = "" },
     .{ .action = .cursor_block, .label = "Cursor: Block", .hint = "" },
     .{ .action = .cursor_underline, .label = "Cursor: Underline", .hint = "" },
     .{ .action = .cursor_bar, .label = "Cursor: Bar", .hint = "" },
@@ -75,6 +99,10 @@ pub const catalog = [_]BuiltinEntry{
     .{ .action = .reload_config, .label = "Reload Config", .hint = "" },
     .{ .action = .reload_plugins, .label = "Reload Plugins", .hint = "" },
     .{ .action = .list_plugins, .label = "Plugins…", .hint = "L on home" },
+    .{ .action = .format_document, .label = "Format Document", .hint = "plugin" },
+    .{ .action = .lint_file, .label = "Lint File", .hint = "plugin" },
+    .{ .action = .ai_explain, .label = "AI: Explain", .hint = "plugin" },
+    .{ .action = .ai_suggest, .label = "AI: Suggest command", .hint = "plugin" },
 };
 
 pub const Item = struct {
@@ -89,7 +117,7 @@ pub const Item = struct {
     },
 };
 
-pub const max_items = 128;
+pub const max_items = 192;
 
 pub const Palette = struct {
     active: bool = false,

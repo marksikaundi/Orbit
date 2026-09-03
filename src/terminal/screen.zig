@@ -23,9 +23,12 @@ pub const Screen = struct {
     default_fg: Color = Color.rgb(230, 235, 240),
     default_bg: Color = Color.rgb(18, 20, 26),
 
-    // Scrollback: ring of rows (each row = cols cells), oldest at head.
+    // Scrollback: circular buffer of rows (each row = cols cells).
+    // Logical index 0 is oldest; physical slot is `(start + i) % len`.
     scrollback: std.ArrayList([]Cell) = .empty,
     scrollback_max: usize = 2000,
+    /// Physical index of the oldest row once the ring is wrapping.
+    scrollback_start: usize = 0,
     /// View offset from bottom (0 = live screen, >0 = scrolled up).
     view_offset: u16 = 0,
 
@@ -35,24 +38,33 @@ pub const Screen = struct {
     scroll_top: u16 = 0,
     scroll_bottom: u16 = 0, // inclusive; set to rows-1 on init
 
+    /// Inactive buffer for DEC 47 / 1047 / 1049 (vim, less, htop).
+    /// While `alt_active`, `cells` is the alternate screen and this holds primary.
+    alt_cells: []Cell = &.{},
+    alt_active: bool = false,
+
     pub fn init(allocator: std.mem.Allocator, cols: u16, rows: u16) !Screen {
-        const cells = try allocator.alloc(Cell, @as(usize, cols) * @as(usize, rows));
+        const n = @as(usize, cols) * @as(usize, rows);
+        const cells = try allocator.alloc(Cell, n);
+        errdefer allocator.free(cells);
+        const alt_cells = try allocator.alloc(Cell, n);
         const blank = Cell.blankWith(Color.rgb(230, 235, 240), Color.rgb(18, 20, 26));
         @memset(cells, blank);
+        @memset(alt_cells, blank);
         return .{
             .allocator = allocator,
             .cols = cols,
             .rows = rows,
             .cells = cells,
+            .alt_cells = alt_cells,
             .scroll_bottom = rows -| 1,
         };
     }
 
     pub fn deinit(self: *Screen) void {
-        for (self.scrollback.items) |row| {
-            self.allocator.free(row);
-        }
+        self.clearScrollback();
         self.scrollback.deinit(self.allocator);
+        self.allocator.free(self.alt_cells);
         self.allocator.free(self.cells);
         self.* = undefined;
     }
@@ -66,9 +78,13 @@ pub const Screen = struct {
     }
 
     pub fn resize(self: *Screen, cols: u16, rows: u16) !void {
-        const new_cells = try self.allocator.alloc(Cell, @as(usize, cols) * @as(usize, rows));
+        const n = @as(usize, cols) * @as(usize, rows);
+        const new_cells = try self.allocator.alloc(Cell, n);
+        errdefer self.allocator.free(new_cells);
+        const new_alt = try self.allocator.alloc(Cell, n);
         const blank = Cell.blankWith(self.default_fg, self.default_bg);
         @memset(new_cells, blank);
+        @memset(new_alt, blank);
 
         const copy_rows = @min(self.rows, rows);
         const copy_cols = @min(self.cols, cols);
@@ -78,6 +94,7 @@ pub const Screen = struct {
             while (col < copy_cols) : (col += 1) {
                 new_cells[@as(usize, r) * cols + col] = self.cells[@as(usize, r) * self.cols + col];
                 new_cells[@as(usize, r) * cols + col].dirty = true;
+                new_alt[@as(usize, r) * cols + col] = self.alt_cells[@as(usize, r) * self.cols + col];
             }
         }
 
@@ -86,14 +103,16 @@ pub const Screen = struct {
             const old = row_ptr.*;
             const fresh = try self.allocator.alloc(Cell, cols);
             @memset(fresh, blank);
-            const n = @min(old.len, cols);
-            @memcpy(fresh[0..n], old[0..n]);
+            const copy_n = @min(old.len, cols);
+            @memcpy(fresh[0..copy_n], old[0..copy_n]);
             self.allocator.free(old);
             row_ptr.* = fresh;
         }
 
         self.allocator.free(self.cells);
+        self.allocator.free(self.alt_cells);
         self.cells = new_cells;
+        self.alt_cells = new_alt;
         self.cols = cols;
         self.rows = rows;
         self.cursor_col = @min(self.cursor_col, cols -| 1);
@@ -126,7 +145,7 @@ pub const Screen = struct {
         }
         const a: usize = @intCast(abs_row);
         if (a < total_back) {
-            const sb_row = self.scrollback.items[a];
+            const sb_row = self.scrollbackRowAt(a);
             if (col < sb_row.len) return sb_row[col];
             return Cell.blankWith(self.default_fg, self.default_bg);
         }
@@ -188,6 +207,12 @@ pub const Screen = struct {
         self.dirty = true;
     }
 
+    /// Oldest-first scrollback row. `i` must be `< scrollback.items.len`.
+    pub fn scrollbackRowAt(self: *const Screen, i: usize) []const Cell {
+        const n = self.scrollback.items.len;
+        return self.scrollback.items[(self.scrollback_start + i) % n];
+    }
+
     fn writeAtCursor(self: *Screen, codepoint: u21) void {
         var fg = self.fg;
         var bg = self.bg;
@@ -222,27 +247,43 @@ pub const Screen = struct {
     }
 
     fn pushScrollbackRow(self: *Screen, row_cells: []const Cell) void {
-        const copy = self.allocator.alloc(Cell, self.cols) catch return;
+        if (self.scrollback_max == 0) return;
+        const blank = Cell.blankWith(self.default_fg, self.default_bg);
         const n = @min(row_cells.len, self.cols);
+
+        // Once at capacity, reuse the oldest slot (O(1)) instead of orderedRemove(0).
+        if (self.scrollback.items.len >= self.scrollback_max and self.scrollback_max > 0) {
+            const slot = self.scrollback.items[self.scrollback_start];
+            @memcpy(slot[0..n], row_cells[0..n]);
+            if (n < self.cols) {
+                @memset(slot[n..], blank);
+            }
+            self.scrollback_start = (self.scrollback_start + 1) % self.scrollback.items.len;
+            return;
+        }
+
+        const copy = self.allocator.alloc(Cell, self.cols) catch return;
         @memcpy(copy[0..n], row_cells[0..n]);
         if (n < self.cols) {
-            @memset(copy[n..], Cell.blankWith(self.default_fg, self.default_bg));
+            @memset(copy[n..], blank);
         }
         self.scrollback.append(self.allocator, copy) catch {
             self.allocator.free(copy);
             return;
         };
-        while (self.scrollback.items.len > self.scrollback_max) {
-            const old = self.scrollback.orderedRemove(0);
-            self.allocator.free(old);
-        }
+    }
+
+    fn clearScrollback(self: *Screen) void {
+        for (self.scrollback.items) |row| self.allocator.free(row);
+        self.scrollback.clearRetainingCapacity();
+        self.scrollback_start = 0;
     }
 
     pub fn scrollUpRegion(self: *Screen) void {
         const top = self.scroll_top;
         const bottom = self.scroll_bottom;
-        if (top == 0 and bottom + 1 == self.rows) {
-            // Full screen: save top row to scrollback
+        if (!self.alt_active and top == 0 and bottom + 1 == self.rows) {
+            // Full primary screen: save top row to scrollback (never while vim/less is up).
             const top_row = self.cells[0..self.cols];
             self.pushScrollbackRow(top_row);
         }
@@ -341,8 +382,7 @@ pub const Screen = struct {
             2, 3 => { // entire screen (+scrollback for 3)
                 @memset(self.cells, blank);
                 if (mode == 3) {
-                    for (self.scrollback.items) |row| self.allocator.free(row);
-                    self.scrollback.clearRetainingCapacity();
+                    self.clearScrollback();
                 }
             },
             else => {},
@@ -416,6 +456,54 @@ pub const Screen = struct {
         self.fg = self.default_fg;
         self.bg = self.default_bg;
         self.attrs = .{};
+    }
+
+    /// CSI ? 47/1047/1049 h — vim, less, and other full-screen apps.
+    pub fn enterAltScreen(self: *Screen, save_cursor: bool, clear: bool) void {
+        if (save_cursor) self.saveCursor();
+        if (!self.alt_active) {
+            const tmp = self.cells;
+            self.cells = self.alt_cells;
+            self.alt_cells = tmp;
+            self.alt_active = true;
+        }
+        self.view_offset = 0;
+        if (clear) {
+            const blank = Cell.blankWith(self.default_fg, self.default_bg);
+            @memset(self.cells, blank);
+            self.cursor_col = 0;
+            self.cursor_row = 0;
+            self.scroll_top = 0;
+            self.scroll_bottom = self.rows -| 1;
+        }
+        for (self.cells) |*cell| cell.dirty = true;
+        self.dirty = true;
+    }
+
+    /// CSI ? 47/1047/1049 l — restore the shell screen underneath.
+    pub fn leaveAltScreen(self: *Screen, restore_cursor: bool) void {
+        if (self.alt_active) {
+            const tmp = self.cells;
+            self.cells = self.alt_cells;
+            self.alt_cells = tmp;
+            self.alt_active = false;
+        }
+        self.view_offset = 0;
+        if (restore_cursor) self.restoreCursor();
+        for (self.cells) |*cell| cell.dirty = true;
+        self.dirty = true;
+    }
+
+    pub fn softReset(self: *Screen) void {
+        self.leaveAltScreen(false);
+        self.auto_wrap = true;
+        self.origin_mode = false;
+        self.cursor_visible = true;
+        self.resetAttrs();
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows -| 1;
+        self.moveCursor(0, 0);
+        self.eraseInDisplay(2);
     }
 
     pub fn clearDirty(self: *Screen) void {

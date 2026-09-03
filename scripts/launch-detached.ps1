@@ -11,7 +11,19 @@ if (-not (Test-Path $Exe)) {
 }
 
 $foreground = $env:ORBIT_FOREGROUND -eq "1"
-if ($foreground) {
+$cli = $false
+if ($args.Count -gt 0) {
+    switch ($args[0]) {
+        "help" { $cli = $true }
+        "ide-setup" { $cli = $true }
+        "--ide-setup" { $cli = $true }
+        "-h" { $cli = $true }
+        "--help" { $cli = $true }
+        "-V" { $cli = $true }
+        "--version" { $cli = $true }
+    }
+}
+if ($foreground -or $cli) {
     & $Exe @args
     exit $LASTEXITCODE
 }

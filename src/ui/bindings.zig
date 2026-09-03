@@ -46,6 +46,9 @@ pub const app_chords = [_]Chord{
     .{ .key = "minus", .mods = .{ .super = true }, .action = .font_smaller },
     .{ .key = "0", .mods = .{ .ctrl = true }, .action = .font_reset },
     .{ .key = "0", .mods = .{ .super = true }, .action = .font_reset },
+    .{ .key = "p", .mods = .{ .ctrl = true, .shift = true }, .action = .toggle_palette },
+    .{ .key = "c", .mods = .{ .ctrl = true, .shift = true }, .action = .copy_selection },
+    .{ .key = "v", .mods = .{ .ctrl = true, .shift = true }, .action = .paste_clipboard },
 };
 
 /// Match a key name + modifiers to a built-in action.
@@ -62,16 +65,13 @@ pub fn match(key: []const u8, mods: Mods) ?Action {
 }
 
 /// Encode Ctrl+A…Ctrl+Z as the ASCII control byte (1…26).
-/// Returns null for letters that Orbit consumes as app shortcuts.
+/// Plain Ctrl+letter only — Shift/Super/Alt chords are not PTY control bytes.
+/// Callers must skip this when a keybind already consumed the event.
 pub fn ctrlLetterToPty(key_name: []const u8, mods: Mods) ?u8 {
-    if (!mods.ctrl or mods.super or mods.alt) return null;
+    if (!mods.ctrl or mods.super or mods.alt or mods.shift) return null;
     if (key_name.len != 1) return null;
     const ch = std.ascii.toLower(key_name[0]);
     if (ch < 'a' or ch > 'z') return null;
-
-    // App-reserved Ctrl(+Shift) chords — do not forward to the shell.
-    if (match(key_name, mods) != null) return null;
-
     return ch - 'a' + 1;
 }
 
@@ -106,7 +106,7 @@ pub fn parseHint(hint: []const u8, key_buf: *[32]u8) ?struct { Mods, []const u8 
     return .{ mods, key_buf[0..n] };
 }
 
-fn normalizeKeyToken(part: []const u8) []const u8 {
+pub fn normalizeKeyToken(part: []const u8) []const u8 {
     if (eql(part, "=") or eql(part, "+") or eql(part, "plus")) return "equal";
     if (eql(part, "-") or eql(part, "−")) return "minus";
     if (eql(part, "pgdn") or eql(part, "page down") or eql(part, "page_down") or eql(part, "pagedown")) return "pagedown";

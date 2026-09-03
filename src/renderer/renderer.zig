@@ -4,6 +4,7 @@ const Screen = @import("../terminal/screen.zig").Screen;
 const Selection = @import("../terminal/selection.zig").Selection;
 const Color = @import("../terminal/cell.zig").Color;
 const atlas_mod = @import("../font/atlas.zig");
+const faces = @import("../font/faces.zig");
 const theme_mod = @import("../config/theme.zig");
 const CursorStyle = @import("../config/config.zig").CursorStyle;
 
@@ -31,6 +32,8 @@ pub const Renderer = struct {
     cell_h: f32 = 16,
     /// Logical point size (Ghostty-style). Scaled by content_scale for Retina.
     font_size: f32 = 14.0,
+    /// Face id from `font/faces.zig` (e.g. "menlo", "sf-mono").
+    font_face: []const u8 = "sf-mono",
     content_scale: f32 = 2.0,
     fb_w: i32 = 0,
     fb_h: i32 = 0,
@@ -38,6 +41,10 @@ pub const Renderer = struct {
     allocator: std.mem.Allocator,
     theme: theme_mod.Theme = theme_mod.orbit_dark,
     opacity: f32 = 1.0,
+    /// Extra vertical cell space (Ghostty adjust-cell-height). 1.0 = font metrics.
+    line_height: f32 = 1.0,
+    /// Unscaled glyph height from the atlas (glyphs stay crisp when line_height > 1).
+    glyph_h: f32 = 16,
     cursor_style: CursorStyle = .block,
     cursor_blink: bool = true,
     /// Frame counter for cursor blink (incremented each draw).
@@ -122,18 +129,20 @@ pub const Renderer = struct {
 
     pub fn rebuildAtlas(self: *Renderer) !void {
         const px: u32 = @intFromFloat(@round(@max(10.0, self.font_size * self.content_scale)));
-        const new_atlas = try atlas_mod.Atlas.create(self.allocator, px);
+        const path = faces.pathForId(self.font_face);
+        const new_atlas = try atlas_mod.Atlas.create(self.allocator, px, path);
         if (self.atlas) |*old| old.deinit();
         self.atlas = new_atlas;
         self.cell_w = @floatFromInt(new_atlas.cell_w);
-        self.cell_h = @floatFromInt(new_atlas.cell_h);
+        self.glyph_h = @floatFromInt(new_atlas.cell_h);
+        self.cell_h = self.glyph_h * @max(1.0, self.line_height);
         self.uploadAtlas();
     }
 
     fn uploadAtlas(self: *Renderer) void {
         const a = self.atlas orelse return;
         c.glBindTexture(c.GL_TEXTURE_2D, self.atlas_tex);
-        // Linear within glyph for AA; clamp to edge so cells don't bleed.
+        // NEAREST keeps terminal cells crisp; scaled UI temporarily switches to LINEAR.
         c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MIN_FILTER, c.GL_NEAREST);
         c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MAG_FILTER, c.GL_NEAREST);
         c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_S, c.GL_CLAMP_TO_EDGE);
@@ -172,6 +181,18 @@ pub const Renderer = struct {
     pub fn setFontSize(self: *Renderer, size: f32) void {
         self.font_size = @min(28.0, @max(9.0, size));
         self.rebuildAtlas() catch {};
+    }
+
+    pub fn setFontFace(self: *Renderer, face_id: []const u8) void {
+        self.font_face = face_id;
+        self.rebuildAtlas() catch {};
+    }
+
+    pub fn setLineHeight(self: *Renderer, height: f32) void {
+        self.line_height = @min(1.5, @max(1.0, height));
+        if (self.glyph_h > 0) {
+            self.cell_h = self.glyph_h * self.line_height;
+        }
     }
 
     pub fn bumpFontSize(self: *Renderer, delta: f32) void {
@@ -350,15 +371,27 @@ pub const Renderer = struct {
         try self.drawTextScaled(x, y, text, color, 1.0);
     }
 
-    /// Draw UI text at `scale` × cell size (atlas glyphs; soft when scaled up).
+    /// Draw UI text at `scale` × cell size. Uses LINEAR when scaled so glyphs stay smooth.
     pub fn drawTextScaled(self: *Renderer, x: i32, y: i32, text: []const u8, color: Color, scale: f32) !void {
         const s = @max(0.5, scale);
+        const use_linear = @abs(s - 1.0) > 0.02;
+        if (use_linear and self.atlas_tex != 0) {
+            c.glBindTexture(c.GL_TEXTURE_2D, self.atlas_tex);
+            c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MIN_FILTER, c.GL_LINEAR);
+            c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MAG_FILTER, c.GL_LINEAR);
+        }
+        defer if (use_linear and self.atlas_tex != 0) {
+            c.glBindTexture(c.GL_TEXTURE_2D, self.atlas_tex);
+            c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MIN_FILTER, c.GL_NEAREST);
+            c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MAG_FILTER, c.GL_NEAREST);
+        };
+
         self.vertices.clearRetainingCapacity();
         const fw: f32 = @floatFromInt(self.fb_w);
         const fh: f32 = @floatFromInt(self.fb_h);
         const glyph_count: f32 = @floatFromInt(atlas_mod.glyph_count);
         const cw = self.cell_w * s;
-        const ch = self.cell_h * s;
+        const ch = @max(1.0, self.glyph_h) * s;
         var i: usize = 0;
         while (i < text.len) : (i += 1) {
             const cp: u21 = text[i];
@@ -546,8 +579,9 @@ pub const Renderer = struct {
         color: Color,
     ) !void {
         const x0 = ox + @as(f32, @floatFromInt(col)) * cell_w;
-        const y0 = oy + @as(f32, @floatFromInt(row)) * cell_h;
-        try self.appendGlyphPx(fw, fh, x0, y0, cell_w, cell_h, uv_left, uv_right, color);
+        const extra = cell_h - self.glyph_h;
+        const y0 = oy + @as(f32, @floatFromInt(row)) * cell_h + extra * 0.5;
+        try self.appendGlyphPx(fw, fh, x0, y0, cell_w, self.glyph_h, uv_left, uv_right, color);
     }
 
     fn appendGlyphPx(

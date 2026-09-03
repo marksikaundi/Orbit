@@ -29,7 +29,14 @@ pub fn parsePlugin(allocator: std.mem.Allocator, dir: []const u8, data: []const 
     }
     var hooks: types.Hooks = .{};
 
-    var section: enum { root, commands, themes, hooks, bindings } = .root;
+    var kind: types.PluginKind = .commands;
+    var enabled = true;
+    var tool: types.ToolSpec = .{};
+    errdefer tool.deinit(allocator);
+    var stdout_set = false;
+    var timeout_set = false;
+
+    var section: enum { root, commands, themes, hooks, bindings, tool } = .root;
     var cur_cmd: ?types.PluginCommand = null;
     var cur_theme_name: ?[]u8 = null;
     var cur_fg: ?Color = null;
@@ -80,6 +87,13 @@ pub fn parsePlugin(allocator: std.mem.Allocator, dir: []const u8, data: []const 
             section = .hooks;
             continue;
         }
+        if (std.mem.eql(u8, line, "[tool]")) {
+            try flushCommand(allocator, &commands, &bindings, &cur_cmd);
+            try flushTheme(allocator, &themes, &cur_theme_name, &cur_fg, &cur_bg, &cur_cursor, &cur_sel);
+            try flushBinding(allocator, &bindings, &cur_bind_keys, &cur_bind_cmd);
+            section = .tool;
+            continue;
+        }
         if (line[0] == '[') {
             try flushCommand(allocator, &commands, &bindings, &cur_cmd);
             try flushTheme(allocator, &themes, &cur_theme_name, &cur_fg, &cur_bg, &cur_cursor, &cur_sel);
@@ -103,6 +117,14 @@ pub fn parsePlugin(allocator: std.mem.Allocator, dir: []const u8, data: []const 
                 } else if (std.mem.eql(u8, key, "description")) {
                     allocator.free(description);
                     description = try unquote(allocator, val);
+                } else if (std.mem.eql(u8, key, "kind") or std.mem.eql(u8, key, "type")) {
+                    const k = try unquote(allocator, val);
+                    defer allocator.free(k);
+                    kind = types.PluginKind.parse(k);
+                } else if (std.mem.eql(u8, key, "enabled")) {
+                    const e = try unquote(allocator, val);
+                    defer allocator.free(e);
+                    enabled = parseBool(e);
                 }
             },
             .commands => {
@@ -169,11 +191,74 @@ pub fn parsePlugin(allocator: std.mem.Allocator, dir: []const u8, data: []const 
                     hooks.clear_color = try unquote(allocator, val);
                 }
             },
+            .tool => {
+                if (std.mem.eql(u8, key, "command")) {
+                    if (tool.command) |s| allocator.free(s);
+                    tool.command = try unquote(allocator, val);
+                } else if (std.mem.eql(u8, key, "script")) {
+                    if (tool.script) |s| allocator.free(s);
+                    tool.script = try unquote(allocator, val);
+                } else if (std.mem.eql(u8, key, "args")) {
+                    const tval = try unquote(allocator, val);
+                    defer allocator.free(tval);
+                    try replaceStringList(allocator, &tool.args, tval, ' ');
+                } else if (std.mem.eql(u8, key, "languages") or std.mem.eql(u8, key, "language")) {
+                    const tval = try unquote(allocator, val);
+                    defer allocator.free(tval);
+                    try replaceStringList(allocator, &tool.languages, tval, ',');
+                } else if (std.mem.eql(u8, key, "stdin")) {
+                    const tval = try unquote(allocator, val);
+                    defer allocator.free(tval);
+                    tool.stdin = types.StdinSource.parse(tval);
+                } else if (std.mem.eql(u8, key, "stdout")) {
+                    const tval = try unquote(allocator, val);
+                    defer allocator.free(tval);
+                    tool.stdout = types.StdoutMode.parse(tval);
+                    stdout_set = true;
+                } else if (std.mem.eql(u8, key, "parse")) {
+                    const tval = try unquote(allocator, val);
+                    defer allocator.free(tval);
+                    tool.parse = types.ParseFormat.parse(tval);
+                } else if (std.mem.eql(u8, key, "timeout_ms") or std.mem.eql(u8, key, "timeout")) {
+                    const tval = try unquote(allocator, val);
+                    defer allocator.free(tval);
+                    tool.timeout_ms = std.fmt.parseInt(u32, tval, 10) catch tool.timeout_ms;
+                    timeout_set = true;
+                } else if (std.mem.eql(u8, key, "prompt")) {
+                    if (tool.prompt) |s| allocator.free(s);
+                    tool.prompt = try unquote(allocator, val);
+                }
+            },
         }
     }
     try flushCommand(allocator, &commands, &bindings, &cur_cmd);
     try flushTheme(allocator, &themes, &cur_theme_name, &cur_fg, &cur_bg, &cur_cursor, &cur_sel);
     try flushBinding(allocator, &bindings, &cur_bind_keys, &cur_bind_cmd);
+
+    if (!stdout_set) {
+        tool.stdout = switch (kind) {
+            .format => .replace,
+            .lint => .overlay,
+            .ai => .overlay,
+            else => tool.stdout,
+        };
+    }
+    if (!timeout_set) {
+        tool.timeout_ms = switch (kind) {
+            .ai => 60_000,
+            .format => 15_000,
+            .lint => 20_000,
+            else => tool.timeout_ms,
+        };
+    }
+    if (kind == .format and tool.parse == .none and tool.stdin == .none and tool.hasRunner()) {
+        tool.stdin = .buffer;
+    }
+    if (kind == .lint and tool.parse == .none) {
+        tool.parse = .unix;
+    }
+
+    try ensureToolCommand(allocator, &commands, name, kind, &tool);
 
     return .{
         .allocator = allocator,
@@ -181,10 +266,13 @@ pub fn parsePlugin(allocator: std.mem.Allocator, dir: []const u8, data: []const 
         .version = version,
         .description = description,
         .dir = try allocator.dupe(u8, dir),
+        .kind = kind,
         .commands = try commands.toOwnedSlice(allocator),
         .themes = try themes.toOwnedSlice(allocator),
         .bindings = try bindings.toOwnedSlice(allocator),
         .hooks = hooks,
+        .tool = tool,
+        .enabled = enabled,
     };
 }
 
@@ -263,7 +351,63 @@ fn parseAction(s: []const u8) types.CommandActionKind {
     if (std.mem.eql(u8, s, "insert")) return .insert;
     if (std.mem.eql(u8, s, "theme")) return .theme;
     if (std.mem.eql(u8, s, "host")) return .host;
+    if (std.mem.eql(u8, s, "run") or std.mem.eql(u8, s, "tool") or std.mem.eql(u8, s, "exec")) return .run;
     return .status;
+}
+
+fn parseBool(s: []const u8) bool {
+    return !(std.ascii.eqlIgnoreCase(s, "false") or std.ascii.eqlIgnoreCase(s, "0") or std.ascii.eqlIgnoreCase(s, "off") or std.ascii.eqlIgnoreCase(s, "no"));
+}
+
+fn replaceStringList(allocator: std.mem.Allocator, dest: *[][]u8, raw: []const u8, sep: u8) !void {
+    for (dest.*) |item| allocator.free(item);
+    if (dest.len > 0) allocator.free(dest.*);
+    dest.* = &.{};
+
+    var list: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (list.items) |item| allocator.free(item);
+        list.deinit(allocator);
+    }
+
+    var it = std.mem.splitScalar(u8, raw, sep);
+    while (it.next()) |part_raw| {
+        const part = std.mem.trim(u8, part_raw, " \t\"'");
+        if (part.len == 0) continue;
+        try list.append(allocator, try allocator.dupe(u8, part));
+    }
+    dest.* = try list.toOwnedSlice(allocator);
+}
+
+fn ensureToolCommand(
+    allocator: std.mem.Allocator,
+    commands: *std.ArrayList(types.PluginCommand),
+    name: []const u8,
+    kind: types.PluginKind,
+    tool: *const types.ToolSpec,
+) !void {
+    if (!tool.hasRunner()) return;
+    for (commands.items) |c| {
+        if (c.kind == .run) return;
+    }
+
+    const id = try std.fmt.allocPrint(allocator, "{s}.run", .{name});
+    errdefer allocator.free(id);
+    const label = switch (kind) {
+        .format => try std.fmt.allocPrint(allocator, "Format: {s}", .{name}),
+        .lint => try std.fmt.allocPrint(allocator, "Lint: {s}", .{name}),
+        .ai => try std.fmt.allocPrint(allocator, "AI: {s}", .{name}),
+        else => try std.fmt.allocPrint(allocator, "Run: {s}", .{name}),
+    };
+    errdefer allocator.free(label);
+    try commands.append(allocator, .{
+        .id = id,
+        .label = label,
+        .hint = try allocator.dupe(u8, kind.label()),
+        .kind = .run,
+        .payload = try allocator.dupe(u8, kind.label()),
+        .shortcut = null,
+    });
 }
 
 fn stripQuotes(val: []const u8) []const u8 {

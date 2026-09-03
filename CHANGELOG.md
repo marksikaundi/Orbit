@@ -11,19 +11,31 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 ## [Unreleased]
 
 ### Added
+- **`--help` catalog** — `orbit --help`, `orbit help`, and (after setup) a bare `--help` in a new terminal list every launch flag, `zig build` step, environment variable, shortcut, plugin command, and developer shell command
+- **User docs hub** — `docs/` covers how to use and configure every feature (home, config, appearance, keybindings, palette, tabs, workspaces, search/editor, plugins, CLI/IDEs)
+- **Custom keybindings** — Ghostty-compatible `keybind = trigger=action` in `config.toml` (unbind, clear, sequences, `text:` / `csi:` / `esc:`, `performable:`, chained actions). Defaults match the previous built-in chords.
+- **IDE connect** — `orbit ide-setup` registers Orbit as the external terminal in Cursor, VS Code, VSCodium, and Windsurf, and installs an **Open in Orbit Terminal** explorer command
+- CLI flags editors already send: `--working-directory`, `-e` / `--command`, positional folder (Ghostty / Alacritty / Kitty compatible)
+- macOS `open -a Orbit.app /folder` opens a shell in that folder
 - Appearance settings (themes, cursor, shell)
+- **Ghostty-style look** — compact / comfortable / airy / glass (padding, line spacing, opacity) plus prompt styles (ghostty ❯, minimal, starship) in Appearance
+- Catppuccin Mocha and Tokyo Night themes
 - Full Help & Shortcuts reference
 - Quit / close tab / shell-exit handling
 - **Open Workspace** opens a native folder picker and starts a shell in that directory
 - **Text color** presets in Appearance (independent of theme)
-- **Search** finds text in the terminal (incl. scrollback) and file names in the opened folder (`Cmd/Ctrl+Shift+F`)
-- **Plugins** home panel — browse, toggle, reload, and install bundled pack (hello, git, devtools, themes, workflow, keys)
-- **Plugin shortcuts** — define `shortcut = "ctrl+shift+g"` or `[[bindings]]` in `plugin.toml` to run commands with your own key chords
-- Bundled **keys** plugin as a starter for custom shortcuts / colors / themes (see `assets/plugins/README.md`)
+- **Search** finds text in the terminal, file names, or **code inside files** (`Cmd/Ctrl+Shift+F`; Tab switches Terminal / Files / Code). **⌘/Ctrl+F** in the editor finds in the open file.
+- **In-file editor with autocomplete** — open a file and type; keywords, common APIs, and names already in the file show a popup with signature and a short meaning (Java, JavaScript, Python, and the other highlighted languages)
+- **Plugins you own** — kinds (`format`, `lint`, `ai`, `commands`, `theme`, `keys`) plus a `[tool]` that runs *your* command/script. Format the open file, lint with unix diagnostics, or ask a local model. Enablement is persisted. Bundled **format**, **lint**, and **ai** plugins (edit `run.sh` / `ask.sh`)
+
+### Fixed
+- Full-screen apps (`vi` / `vim`, `less`, `htop`) restore the shell when they quit (alternate screen buffer)
+- Shells now advertise `TERM=xterm-256color` so editors can use syntax colors
 - **macOS app icon** — `zig build run` packages `Orbit.app` with a Dock icon (no more generic "exec")
 - **Global launch** — `zig build setup` installs shell integration so `zig build run` / `orbit` work from any directory
 - **Detached launch** — `orbit` / `zig build run` open Orbit in the background and print `Orbit terminal opened successfully`
 - **Security scan** — `zig build security-scan` checks `src/`, `scripts/`, and plugins for secrets and injection risks; CI runs on every push/PR; risky plugin inserts warn at load and run time
+- **UI freeze under load** — PTY output is drained a bounded amount per frame; scrollback eviction is O(1); CSI scroll/insert repeats are clamped; tab close never blocks on `waitpid`
 
 ### Changed
 - Saved layout restore moved to palette command **Load Saved Workspace**

@@ -86,6 +86,13 @@ const w = struct {
         lpOverlapped: ?*anyopaque,
     ) callconv(.winapi) BOOL;
 
+    extern "kernel32" fn SetNamedPipeHandleState(
+        hNamedPipe: HANDLE,
+        lpMode: ?*DWORD,
+        lpMaxCollectionCount: ?*DWORD,
+        lpCollectDataTimeout: ?*DWORD,
+    ) callconv(.winapi) BOOL;
+
     extern "kernel32" fn PeekNamedPipe(
         hNamedPipe: HANDLE,
         lpBuffer: ?[*]u8,
@@ -106,6 +113,7 @@ const w = struct {
     const UINT = u32;
     const WAIT_OBJECT_0: DWORD = 0;
     const STILL_ACTIVE: DWORD = 259;
+    const PIPE_NOWAIT: DWORD = 0x00000001;
 };
 
 pub const Pty = struct {
@@ -136,6 +144,9 @@ pub const Pty = struct {
         errdefer _ = w.CloseHandle(input_write);
         // Don't let our write end be inherited.
         _ = w.SetHandleInformation(input_write, HANDLE_FLAG_INHERIT, 0);
+        // PIPE_NOWAIT so a full ConPTY input buffer cannot stall the UI on WriteFile.
+        var nowait: DWORD = w.PIPE_NOWAIT;
+        _ = w.SetNamedPipeHandleState(input_write, &nowait, null, null);
 
         // Pipe B: ConPTY output -> we read
         var output_read: HANDLE = undefined;
@@ -192,11 +203,11 @@ pub const Pty = struct {
         si.StartupInfo.cb = @sizeOf(STARTUPINFOEXW);
         si.lpAttributeList = attr_bytes.ptr;
 
-        var cmdline_buf: [1024]u8 = undefined;
+        var cmdline_buf: [2048]u8 = undefined;
         const shell = opts.shell orelse paths.defaultShell();
-        const cmdline_utf8 = buildCommandLine(&cmdline_buf, shell) catch return error.CommandLineTooLong;
+        const cmdline_utf8 = buildCommandLine(&cmdline_buf, shell, opts.command, opts.wait_after_command) catch return error.CommandLineTooLong;
 
-        var cmdline_w: [1024]u16 = undefined;
+        var cmdline_w: [2048]u16 = undefined;
         const cmdline_len = try std.unicode.wtf8ToWtf16Le(cmdline_w[0 .. cmdline_w.len - 1], cmdline_utf8);
         cmdline_w[cmdline_len] = 0;
 
@@ -210,11 +221,10 @@ pub const Pty = struct {
         };
 
         // Child-only environment: never mutate Orbit's process env.
+        // Always overlay TERM so vim/less get 256-color + alternate screen.
         var env_block: ?[:0]u16 = null;
         defer if (env_block) |eb| std.heap.c_allocator.free(eb);
-        if (opts.env.len > 0) {
-            env_block = try buildChildEnvironmentBlock(std.heap.c_allocator, opts.env);
-        }
+        env_block = try buildChildEnvironmentBlock(std.heap.c_allocator, opts.env);
 
         var pi: windows.PROCESS.INFORMATION = undefined;
         @memset(std.mem.asBytes(&pi), 0);
@@ -343,12 +353,31 @@ pub const Pty = struct {
     }
 };
 
-fn buildCommandLine(buf: []u8, shell: []const u8) ![]const u8 {
+fn buildCommandLine(buf: []u8, shell: []const u8, command: []const []const u8, wait_after: bool) ![]const u8 {
     // Quotes in the shell path break CreateProcess command-line parsing.
     if (std.mem.indexOfScalar(u8, shell, '"') != null) return error.InvalidShellPath;
     if (std.mem.indexOfScalar(u8, shell, '\n') != null or std.mem.indexOfScalar(u8, shell, '\r') != null) {
         return error.InvalidShellPath;
     }
+    if (command.len == 0) {
+        return buildShellLine(buf, shell);
+    }
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.heap.c_allocator);
+    if (wait_after) {
+        // Keep a prompt after the program exits (debug / -e).
+        try out.appendSlice(std.heap.c_allocator, "cmd.exe /c \"");
+        try appendQuotedArgs(&out, std.heap.c_allocator, command);
+        try out.appendSlice(std.heap.c_allocator, " & pause\"");
+    } else {
+        try appendQuotedArgs(&out, std.heap.c_allocator, command);
+    }
+    if (out.items.len >= buf.len) return error.CommandLineTooLong;
+    @memcpy(buf[0..out.items.len], out.items);
+    return buf[0..out.items.len];
+}
+
+fn buildShellLine(buf: []u8, shell: []const u8) ![]const u8 {
     // Prefer PowerShell / pwsh as login-like interactive shells.
     if (std.ascii.endsWithIgnoreCase(shell, "powershell.exe") or
         std.ascii.endsWithIgnoreCase(shell, "pwsh.exe") or
@@ -361,6 +390,25 @@ fn buildCommandLine(buf: []u8, shell: []const u8) ![]const u8 {
         return std.fmt.bufPrint(buf, "\"{s}\" /K", .{shell}) catch return error.CommandLineTooLong;
     }
     return std.fmt.bufPrint(buf, "\"{s}\"", .{shell}) catch return error.CommandLineTooLong;
+}
+
+fn appendQuotedArgs(out: *std.ArrayList(u8), allocator: std.mem.Allocator, command: []const []const u8) !void {
+    for (command, 0..) |arg, i| {
+        if (std.mem.indexOfScalar(u8, arg, '\n') != null or std.mem.indexOfScalar(u8, arg, '\r') != null) {
+            return error.InvalidShellPath;
+        }
+        if (i > 0) try out.append(allocator, ' ');
+        const need_quotes = std.mem.indexOfAny(u8, arg, " \t\"") != null;
+        if (need_quotes) try out.append(allocator, '"');
+        for (arg) |ch| {
+            if (ch == '"') {
+                try out.appendSlice(allocator, "\\\"");
+            } else {
+                try out.append(allocator, ch);
+            }
+        }
+        if (need_quotes) try out.append(allocator, '"');
+    }
 }
 
 /// Build a Unicode environment block for CreateProcessW (child-only; parent unchanged).
@@ -410,6 +458,11 @@ fn buildChildEnvironmentBlock(allocator: std.mem.Allocator, extra: []const []con
         }
     }
 
+    try upsertEnv(&entries, allocator, "TERM=xterm-256color");
+    try upsertEnv(&entries, allocator, "COLORTERM=truecolor");
+    try upsertEnv(&entries, allocator, "TERM_PROGRAM=Orbit");
+    try upsertEnv(&entries, allocator, "ORBIT_TERMINAL=1");
+
     // Serialize to double-NUL-terminated UTF-16LE block.
     var out: std.ArrayList(u16) = .empty;
     errdefer out.deinit(allocator);
@@ -424,4 +477,17 @@ fn buildChildEnvironmentBlock(allocator: std.mem.Allocator, extra: []const []con
     const owned = try out.toOwnedSlice(allocator);
     // Ensure Zig [:0]u16 — last element is already 0.
     return owned[0 .. owned.len - 1 :0];
+}
+
+fn upsertEnv(entries: *std.ArrayList([]u8), allocator: std.mem.Allocator, entry: []const u8) !void {
+    const eq = std.mem.indexOfScalar(u8, entry, '=') orelse return;
+    const key = entry[0..eq];
+    for (entries.items, 0..) |existing, i| {
+        const existing_eq = std.mem.indexOfScalar(u8, existing, '=') orelse continue;
+        if (!std.ascii.eqlIgnoreCase(existing[0..existing_eq], key)) continue;
+        allocator.free(existing);
+        entries.items[i] = try allocator.dupe(u8, entry);
+        return;
+    }
+    try entries.append(allocator, try allocator.dupe(u8, entry));
 }

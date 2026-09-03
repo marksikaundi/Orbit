@@ -73,6 +73,7 @@ test "opacity is clamped" {
     );
     try std.testing.expectEqual(@as(f32, 1.0), cfg.opacity);
 
+    cfg.deinit(std.testing.allocator);
     cfg = .{};
     Config.parseInto(&cfg, std.testing.allocator,
         \\[window]
@@ -101,6 +102,36 @@ test "font_size is clamped" {
     try std.testing.expectEqual(@as(f32, 28.0), cfg.font_size);
 }
 
+test "font_face is parsed" {
+    const faces = @import("../../font/faces.zig");
+    // Catalog ids are platform-specific (menlo on macOS, dejavu on Linux, …).
+    const id = faces.catalog[0].id;
+    var toml_buf: [128]u8 = undefined;
+    const toml = std.fmt.bufPrint(&toml_buf,
+        \\[terminal]
+        \\font_face = "{s}"
+    , .{id}) catch unreachable;
+
+    var cfg: Config = .{};
+    defer cfg.deinit(std.testing.allocator);
+    Config.parseInto(&cfg, std.testing.allocator, toml);
+
+    const expected = if (faces.pathForId(id) != null) id else faces.defaultId();
+    try std.testing.expectEqualStrings(expected, cfg.font_face);
+    try std.testing.expectEqualStrings(faces.labelForId(expected), cfg.fontFaceDisplay());
+}
+
+test "font_face unknown falls back to default" {
+    const faces = @import("../../font/faces.zig");
+    var cfg: Config = .{};
+    defer cfg.deinit(std.testing.allocator);
+    Config.parseInto(&cfg, std.testing.allocator,
+        \\[terminal]
+        \\font_face = "not-a-real-face"
+    );
+    try std.testing.expectEqualStrings(faces.defaultId(), cfg.font_face);
+}
+
 test "parse theme foreground preset" {
     var cfg: Config = .{};
     defer cfg.deinit(std.testing.allocator);
@@ -114,6 +145,35 @@ test "parse theme foreground preset" {
     try std.testing.expectEqualStrings("mint", cfg.fgDisplay());
     const t = cfg.theme();
     try std.testing.expectEqual(@as(u8, 160), t.foreground.r);
+}
+
+test "parse look applies padding opacity and prompt" {
+    var cfg: Config = .{};
+    defer cfg.deinit(std.testing.allocator);
+    Config.parseInto(&cfg, std.testing.allocator,
+        \\[window]
+        \\look = "glass"
+        \\[terminal]
+        \\prompt = "ghostty"
+        \\line_height = "20%"
+    );
+    try std.testing.expectEqual(.glass, cfg.look);
+    try std.testing.expectEqual(@as(i32, 16), cfg.padding_x);
+    try std.testing.expectEqual(@as(f32, 0.86), cfg.opacity);
+    try std.testing.expectEqual(.ghostty, cfg.prompt);
+    try std.testing.expectEqual(@as(f32, 1.20), cfg.line_height);
+}
+
+test "explicit opacity wins over look preset" {
+    var cfg: Config = .{};
+    defer cfg.deinit(std.testing.allocator);
+    Config.parseInto(&cfg, std.testing.allocator,
+        \\[window]
+        \\look = "glass"
+        \\opacity = 0.95
+    );
+    try std.testing.expectEqual(.glass, cfg.look);
+    try std.testing.expectEqual(@as(f32, 0.95), cfg.opacity);
 }
 
 test "comments and blank lines ignored" {

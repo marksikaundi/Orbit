@@ -67,9 +67,14 @@ pub const Pty = struct {
                 setEnvEntry(entry);
             }
 
-            const shell_path = resolveShell(opts.shell);
-            const argv = [_]?[*:0]const u8{ shell_path, "-l", null };
-            _ = c.execvp(shell_path, @ptrCast(&argv));
+            // Full-screen apps (vim, less) need a color-capable TERM. GUI launches
+            // often inherit nothing / "dumb", which disables syntax and alt-screen.
+            _ = c.setenv("TERM", "xterm-256color", 1);
+            _ = c.setenv("COLORTERM", "truecolor", 1);
+            _ = c.setenv("TERM_PROGRAM", "Orbit", 1);
+            _ = c.setenv("ORBIT_TERMINAL", "1", 1);
+
+            execChild(opts);
             c._exit(127);
         }
 
@@ -94,26 +99,20 @@ pub const Pty = struct {
         self.* = undefined;
     }
 
-    /// Tear down the shell session without blocking the UI thread indefinitely.
+    /// Tear down the shell session without blocking the UI thread.
     /// Child called `setsid()`, so negative pid targets the whole process group.
     fn terminateSession(self: *Pty) void {
         _ = c.kill(-self.child_pid, c.SIGTERM);
         _ = c.kill(self.child_pid, c.SIGTERM);
-
-        var status: c_int = 0;
-        var waited_ms: usize = 0;
-        while (waited_ms < 150) : (waited_ms += 5) {
-            const r = c.waitpid(self.child_pid, &status, c.WNOHANG);
-            if (r != 0) {
-                self.alive = false;
-                return;
-            }
-            sleepMs(5);
+        if (waitNonblocking(self.child_pid, 30)) {
+            self.alive = false;
+            return;
         }
 
         _ = c.kill(-self.child_pid, c.SIGKILL);
         _ = c.kill(self.child_pid, c.SIGKILL);
-        _ = c.waitpid(self.child_pid, &status, 0);
+        _ = waitNonblocking(self.child_pid, 20);
+        // Never waitpid(..., 0): a child in D-state (NFS, hung ioctl) would freeze the UI.
         self.alive = false;
     }
 
@@ -136,9 +135,11 @@ pub const Pty = struct {
             const n = c.write(self.master_fd, bytes.ptr + offset, bytes.len - offset);
             if (n < 0) {
                 const err = std.c._errno().*;
-                if (err == c.EAGAIN or err == c.EWOULDBLOCK) return;
+                if (err == c.EINTR) continue;
+                // EAGAIN / hard error: don't spin; leftover bytes retry next keystroke/tick.
                 return;
             }
+            if (n == 0) return;
             offset += @intCast(n);
         }
     }
@@ -166,23 +167,77 @@ pub const Pty = struct {
     }
 
     fn reapChild(self: *Pty) void {
-        var status: c_int = 0;
         // Shell already exited (EOF) — reap without hanging the frame loop.
-        const r = c.waitpid(self.child_pid, &status, c.WNOHANG);
-        if (r == 0) {
-            // Rare: EOF before the zombie is ready — brief bounded wait, then kill.
-            var i: usize = 0;
-            while (i < 20) : (i += 1) {
-                if (c.waitpid(self.child_pid, &status, c.WNOHANG) != 0) break;
-                sleepMs(5);
-            } else {
-                _ = c.kill(self.child_pid, c.SIGKILL);
-                _ = c.waitpid(self.child_pid, &status, 0);
-            }
+        if (!waitNonblocking(self.child_pid, 20)) {
+            _ = c.kill(self.child_pid, c.SIGKILL);
+            _ = waitNonblocking(self.child_pid, 10);
         }
         self.alive = false;
     }
 };
+
+/// WNOHANG poll with a short cap. Returns true if the child was reaped.
+/// Never uses blocking waitpid — that froze Orbit when a shell child stuck in D-state.
+fn waitNonblocking(pid: c.pid_t, budget_ms: usize) bool {
+    var status: c_int = 0;
+    var waited_ms: usize = 0;
+    while (waited_ms <= budget_ms) {
+        const r = c.waitpid(pid, &status, c.WNOHANG);
+        if (r != 0) return true;
+        if (waited_ms == budget_ms) break;
+        sleepMs(5);
+        waited_ms += 5;
+    }
+    return false;
+}
+
+fn execChild(opts: CreateOptions) void {
+    const shell_path = resolveShell(opts.shell);
+    if (opts.command.len == 0) {
+        const argv = [_]?[*:0]const u8{ shell_path, "-l", null };
+        _ = c.execvp(shell_path, @ptrCast(&argv));
+        return;
+    }
+
+    var storage: [48][768]u8 = undefined;
+    var argv: [56]?[*:0]const u8 = undefined;
+    if (opts.command.len > storage.len) return;
+    if (opts.wait_after_command and opts.command.len + 6 > argv.len) return;
+
+    if (opts.wait_after_command) {
+        const script: [*:0]const u8 = "exec \"$@\"; exec \"$0\" -l";
+        var n: usize = 0;
+        argv[n] = shell_path;
+        n += 1;
+        argv[n] = "-l";
+        n += 1;
+        argv[n] = "-c";
+        n += 1;
+        argv[n] = script;
+        n += 1;
+        argv[n] = shell_path;
+        n += 1;
+        for (opts.command, 0..) |arg, i| {
+            if (arg.len >= storage[i].len) return;
+            @memcpy(storage[i][0..arg.len], arg);
+            storage[i][arg.len] = 0;
+            argv[n] = storage[i][0..arg.len :0];
+            n += 1;
+        }
+        argv[n] = null;
+        _ = c.execvp(shell_path, @ptrCast(&argv));
+        return;
+    }
+
+    for (opts.command, 0..) |arg, i| {
+        if (arg.len >= storage[i].len) return;
+        @memcpy(storage[i][0..arg.len], arg);
+        storage[i][arg.len] = 0;
+        argv[i] = storage[i][0..arg.len :0];
+    }
+    argv[opts.command.len] = null;
+    _ = c.execvp(argv[0].?, @ptrCast(&argv));
+}
 
 fn resolveShell(shell: ?[]const u8) [*:0]const u8 {
     if (shell) |s| {

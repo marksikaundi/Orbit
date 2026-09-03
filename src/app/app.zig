@@ -8,25 +8,57 @@ const Tabs = @import("../ui/tabs.zig").Tabs;
 const layout_mod = @import("../ui/layout.zig");
 const Rect = layout_mod.Rect;
 const Search = @import("../ui/search.zig").Search;
+const Viewer = @import("../ui/viewer.zig").Viewer;
+const viewer_mod = @import("../ui/viewer.zig");
 const Palette = @import("../ui/palette.zig").Palette;
 const palette_mod = @import("../ui/palette.zig");
 const bindings = @import("../ui/bindings.zig");
 const home_mod = @import("../ui/home.zig");
 const Home = home_mod.Home;
 const ui_scale = @import("../ui/scale.zig");
+const ui_chrome = @import("../ui/chrome.zig");
 const Config = @import("../config/config.zig").Config;
+const keybind_mod = @import("../config/keybind.zig");
 const CursorStyle = @import("../config/config.zig").CursorStyle;
 const theme_mod = @import("../config/theme.zig");
 const WsManager = @import("../workspace/workspace.zig").Manager;
 const PluginRegistry = @import("../plugins/registry.zig").Registry;
 const PluginCommand = @import("../plugins/types.zig").PluginCommand;
+const PluginKind = @import("../plugins/types.zig").PluginKind;
+const plugin_types = @import("../plugins/types.zig");
+const plugin_runner = @import("../plugins/runner.zig");
+const plugin_result_mod = @import("../plugins/result.zig");
+const plugin_bundled = @import("../plugins/bundled.zig");
 const plugin_audit = @import("../security/plugin_audit.zig");
 const clipboard = @import("../clipboard/clipboard.zig");
 const folder_picker = @import("../platform/folder_picker.zig");
+const macos_open = @import("../platform/macos_open.zig");
 const Color = @import("../terminal/cell.zig").Color;
 const dev_root = @import("../dev_root.zig");
 
-const UiMode = enum { home, normal, search, ws_picker, ws_save, palette, ssh_prompt, settings, plugins };
+const UiMode = enum { home, normal, search, viewer, ws_picker, ws_save, palette, ssh_prompt, settings, plugins, plugin_result };
+
+const SettingsRow = enum(u8) {
+    theme,
+    text,
+    font,
+    face,
+    look,
+    opacity,
+    padding,
+    spacing,
+    cursor,
+    blink,
+    prompt,
+    shell,
+
+    pub const count = std.meta.fields(SettingsRow).len;
+
+    fn fromIndex(i: usize) SettingsRow {
+        const n = @min(i, count - 1);
+        return @enumFromInt(@as(u8, @intCast(n)));
+    }
+};
 
 const StatusKind = enum { info, success, err };
 
@@ -54,6 +86,7 @@ pub const App = struct {
     workspaces: WsManager,
     plugins: PluginRegistry,
     search: Search = .{},
+    viewer: Viewer = .{},
     palette: Palette = .{},
     home: Home = .{},
     ui: UiMode = .home,
@@ -62,6 +95,9 @@ pub const App = struct {
     save_name_len: usize = 0,
     ssh_host: [128]u8 = undefined,
     ssh_host_len: usize = 0,
+    /// Inject `ssh -- host` only after the new tab's shell has printed a prompt.
+    pending_ssh_len: usize = 0,
+    pending_ssh_host: [128]u8 = undefined,
     status_msg: [96]u8 = undefined,
     status_len: usize = 0,
     /// Seconds (glfwGetTime) when the toast should disappear (0 = hidden).
@@ -72,12 +108,24 @@ pub const App = struct {
     mouse_y: f64 = 0,
     /// Right-click Copy/Paste menu over the terminal (null = closed).
     context_menu: ?ContextMenu = null,
-    /// Settings row: 0 theme, 1 text, 2 cursor, 3 blink, 4 shell
+    /// Settings row: theme, text, font, face, look, opacity, padding, spacing, cursor, blink, prompt, shell
     settings_row: usize = 0,
     /// Selected plugin index in the Plugins panel.
     plugin_row: usize = 0,
+    plugin_result: plugin_result_mod.ResultView = undefined,
+    /// In-progress key sequence (`ctrl+a` waiting for `n` in `ctrl+a>n`).
+    seq: [keybind_mod.max_sequence]keybind_mod.Trigger = undefined,
+    seq_len: u8 = 0,
 
-    pub fn create(allocator: std.mem.Allocator, io: std.Io) !*App {
+    pub const LaunchOpts = struct {
+        cwd: ?[]const u8 = null,
+        title: ?[]const u8 = null,
+        execute: []const []const u8 = &.{},
+        wait_after_command: bool = false,
+        skip_home: bool = false,
+    };
+
+    pub fn create(allocator: std.mem.Allocator, io: std.Io, opts: LaunchOpts) !*App {
         const self = try allocator.create(App);
         errdefer allocator.destroy(self);
 
@@ -93,7 +141,9 @@ pub const App = struct {
         renderer.setTheme(theme);
         renderer.opacity = config.opacity;
         renderer.setContentScale(window.contentScale());
+        renderer.setFontFace(config.font_face);
         renderer.setFontSize(config.font_size);
+        renderer.setLineHeight(config.line_height);
         renderer.cursor_style = config.cursor_style;
         renderer.cursor_blink = config.cursor_blink;
 
@@ -116,6 +166,7 @@ pub const App = struct {
             .config = config,
             .workspaces = workspaces,
             .plugins = plugins,
+            .plugin_result = plugin_result_mod.ResultView.init(allocator),
             .ui = .home,
         };
 
@@ -130,6 +181,9 @@ pub const App = struct {
         self.fireHooks(.on_load);
         self.applyRendererHooks();
         self.publishSourceRoot();
+        macos_open.install();
+        self.applyLaunch(opts);
+        self.drainExternalOpens();
         return self;
     }
 
@@ -149,9 +203,11 @@ pub const App = struct {
         Window.on_mouse_button = null;
         Window.on_cursor_pos = null;
         Window.on_scroll = null;
+        self.plugin_result.deinit();
         self.plugins.deinit();
         self.workspaces.deinit();
         self.search.close(self.allocator);
+        self.viewer.close(self.allocator);
         self.tabs.deinit();
         self.renderer.deinit();
         self.window.deinit();
@@ -162,8 +218,10 @@ pub const App = struct {
     pub fn run(self: *App) !void {
         while (!self.window.shouldClose()) {
             Window.poll();
+            self.drainExternalOpens();
             self.handleResize();
             self.tabs.tickAll();
+            self.flushPendingSsh();
             self.pollTerminalStatus();
             self.tickStatus();
             self.reapExitedSessions();
@@ -174,11 +232,12 @@ pub const App = struct {
 
     /// When the user types `exit` (or the shell otherwise ends), close that pane/tab.
     fn reapExitedSessions(self: *App) void {
-        if (self.ui != .normal and self.ui != .search) return;
+        if (self.ui != .normal and self.ui != .search and self.ui != .viewer) return;
         if (!self.tabs.pruneDead()) return;
 
         if (self.tabs.items.items.len == 0) {
             self.search.close(self.allocator);
+            self.viewer.close(self.allocator);
             self.goHome();
             return;
         }
@@ -375,50 +434,58 @@ pub const App = struct {
 
         self.renderer.clearBackground();
 
-        // Tab strip with Powerline-style slanted active label
+        // Quiet tab strip — lift from background only (no theme-accent / cyan underlines).
         const tbg = self.renderer.theme.background;
         const tfg = self.renderer.theme.foreground;
-        const accent = self.renderer.theme.ansi[4]; // theme blue
-        try self.renderer.drawRect(0, 0, self.window.fb_width, Tabs.bar_height, tbg, 1.0);
+        const bar_bg = Color.rgb(
+            @intCast(@max(0, @as(i32, tbg.r) - 4)),
+            @intCast(@max(0, @as(i32, tbg.g) - 4)),
+            @intCast(@max(0, @as(i32, tbg.b) - 4)),
+        );
+        const active_bg = Color.rgb(
+            @intCast(@min(255, @as(i32, tbg.r) + 14)),
+            @intCast(@min(255, @as(i32, tbg.g) + 14)),
+            @intCast(@min(255, @as(i32, tbg.b) + 16)),
+        );
+        const rule = Color.rgb(
+            @intCast(@min(255, @as(i32, tbg.r) + 28)),
+            @intCast(@min(255, @as(i32, tbg.g) + 28)),
+            @intCast(@min(255, @as(i32, tbg.b) + 28)),
+        );
+        // Desaturate inactive labels toward gray so Solarized/Nord don't tint the chrome.
+        const avg_fg = @divTrunc(@as(i32, tfg.r) + @as(i32, tfg.g) + @as(i32, tfg.b), 3);
+        const avg_bg = @divTrunc(@as(i32, tbg.r) + @as(i32, tbg.g) + @as(i32, tbg.b), 3);
+        const muted_v = @divTrunc(avg_fg + avg_bg * 2, 3);
+        const muted_fg = Color.rgb(@intCast(muted_v), @intCast(muted_v), @intCast(muted_v));
+        try self.renderer.drawRect(0, 0, self.window.fb_width, Tabs.bar_height, bar_bg, 1.0);
+        try self.renderer.drawRect(0, Tabs.bar_height - 1, self.window.fb_width, 1, rule, 0.55);
         const cell_w_i: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
         const cell_h_i: i32 = @intFromFloat(@max(1.0, self.renderer.cell_h));
-        const slant: i32 = 10;
-        const tab_h: i32 = Tabs.bar_height - 10;
-        const tab_y: i32 = 5;
-        var x: i32 = 8;
+        const tab_h: i32 = Tabs.bar_height - 2;
+        const tab_y: i32 = 0;
+        var x: i32 = 6;
         for (self.tabs.items.items, 0..) |tab, i| {
             const active = i == self.tabs.active;
             const title = tab.title[0..@min(tab.title.len, 16)];
             const text_w: i32 = @as(i32, @intCast(title.len)) * cell_w_i;
             const label_w: i32 = text_w + 28;
             if (active) {
-                try self.renderer.drawSlantRect(x, tab_y, label_w, tab_h, slant, accent, 1.0);
-            } else {
-                const muted = Color.rgb(
-                    @intCast(@divTrunc(@as(i32, tbg.r) * 2 + @as(i32, accent.r), 3)),
-                    @intCast(@divTrunc(@as(i32, tbg.g) * 2 + @as(i32, accent.g), 3)),
-                    @intCast(@divTrunc(@as(i32, tbg.b) * 2 + @as(i32, accent.b), 3)),
-                );
-                try self.renderer.drawSlantRect(x, tab_y, label_w, tab_h, slant, muted, 0.55);
+                try self.renderer.drawRect(x, tab_y, label_w, tab_h, active_bg, 1.0);
+                try self.renderer.drawRect(x + 8, Tabs.bar_height - 2, label_w - 16, 2, rule, 0.95);
             }
-            const fg = if (active) Color.rgb(255, 255, 255) else Color.rgb(
-                @intCast(@divTrunc(@as(i32, tfg.r) + @as(i32, tbg.r), 2)),
-                @intCast(@divTrunc(@as(i32, tfg.g) + @as(i32, tbg.g), 2)),
-                @intCast(@divTrunc(@as(i32, tfg.b) + @as(i32, tbg.b), 2)),
-            );
-            // Center label in the parallelogram (centroid is at x+w/2, y+h/2)
+            const fg = if (active) tfg else muted_fg;
             const text_x = x + @divTrunc(label_w - text_w, 2);
             const text_y = tab_y + @divTrunc(tab_h - cell_h_i, 2);
             try self.renderer.drawText(text_x, text_y, title, fg);
-            x += label_w + 4;
+            x += label_w + 2;
         }
 
-        // Workspace badge on the right
+        // Workspace name on the right (muted, same tone as inactive tabs)
         if (self.workspaces.current_name) |wn| {
             const label = wn[0..@min(wn.len, 20)];
             const lw: i32 = @as(i32, @intCast(label.len)) * cell_w_i + 20;
             const bx = self.window.fb_width - lw - 10;
-            try self.renderer.drawText(bx + 8, 10, label, Color.rgb(140, 180, 160));
+            try self.renderer.drawText(bx + 8, 10, label, muted_fg);
         }
 
         const tab = self.tabs.current() orelse {
@@ -427,11 +494,13 @@ pub const App = struct {
             switch (self.ui) {
                 .settings => try self.drawSettings(),
                 .plugins => try self.drawPlugins(),
+                .plugin_result => try self.drawPluginResult(),
                 .palette => try self.drawPalette(),
                 .ws_picker => try self.drawWorkspacePicker(),
                 .ws_save => try self.drawSavePrompt(),
                 .ssh_prompt => try self.drawSshPrompt(),
                 .search => try self.drawSearch(),
+                .viewer => try self.drawViewer(),
                 .home, .normal => self.ui = .home,
             }
             if (self.status_len > 0) {
@@ -473,6 +542,9 @@ pub const App = struct {
         if (self.ui == .search) {
             try self.drawSearch();
         }
+        if (self.ui == .viewer) {
+            try self.drawViewer();
+        }
         if (self.ui == .ws_picker) {
             try self.drawWorkspacePicker();
         }
@@ -490,6 +562,9 @@ pub const App = struct {
         }
         if (self.ui == .plugins) {
             try self.drawPlugins();
+        }
+        if (self.ui == .plugin_result) {
+            try self.drawPluginResult();
         }
         if (self.context_menu != null) {
             try self.drawContextMenu();
@@ -528,6 +603,10 @@ pub const App = struct {
         return idx;
     }
 
+    fn overlayChrome(self: *const App) ui_chrome.Chrome {
+        return ui_chrome.fromTheme(self.renderer.theme);
+    }
+
     fn drawContextMenu(self: *App) !void {
         const menu = self.context_menu orelse return;
         const r = self.contextMenuRect(menu);
@@ -535,11 +614,12 @@ pub const App = struct {
         const pad_x: i32 = 12;
         const pad_y: i32 = 6;
         const row_h = ch + 8;
-        const panel = Color.rgb(24, 28, 36);
-        const accent = Color.rgb(90, 175, 220);
-        const fg = Color.rgb(220, 228, 236);
-        const muted = Color.rgb(110, 120, 132);
-        const sel_bg = Color.rgb(40, 52, 68);
+        const chrome = self.overlayChrome();
+        const panel = chrome.panel;
+        const accent = chrome.accent;
+        const fg = chrome.fg;
+        const muted = chrome.muted;
+        const sel_bg = chrome.sel_bg;
 
         try self.renderer.drawRect(r.x, r.y, r.w, r.h, panel, 0.98);
         try self.renderer.drawRect(r.x, r.y, 2, r.h, accent, 0.7);
@@ -576,16 +656,18 @@ pub const App = struct {
     fn drawPalette(self: *App) !void {
         const fb_w = self.window.fb_width;
         const fb_h = self.window.fb_height;
-        const ui = ui_scale.uiScale(fb_w, fb_h);
-        const title_s = ui * 1.2;
+        const ui = ui_scale.uiScale(fb_w, fb_h, self.renderer.content_scale);
+        const title_s = ui * 1.12;
         const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
         const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
         const cw = ui_scale.scaled(base_cw, ui);
         const ch = ui_scale.scaled(base_ch, ui);
         const title_ch = ui_scale.scaled(base_ch, title_s);
 
-        // Dim the scene so the palette reads as a focused overlay.
-        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.48);
+        const chrome = self.overlayChrome();
+
+        // Dim with theme background so overlays stay uniform with Help / the active theme.
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
 
         const pad_x = @max(cw + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
         const pad_y = @max(@divTrunc(ch, 2) + 6, @as(i32, @intFromFloat(@round(18.0 * ui))));
@@ -597,8 +679,8 @@ pub const App = struct {
         const accent_h = @max(2, @divTrunc(ch, 10));
 
         const w = ui_scale.panelWidth(fb_w, cw, 52, @as(i32, @intFromFloat(@round(560.0 * ui))));
-        const chrome = title_h + search_h + footer_h + gap * 3 + pad_y * 2;
-        const max_rows_by_height = @max(1, @divTrunc(fb_h - chrome - ch * 2, row_h));
+        const chrome_h = title_h + search_h + footer_h + gap * 3 + pad_y * 2;
+        const max_rows_by_height = @max(1, @divTrunc(fb_h - chrome_h - ch * 2, row_h));
         const max_visible: usize = @min(16, @as(usize, @intCast(max_rows_by_height)));
 
         var start: usize = 0;
@@ -615,17 +697,17 @@ pub const App = struct {
         const x = @divTrunc(fb_w - w, 2);
         const y = @max(ch * 2, @divTrunc(fb_h - h, 6));
 
-        const panel = Color.rgb(22, 26, 34);
-        const field = Color.rgb(14, 17, 24);
-        const fg = Color.rgb(230, 235, 240);
-        const muted = Color.rgb(140, 150, 165);
-        const dim = Color.rgb(100, 110, 125);
-        const accent = Color.rgb(90, 175, 220);
-        const sel_bg = Color.rgb(36, 48, 64);
-        const rule = Color.rgb(40, 48, 60);
+        const panel = chrome.panel;
+        const field = chrome.field;
+        const fg = chrome.fg;
+        const muted = chrome.muted;
+        const dim = chrome.dim;
+        const accent = chrome.accent;
+        const sel_bg = chrome.sel_bg;
+        const rule = chrome.rule;
 
         try self.renderer.drawRect(x, y, w, h, panel, 0.98);
-        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.65);
+        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.55);
 
         var cy = y + pad_y;
         try self.renderer.drawTextScaled(x + pad_x, cy, "Command Palette", fg, title_s);
@@ -691,8 +773,9 @@ pub const App = struct {
         const ch = @as(i32, @intFromFloat(self.renderer.cell_h));
         const fb_w = self.window.fb_width;
         const fb_h = self.window.fb_height;
+        const chrome = self.overlayChrome();
 
-        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.45);
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
 
         const pad_x = @max(20, cw + 8);
         const pad_y = @max(16, @divTrunc(ch, 2) + 6);
@@ -719,12 +802,12 @@ pub const App = struct {
         const x = @divTrunc(fb_w - w, 2);
         const y = @max(ch * 2, @divTrunc(fb_h - h, 5));
 
-        const panel = Color.rgb(22, 26, 34);
-        const fg = Color.rgb(230, 235, 240);
-        const muted = Color.rgb(140, 150, 165);
-        const dim = Color.rgb(100, 110, 125);
-        const accent = Color.rgb(90, 175, 220);
-        const sel_bg = Color.rgb(36, 48, 64);
+        const panel = chrome.panel;
+        const fg = chrome.fg;
+        const muted = chrome.muted;
+        const dim = chrome.dim;
+        const accent = chrome.accent;
+        const sel_bg = chrome.sel_bg;
 
         try self.renderer.drawRect(x, y, w, h, panel, 0.98);
         try self.renderer.drawRect(x, y, w, 2, accent, 0.55);
@@ -736,29 +819,33 @@ pub const App = struct {
         // Mode tabs
         const term_label = if (self.search.mode == .terminal) "[ Terminal ]" else "  Terminal  ";
         const files_label = if (self.search.mode == .files) "[ Files ]" else "  Files  ";
+        const code_label = if (self.search.mode == .code) "[ Code ]" else "  Code  ";
         try self.renderer.drawText(x + pad_x, cy, term_label, if (self.search.mode == .terminal) accent else muted);
         try self.renderer.drawText(x + pad_x + cw * 14, cy, files_label, if (self.search.mode == .files) accent else muted);
+        try self.renderer.drawText(x + pad_x + cw * 24, cy, code_label, if (self.search.mode == .code) accent else muted);
         try self.renderer.drawText(x + w - pad_x - cw * 12, cy, "Tab switch", dim);
         cy += mode_h;
 
-        try self.renderer.drawRect(x + pad_x - 4, cy - 4, w - pad_x * 2 + 8, search_h, Color.rgb(16, 19, 26), 1.0);
+        try self.renderer.drawRect(x + pad_x - 4, cy - 4, w - pad_x * 2 + 8, search_h, chrome.field, 1.0);
         var qbuf: [96]u8 = undefined;
         const query = self.search.querySlice();
-        const placeholder = if (self.search.mode == .terminal)
-            "Find in terminal..."
-        else
-            "Find files in workspace...";
+        const placeholder = switch (self.search.mode) {
+            .terminal => "Find in terminal...",
+            .files => "Find files by name...",
+            .code => "Find code in files...",
+        };
         const qline = if (query.len == 0) placeholder else (std.fmt.bufPrint(&qbuf, "> {s}", .{query}) catch "> ");
         try self.renderer.drawText(x + pad_x + 4, cy + @divTrunc(search_h - ch, 2) - 2, qline, if (query.len == 0) dim else accent);
         cy += search_h + gap;
 
-        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, Color.rgb(40, 48, 60), 0.9);
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, chrome.rule, 0.9);
 
         if (query.len == 0) {
-            const hint = if (self.search.mode == .terminal)
-                "Type to search scrollback and the visible screen"
-            else
-                "Type to search file names in the opened folder";
+            const hint = switch (self.search.mode) {
+                .terminal => "Type to search scrollback and the visible screen",
+                .files => "Type to search file names in the opened folder",
+                .code => "Type to search inside files, then Enter to open at that line",
+            };
             try self.renderer.drawText(x + pad_x, cy + @divTrunc(row_h - ch, 2), hint, muted);
         } else if (hit_n == 0) {
             try self.renderer.drawText(x + pad_x, cy + @divTrunc(row_h - ch, 2), "No matches", muted);
@@ -774,22 +861,30 @@ pub const App = struct {
                     try self.renderer.drawRect(x + 10, ry, 3, row_h - 2, accent, 1.0);
                 }
 
-                var line_buf: [128]u8 = undefined;
+                var line_buf: [160]u8 = undefined;
                 const line: []const u8 = switch (self.search.mode) {
                     .terminal => blk: {
                         const hit = self.search.term_hits[mi];
                         break :blk (std.fmt.bufPrint(&line_buf, "line {d}  col {d}", .{ hit.abs_row + 1, hit.col + 1 }) catch "hit");
                     },
                     .files => self.search.file_hits[mi],
+                    .code => blk: {
+                        const hit = self.search.code_hits[mi];
+                        break :blk (std.fmt.bufPrint(
+                            &line_buf,
+                            "{s}:{d}  {s}",
+                            .{ hit.rel, hit.line + 1, hit.snippetSlice() },
+                        ) catch hit.rel);
+                    },
                 };
                 const shown = line[0..@min(line.len, @as(usize, @intCast(label_max)))];
                 try self.renderer.drawText(x + pad_x + 6, text_y, shown, fg);
             }
         }
 
-        var foot: [80]u8 = undefined;
+        var foot: [96]u8 = undefined;
         const foot_line = if (hit_n > 0)
-            (std.fmt.bufPrint(&foot, "{d} matches   Enter open   Esc close", .{hit_n}) catch "Enter open   Esc close")
+            (std.fmt.bufPrint(&foot, "{d} matches   Enter open   Shift+Enter insert   Esc", .{hit_n}) catch "Enter open   Esc close")
         else
             "Up/Down move   Tab mode   Esc close";
         try self.renderer.drawText(x + pad_x, y + h - footer_h + @divTrunc(pad_y, 2), foot_line, dim);
@@ -825,14 +920,24 @@ pub const App = struct {
                 }
                 self.search.refreshFiles(self.allocator, self.io);
             },
+            .code => {
+                if (self.focused()) |s| {
+                    self.search.setRoot(self.allocator, s.cwd) catch {};
+                }
+                self.search.refreshCode(self.allocator, self.io);
+            },
         }
     }
 
-    fn handleSearchKey(self: *App, key: c_int) void {
+    fn handleSearchKey(self: *App, key: c_int, shift: bool) void {
         switch (key) {
             c.GLFW_KEY_ESCAPE => {
                 self.search.close(self.allocator);
-                self.leaveOverlay();
+                if (self.viewer.active) {
+                    self.ui = .viewer;
+                } else {
+                    self.leaveOverlay();
+                }
             },
             c.GLFW_KEY_TAB => {
                 self.search.toggleMode();
@@ -854,12 +959,12 @@ pub const App = struct {
                 self.search.backspace();
                 self.refreshSearchResults();
             },
-            c.GLFW_KEY_ENTER => self.activateSearchSelection(),
+            c.GLFW_KEY_ENTER => self.activateSearchSelection(shift),
             else => {},
         }
     }
 
-    fn activateSearchSelection(self: *App) void {
+    fn activateSearchSelection(self: *App, insert_path: bool) void {
         switch (self.search.mode) {
             .terminal => {
                 if (self.search.term_count == 0) return;
@@ -871,50 +976,86 @@ pub const App = struct {
                 const msg = std.fmt.bufPrint(&buf, "match {d}/{d}", .{ self.search.selected + 1, self.search.term_count }) catch "match";
                 self.setStatus(msg);
             },
-            .files => {
+            .files, .code => {
                 const rel = self.search.selectedFilePath() orelse {
                     self.setStatus("no file selected");
                     return;
                 };
-                // Insert relative path into the shell for cd/open/edit.
-                if (self.focused()) |s| {
-                    s.write(rel);
-                    s.write(" ");
+                if (insert_path) {
+                    if (self.focused()) |s| {
+                        s.write(rel);
+                        s.write(" ");
+                    }
+                    self.search.close(self.allocator);
+                    if (self.viewer.active) {
+                        self.ui = .viewer;
+                    } else {
+                        self.ui = .normal;
+                    }
+                    var buf: [96]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "inserted {s}", .{rel}) catch "file inserted";
+                    self.setStatus(msg);
+                    return;
+                }
+                const abs = self.search.selectedFileAbsolute(self.allocator) catch {
+                    self.setStatus("could not open file");
+                    return;
+                } orelse {
+                    self.setStatus("no file selected");
+                    return;
+                };
+                defer self.allocator.free(abs);
+                const code = self.search.selectedCodeHit();
+                const goto_line: ?usize = if (code) |h| h.line else null;
+                const goto_col: usize = if (code) |h| h.col else 0;
+                var qbuf: [64]u8 = undefined;
+                const q = self.search.querySlice();
+                const qn = @min(q.len, qbuf.len);
+                @memcpy(qbuf[0..qn], q[0..qn]);
+                const from_code = self.search.mode == .code;
+                self.openViewerPath(abs, rel);
+                if (goto_line) |row| self.viewer.goTo(row, goto_col);
+                if (from_code and qn > 0) {
+                    @memcpy(self.viewer.find_query[0..qn], qbuf[0..qn]);
+                    self.viewer.find_len = qn;
+                    self.viewer.openFind();
                 }
                 self.search.close(self.allocator);
-                self.ui = .normal;
-                var buf: [96]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "inserted {s}", .{rel}) catch "file inserted";
-                self.setStatus(msg);
             },
         }
     }
 
     fn drawSshPrompt(self: *App) !void {
+        const chrome = self.overlayChrome();
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
         const w: i32 = 440;
         const h: i32 = 90;
-        const x = @divTrunc(self.window.fb_width - w, 2);
-        const y = @divTrunc(self.window.fb_height - h, 2);
-        try self.renderer.drawRect(x, y, w, h, Color.rgb(24, 28, 36), 0.97);
-        try self.renderer.drawText(x + 16, y + 14, "SSH", Color.rgb(230, 235, 240));
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @divTrunc(fb_h - h, 2);
+        try self.renderer.drawRect(x, y, w, h, chrome.panel, 0.98);
+        try self.renderer.drawRect(x, y, w, 2, chrome.accent, 0.55);
+        try self.renderer.drawText(x + 16, y + 14, "SSH", chrome.fg);
         var buf: [160]u8 = undefined;
         const label = std.fmt.bufPrint(&buf, "Host: {s}", .{self.ssh_host[0..self.ssh_host_len]}) catch "Host:";
-        try self.renderer.drawText(x + 16, y + 42, label, Color.rgb(200, 210, 220));
-        try self.renderer.drawText(x + 16, y + 66, "Enter connect  |  Esc cancel", Color.rgb(140, 150, 160));
+        try self.renderer.drawText(x + 16, y + 42, label, chrome.muted);
+        try self.renderer.drawText(x + 16, y + 66, "Enter connect  |  Esc cancel", chrome.dim);
     }
 
     fn drawSettings(self: *App) !void {
         const fb_w = self.window.fb_width;
         const fb_h = self.window.fb_height;
-        const ui = ui_scale.uiScale(fb_w, fb_h);
-        const title_s = ui * 1.25;
+        const ui = ui_scale.uiScale(fb_w, fb_h, self.renderer.content_scale);
+        const title_s = ui * 1.12;
         const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
         const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
         const cw = ui_scale.scaled(base_cw, ui);
         const ch = ui_scale.scaled(base_ch, ui);
         const title_ch = ui_scale.scaled(base_ch, title_s);
 
-        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.48);
+        const chrome = self.overlayChrome();
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
 
         const pad_x = @max(cw + 10, @as(i32, @intFromFloat(@round(26.0 * ui))));
         const pad_y = @max(@divTrunc(ch, 2) + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
@@ -927,43 +1068,73 @@ pub const App = struct {
         const accent_h = @max(2, @divTrunc(ch, 10));
 
         const w = ui_scale.panelWidth(fb_w, cw, 48, @as(i32, @intFromFloat(@round(540.0 * ui))));
-        const rows_n: i32 = 5;
-        const list_h = rows_n * row_h;
-        const h = pad_y + title_h + subtitle_h + gap + list_h + gap + footer_h;
+        const header_h = pad_y + title_h + subtitle_h + gap;
+        const avail = @max(row_h, fb_h - header_h - footer_h - ch * 2);
+        const max_visible: usize = @max(1, @as(usize, @intCast(@divTrunc(avail, row_h))));
+        const total = SettingsRow.count;
+        const visible = @min(total, max_visible);
+        const list_h = @as(i32, @intCast(visible)) * row_h;
+        const h = header_h + list_h + gap + footer_h;
         const x = @divTrunc(fb_w - w, 2);
-        const y = @max(ch * 2, @divTrunc(fb_h - h, 2));
+        const y = @max(ch, @divTrunc(fb_h - h, 2));
 
-        const panel = Color.rgb(22, 26, 34);
-        const fg = Color.rgb(230, 235, 240);
-        const muted = Color.rgb(150, 160, 175);
-        const dim = Color.rgb(100, 110, 125);
-        const accent = Color.rgb(90, 175, 220);
-        const sel_bg = Color.rgb(36, 48, 64);
-        const rule = Color.rgb(40, 48, 60);
+        const panel = chrome.panel;
+        const fg = chrome.fg;
+        const muted = chrome.muted;
+        const dim = chrome.dim;
+        const accent = chrome.accent;
+        const sel_bg = chrome.sel_bg;
+        const rule = chrome.rule;
 
         try self.renderer.drawRect(x, y, w, h, panel, 0.98);
-        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.65);
+        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.55);
 
         var cy = y + pad_y;
         try self.renderer.drawTextScaled(x + pad_x, cy, "Appearance", fg, title_s);
         cy += title_h;
-        try self.renderer.drawTextScaled(x + pad_x, cy, "Theme, text color, cursor, and shell for new tabs", muted, ui);
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Ghostty-style look, prompt, and shell", muted, ui);
         cy += subtitle_h + gap;
 
         try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
 
+        var size_buf: [16]u8 = undefined;
+        const size_str = std.fmt.bufPrint(&size_buf, "{d:.0}pt", .{self.renderer.font_size}) catch "14pt";
+        var opacity_buf: [16]u8 = undefined;
+        const opacity_str = std.fmt.bufPrint(&opacity_buf, "{d:.0}%", .{self.config.opacity * 100.0}) catch "100%";
+        var pad_buf: [24]u8 = undefined;
+        const pad_str = std.fmt.bufPrint(&pad_buf, "{d}×{d}", .{
+            self.config.padding_x,
+            self.config.padding_y,
+        }) catch "10×6";
         const rows = [_]struct { label: []const u8, value: []const u8 }{
             .{ .label = "Theme", .value = self.config.theme_name },
             .{ .label = "Text", .value = self.config.fgDisplay() },
+            .{ .label = "Font", .value = size_str },
+            .{ .label = "Face", .value = self.config.fontFaceDisplay() },
+            .{ .label = "Look", .value = self.config.look.name() },
+            .{ .label = "Opacity", .value = opacity_str },
+            .{ .label = "Padding", .value = pad_str },
+            .{ .label = "Spacing", .value = self.config.lineHeightDisplay() },
             .{ .label = "Cursor", .value = self.config.cursor_style.name() },
             .{ .label = "Blink", .value = if (self.config.cursor_blink) "on" else "off" },
+            .{ .label = "Prompt", .value = self.config.prompt.name() },
             .{ .label = "Shell", .value = self.config.shellDisplay() },
         };
 
+        if (self.settings_row >= rows.len) self.settings_row = rows.len - 1;
+        var start: usize = 0;
+        if (self.settings_row >= visible) {
+            start = self.settings_row + 1 - visible;
+        }
+
         var value_buf: [96]u8 = undefined;
         const value_col_w = @divTrunc(w * 11, 20);
-        for (rows, 0..) |row, i| {
-            const ry = cy + @as(i32, @intCast(i)) * row_h;
+        const list_top = cy;
+        var shown: usize = 0;
+        while (shown < visible) : (shown += 1) {
+            const i = start + shown;
+            const row = rows[i];
+            const ry = list_top + @as(i32, @intCast(shown)) * row_h;
             const text_y = ry + @divTrunc(row_h - ch, 2);
             const selected = i == self.settings_row;
 
@@ -984,217 +1155,421 @@ pub const App = struct {
             try self.renderer.drawTextScaled(vx, text_y, value_text[0..value_len], if (selected) accent else muted, ui);
         }
 
-        cy += list_h + gap;
+        cy = y + h - footer_h;
         try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
 
+        const more = if (start > 0 or start + visible < rows.len) "  (scroll)" else "";
         var info: [96]u8 = undefined;
-        const font_line = std.fmt.bufPrint(&info, "Font  {d:.0}pt    padding  {d}x{d}", .{
-            self.renderer.font_size,
-            self.config.padding_x,
-            self.config.padding_y,
-        }) catch "";
-        try self.renderer.drawTextScaled(x + pad_x, cy, font_line, muted, ui);
+        const hint = std.fmt.bufPrint(&info, "Look sets padding + spacing + opacity{s}", .{more}) catch "Look sets padding + spacing + opacity";
+        try self.renderer.drawTextScaled(x + pad_x, cy, hint, muted, ui);
         cy += ch + @max(6, @divTrunc(ch, 4));
         try self.renderer.drawTextScaled(x + pad_x, cy, "Up/Down select    Left/Right change    S save", dim, ui);
         cy += ch + @max(6, @divTrunc(ch, 4));
-        try self.renderer.drawTextScaled(x + pad_x, cy, "Esc close    Ctrl+=/-/0 font size", dim, ui);
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Prompt applies to new tabs    Esc close", dim, ui);
     }
 
     fn drawPlugins(self: *App) !void {
         const fb_w = self.window.fb_width;
         const fb_h = self.window.fb_height;
-        const ui = ui_scale.uiScale(fb_w, fb_h);
-        const title_s = ui * 1.25;
+        const ui = ui_scale.uiScale(fb_w, fb_h, self.renderer.content_scale);
+        const title_s = ui * 1.12;
         const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
         const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
         const cw = ui_scale.scaled(base_cw, ui);
         const ch = ui_scale.scaled(base_ch, ui);
         const title_ch = ui_scale.scaled(base_ch, title_s);
 
-        try self.renderer.drawRect(0, 0, fb_w, fb_h, Color.rgb(8, 10, 14), 0.48);
+        const chrome = self.overlayChrome();
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
 
-        const pad_x = @max(cw + 10, @as(i32, @intFromFloat(@round(26.0 * ui))));
-        const pad_y = @max(@divTrunc(ch, 2) + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
-        const row_gap = @max(4, @divTrunc(ch, 6));
-        // Two-line rows: name/version + description.
-        const row_h = ch * 2 + @divTrunc(ch, 2) + row_gap;
-        const title_h = title_ch + @divTrunc(ch, 4);
-        const subtitle_h = ch + @divTrunc(ch, 2);
-        const gap = @max(@divTrunc(ch, 2), @as(i32, @intFromFloat(@round(14.0 * ui))));
-        const footer_lines = 3;
-        const plugin_n = self.plugins.count();
+        const pad_x = @max(cw + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
+        const pad_y = @max(@divTrunc(ch, 2) + 8, @as(i32, @intFromFloat(@round(20.0 * ui))));
+        const gap = @max(@divTrunc(ch, 2), @as(i32, @intFromFloat(@round(12.0 * ui))));
+        const list_row_h = ch + @divTrunc(ch, 2) + @max(4, @divTrunc(ch, 6));
         const accent_h = @max(2, @divTrunc(ch, 10));
+        const plugin_n = self.plugins.count();
 
-        const w = ui_scale.panelWidth(fb_w, cw, 52, @as(i32, @intFromFloat(@round(580.0 * ui))));
-
-        const header_h = pad_y + title_h + subtitle_h + gap + (ch + @max(6, @divTrunc(ch, 4))) + gap;
-        const footer_h = footer_lines * (ch + @max(6, @divTrunc(ch, 4))) + pad_y;
-        const avail_list = @max(row_h, fb_h - header_h - footer_h - ch * 2);
-        const max_visible: usize = @max(1, @as(usize, @intCast(@divTrunc(avail_list, row_h))));
-        const list_rows = @max(@as(usize, 1), @min(@max(plugin_n, 1), max_visible));
-        const list_h = @as(i32, @intCast(list_rows)) * row_h;
-        const h = header_h + list_h + gap + footer_h;
+        const w = ui_scale.panelWidthWide(fb_w, cw, 68, @as(i32, @intFromFloat(@round(760.0 * ui))));
+        const header_h = pad_y + title_ch + @divTrunc(ch, 4) + gap;
+        const footer_h = ch + pad_y;
+        const min_body = list_row_h * 8;
+        const max_h = fb_h - ch * 2;
+        const h = @min(max_h, @max(header_h + min_body + footer_h, @divTrunc(fb_h * 11, 18)));
         const x = @divTrunc(fb_w - w, 2);
         const y = @max(ch, @divTrunc(fb_h - h, 2));
 
-        const panel = Color.rgb(22, 26, 34);
-        const fg = Color.rgb(230, 235, 240);
-        const muted = Color.rgb(150, 160, 175);
-        const dim = Color.rgb(100, 110, 125);
-        const accent = Color.rgb(90, 175, 220);
-        const sel_bg = Color.rgb(36, 48, 64);
-        const rule = Color.rgb(40, 48, 60);
-        const on_col = Color.rgb(120, 200, 140);
-        const off_col = Color.rgb(160, 110, 110);
+        const list_w = @max(cw * 16, @min(@divTrunc(w * 2, 5), cw * 24));
+        const body_top = y + header_h;
+        const body_h = h - header_h - footer_h;
+        const list_top = body_top + @divTrunc(ch, 4);
+        const max_visible: usize = @max(1, @as(usize, @intCast(@divTrunc(body_h - @divTrunc(ch, 2), list_row_h))));
+
+        const panel = chrome.panel;
+        const fg = chrome.fg;
+        const muted = chrome.muted;
+        const dim = chrome.dim;
+        const accent = chrome.accent;
+        const sel_bg = chrome.sel_bg;
+        const rule = chrome.rule;
+        const on_col = chrome.on_col;
+        const off_col = chrome.off_col;
 
         try self.renderer.drawRect(x, y, w, h, panel, 0.98);
-        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.65);
+        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.55);
+
+        var enabled_n: usize = 0;
+        for (self.plugins.plugins.items) |p| {
+            if (p.enabled) enabled_n += 1;
+        }
 
         var cy = y + pad_y;
         try self.renderer.drawTextScaled(x + pad_x, cy, "Plugins", fg, title_s);
-        cy += title_h;
-        try self.renderer.drawTextScaled(x + pad_x, cy, "Shortcuts, themes, and commands you can edit", muted, ui);
-        cy += subtitle_h;
-
-        try self.renderer.drawRect(x + pad_x - 4, cy, w - pad_x * 2 + 8, 1, rule, 0.9);
-        cy += gap;
 
         var count_buf: [48]u8 = undefined;
         const count_line = if (plugin_n == 0)
-            "No plugins installed"
+            "none installed"
         else
-            (std.fmt.bufPrint(&count_buf, "{d} installed", .{plugin_n}) catch "installed");
-        try self.renderer.drawTextScaled(x + pad_x, cy, count_line, muted, ui);
-        if (plugin_n < 6) {
-            const tip = "I  install pack";
-            const tip_x = x + w - pad_x - @as(i32, @intCast(tip.len)) * cw;
-            try self.renderer.drawTextScaled(tip_x, cy, tip, accent, ui);
-        }
-        cy += ch + @max(6, @divTrunc(ch, 4));
+            (std.fmt.bufPrint(&count_buf, "{d} of {d} on", .{ enabled_n, plugin_n }) catch "");
+        const count_x = x + w - pad_x - @as(i32, @intCast(count_line.len)) * cw;
+        try self.renderer.drawTextScaled(count_x, cy + @divTrunc(title_ch - ch, 2), count_line, muted, ui);
 
-        const list_top = cy;
+        try self.renderer.drawRect(x, y + header_h - 1, w, 1, rule, 0.9);
+
         if (plugin_n == 0) {
-            const empty_y = list_top + @divTrunc(list_h - ch * 2, 2);
-            try self.renderer.drawTextScaled(x + pad_x + 8, empty_y, "Press I to install the bundled pack", fg, ui);
-            try self.renderer.drawTextScaled(x + pad_x + 8, empty_y + ch + 4, "hello · git · devtools · themes · workflow · keys", dim, ui);
+            const empty_y = body_top + @divTrunc(body_h - ch * 3, 2);
+            const centerLine = struct {
+                fn xFor(panel_x: i32, panel_w: i32, text: []const u8, cell_w: i32) i32 {
+                    return panel_x + @divTrunc(panel_w - @as(i32, @intCast(text.len)) * cell_w, 2);
+                }
+            }.xFor;
+            const l1 = "No plugins installed";
+            const l2 = "Press I to install the bundled pack";
+            const l3 = "hello   git   format   lint   ai   keys   themes";
+            try self.renderer.drawTextScaled(centerLine(x, w, l1, cw), empty_y, l1, fg, ui);
+            try self.renderer.drawTextScaled(centerLine(x, w, l2, cw), empty_y + ch + 6, l2, muted, ui);
+            try self.renderer.drawTextScaled(centerLine(x, w, l3, cw), empty_y + ch * 2 + 12, l3, dim, ui);
         } else {
+            try self.renderer.drawRect(x, body_top, list_w, body_h, chrome.field, 1.0);
+            try self.renderer.drawRect(x + list_w, body_top, 1, body_h, rule, 0.9);
+
             if (self.plugin_row >= plugin_n) self.plugin_row = plugin_n - 1;
             var start: usize = 0;
             if (self.plugin_row >= max_visible) {
                 start = self.plugin_row + 1 - max_visible;
             }
             const visible = @min(plugin_n - start, max_visible);
+            const pill_w = cw * 3 + 10;
+            const name_max = @max(4, @divTrunc(list_w - pad_x * 2 - pill_w - cw * 3, cw));
+            const bar_w = @max(3, @divTrunc(cw, 4));
+
             var i: usize = 0;
             while (i < visible) : (i += 1) {
                 const mi = start + i;
                 const p = self.plugins.plugins.items[mi];
-                const ry = list_top + @as(i32, @intCast(i)) * row_h;
+                const ry = list_top + @as(i32, @intCast(i)) * list_row_h;
                 const selected = mi == self.plugin_row;
+                const row_h = list_row_h - 2;
+                const text_y = ry + @divTrunc(list_row_h - ch, 2);
 
                 if (selected) {
-                    try self.renderer.drawRect(x + 10, ry, w - 20, row_h - row_gap, sel_bg, 1.0);
-                    try self.renderer.drawRect(x + 10, ry, @max(3, @divTrunc(cw, 4)), row_h - row_gap, accent, 1.0);
+                    try self.renderer.drawRect(x + 6, ry, list_w - 12, row_h, sel_bg, 1.0);
+                    try self.renderer.drawRect(x + 6, ry, bar_w, row_h, accent, 1.0);
                 }
 
-                const name_y = ry + @divTrunc(ch, 3);
-                const desc_y = name_y + ch + 2;
-                const text_x = x + pad_x + 8;
+                const dot = @max(5, @divTrunc(ch, 4));
+                const dot_x = x + pad_x;
+                const dot_y = text_y + @divTrunc(ch - dot, 2);
+                try self.renderer.drawRect(dot_x, dot_y, dot, dot, if (p.enabled) on_col else off_col, if (p.enabled) 1.0 else 0.55);
 
-                // Name + version on the first line.
-                try self.renderer.drawTextScaled(text_x, name_y, p.name, if (selected) fg else muted, ui);
+                const name_x = dot_x + dot + @divTrunc(cw, 2) + 2;
+                const shown = clipUiText(p.name, name_max);
+                try self.renderer.drawTextScaled(name_x, text_y, shown, if (selected) fg else if (p.enabled) muted else dim, ui);
 
-                var ver_buf: [24]u8 = undefined;
-                const ver = std.fmt.bufPrint(&ver_buf, "v{s}", .{p.version}) catch "";
-                const name_w = @as(i32, @intCast(p.name.len)) * cw;
-                try self.renderer.drawTextScaled(text_x + name_w + cw, name_y, ver, dim, ui);
-
-                // Compact capability counts when selected (skip zeros).
-                if (selected) {
-                    var meta_buf: [48]u8 = undefined;
-                    var meta_len: usize = 0;
-                    const append = struct {
-                        fn go(buf: []u8, len: *usize, label: []const u8, n: usize) void {
-                            if (n == 0 or len.* >= buf.len) return;
-                            if (len.* > 0 and len.* + 2 < buf.len) {
-                                buf[len.*] = ' ';
-                                buf[len.* + 1] = ' ';
-                                len.* += 2;
-                            }
-                            const piece = std.fmt.bufPrint(buf[len.*..], "{d} {s}", .{ n, label }) catch return;
-                            len.* += piece.len;
-                        }
-                    }.go;
-                    append(&meta_buf, &meta_len, "cmd", p.commands.len);
-                    append(&meta_buf, &meta_len, "theme", p.themes.len);
-                    append(&meta_buf, &meta_len, "bind", p.bindings.len);
-                    if (meta_len > 0) {
-                        const meta_x = text_x + name_w + cw * (@as(i32, @intCast(ver.len)) + 2);
-                        const state_reserve = cw * 6;
-                        const meta_max = @max(0, (x + w - pad_x - state_reserve) - meta_x);
-                        const meta_chars = @min(meta_len, @as(usize, @intCast(@divTrunc(meta_max, cw))));
-                        if (meta_chars > 0) {
-                            try self.renderer.drawTextScaled(meta_x, name_y, meta_buf[0..meta_chars], dim, ui);
-                        }
-                    }
-                }
-
-                // Description on the second line.
-                const desc = if (p.description.len > 0) p.description else "No description";
-                const desc_max = @max(8, @divTrunc(w - pad_x * 2 - cw * 4, cw));
-                const desc_shown = desc[0..@min(desc.len, @as(usize, @intCast(desc_max)))];
-                try self.renderer.drawTextScaled(text_x, desc_y, desc_shown, if (selected) muted else dim, ui);
-
-                // Fixed-width toggle so columns stay aligned.
-                const state = if (p.enabled) "ON " else "OFF";
-                const state_x = x + w - pad_x - @as(i32, @intCast(state.len)) * cw;
-                try self.renderer.drawTextScaled(state_x, name_y, state, if (p.enabled) on_col else off_col, ui);
+                const state: []const u8 = if (p.enabled) "ON" else "OFF";
+                const pill_h = ch + 2;
+                const pill_x = x + list_w - pad_x - pill_w + 4;
+                const pill_y = ry + @divTrunc(list_row_h - pill_h, 2);
+                const pill_col = if (p.enabled) on_col else off_col;
+                try self.renderer.drawRect(pill_x, pill_y, pill_w, pill_h, pill_col, 0.22);
+                const state_x = pill_x + @divTrunc(pill_w - @as(i32, @intCast(state.len)) * cw, 2);
+                try self.renderer.drawTextScaled(state_x, pill_y + 1, state, pill_col, ui);
             }
+
+            if (plugin_n > max_visible) {
+                const track_h = body_h - 16;
+                const thumb_h = @max(10, @divTrunc(track_h * @as(i32, @intCast(max_visible)), @as(i32, @intCast(plugin_n))));
+                const travel = plugin_n - max_visible;
+                const thumb_y = body_top + 8 + @divTrunc((track_h - thumb_h) * @as(i32, @intCast(start)), @as(i32, @intCast(travel)));
+                try self.renderer.drawRect(x + list_w - 4, thumb_y, 2, thumb_h, accent, 0.45);
+            }
+
+            try self.drawPluginDetail(
+                &self.plugins.plugins.items[self.plugin_row],
+                x + list_w,
+                body_top,
+                w - list_w,
+                body_h,
+                pad_x,
+                cw,
+                ch,
+                ui,
+                title_s,
+                title_ch,
+                chrome,
+            );
         }
 
-        cy = y + h - footer_h;
-        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
-        try self.renderer.drawTextScaled(x + pad_x, cy, "~/.config/orbit/plugins/<name>/plugin.toml", dim, ui);
-        cy += ch + @max(6, @divTrunc(ch, 4));
-        try self.renderer.drawTextScaled(x + pad_x, cy, "Up/Down select    Space toggle    R reload", dim, ui);
-        cy += ch + @max(6, @divTrunc(ch, 4));
-        try self.renderer.drawTextScaled(x + pad_x, cy, "I install/update pack    Esc close", dim, ui);
+        cy = y + h - footer_h + @divTrunc(pad_y, 2) - 2;
+        try self.renderer.drawRect(x, y + h - footer_h, w, 1, rule, 0.9);
+        const foot = "Up/Down select   Space on/off   I install   U remove   R reload   Esc";
+        try self.renderer.drawTextScaled(x + pad_x, cy, clipUiText(foot, @divTrunc(w - pad_x * 2, cw)), dim, ui);
+    }
+
+    fn drawPluginDetail(
+        self: *App,
+        p: *const plugin_types.Plugin,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        pad_x: i32,
+        cw: i32,
+        ch: i32,
+        ui: f32,
+        title_s: f32,
+        title_ch: i32,
+        chrome: ui_chrome.Chrome,
+    ) !void {
+        const fg = chrome.fg;
+        const muted = chrome.muted;
+        const dim = chrome.dim;
+        const accent = chrome.accent;
+        const off_col = chrome.off_col;
+        const kind_col = self.pluginKindColor(p.kind);
+        const dx = x + pad_x;
+        const inner_w = w - pad_x * 2;
+        const bottom = y + h - @divTrunc(ch, 3);
+        var dy = y + pad_x;
+
+        const name_max = @max(4, @divTrunc(inner_w, cw));
+        try self.renderer.drawTextScaled(dx, dy, clipUiText(p.name, name_max), if (p.enabled) fg else muted, title_s);
+        dy += title_ch + @divTrunc(ch, 4);
+
+        const badge = p.kind.badge();
+        const badge_w = @as(i32, @intCast(badge.len)) * cw + 10;
+        const badge_h = ch + 4;
+        try self.renderer.drawRect(dx, dy - 1, badge_w, badge_h, kind_col, 0.22);
+        try self.renderer.drawTextScaled(dx + 5, dy + 1, badge, kind_col, ui);
+
+        var ver_buf: [24]u8 = undefined;
+        const ver = std.fmt.bufPrint(&ver_buf, "v{s}", .{p.version}) catch "";
+        var meta_buf: [64]u8 = undefined;
+        const meta = std.fmt.bufPrint(&meta_buf, "{s}  ·  {s}", .{ ver, p.kind.label() }) catch p.kind.label();
+        try self.renderer.drawTextScaled(dx + badge_w + cw, dy + 1, clipUiText(meta, @divTrunc(inner_w - badge_w - cw, cw)), dim, ui);
+        dy += badge_h + @divTrunc(ch, 2);
+
+        if (!p.enabled) {
+            try self.renderer.drawTextScaled(dx, dy, "Disabled  —  Space to enable", off_col, ui);
+            dy += ch + @divTrunc(ch, 3);
+        }
+
+        const desc = if (p.description.len > 0) p.description else "No description";
+        const desc_cols = @max(8, @as(usize, @intCast(@divTrunc(inner_w, cw))));
+        var rest: []const u8 = desc;
+        var line_i: usize = 0;
+        while (line_i < 3 and rest.len > 0 and dy + ch < bottom) : (line_i += 1) {
+            const step = wrapUiText(rest, desc_cols);
+            try self.renderer.drawTextScaled(dx, dy, step.line, muted, ui);
+            dy += ch + 2;
+            rest = step.rest;
+        }
+        dy += @divTrunc(ch, 3);
+
+        var stats_buf: [80]u8 = undefined;
+        var stats_len: usize = 0;
+        const appendStat = struct {
+            fn go(buf: []u8, len: *usize, n: usize, label: []const u8) void {
+                if (n == 0) return;
+                if (len.* > 0) {
+                    const sep = "  ·  ";
+                    if (len.* + sep.len >= buf.len) return;
+                    @memcpy(buf[len.*..][0..sep.len], sep);
+                    len.* += sep.len;
+                }
+                const piece = std.fmt.bufPrint(buf[len.*..], "{d} {s}", .{ n, label }) catch return;
+                len.* += piece.len;
+            }
+        }.go;
+        appendStat(&stats_buf, &stats_len, p.commands.len, "commands");
+        appendStat(&stats_buf, &stats_len, p.themes.len, "themes");
+        appendStat(&stats_buf, &stats_len, p.bindings.len, "shortcuts");
+        if (p.tool.hasRunner()) appendStat(&stats_buf, &stats_len, 1, "tool");
+        if (stats_len > 0 and dy + ch < bottom) {
+            try self.renderer.drawTextScaled(dx, dy, clipUiText(stats_buf[0..stats_len], @as(i32, @intCast(desc_cols))), dim, ui);
+            dy += ch + @divTrunc(ch, 2);
+        }
+
+        if (dy + ch * 2 < bottom) {
+            try self.renderer.drawTextScaled(dx, dy, "Provides", accent, ui);
+            dy += ch + @divTrunc(ch, 4);
+
+            var shown: usize = 0;
+            for (p.commands) |cmd| {
+                if (dy + ch > bottom) break;
+                const label = clipUiText(cmd.label, @as(i32, @intCast(desc_cols)) - 2);
+                try self.renderer.drawTextScaled(dx, dy, "·", dim, ui);
+                try self.renderer.drawTextScaled(dx + cw * 2, dy, label, fg, ui);
+                dy += ch + 2;
+                shown += 1;
+            }
+            for (p.themes) |th| {
+                if (dy + ch > bottom) break;
+                const label = clipUiText(th.name, @as(i32, @intCast(desc_cols)) - 2);
+                try self.renderer.drawTextScaled(dx, dy, "·", dim, ui);
+                try self.renderer.drawTextScaled(dx + cw * 2, dy, label, muted, ui);
+                dy += ch + 2;
+                shown += 1;
+            }
+            if (p.tool.hasRunner() and dy + ch <= bottom) {
+                const runner = p.tool.script orelse p.tool.command orelse "tool";
+                var run_buf: [64]u8 = undefined;
+                const run_line = std.fmt.bufPrint(&run_buf, "runs {s}", .{runner}) catch runner;
+                try self.renderer.drawTextScaled(dx, dy, "·", dim, ui);
+                try self.renderer.drawTextScaled(dx + cw * 2, dy, clipUiText(run_line, @as(i32, @intCast(desc_cols)) - 2), muted, ui);
+                dy += ch + 2;
+                shown += 1;
+            }
+            if (shown == 0 and dy + ch <= bottom) {
+                try self.renderer.drawTextScaled(dx + cw * 2, dy, "nothing registered", dim, ui);
+            }
+        }
+    }
+
+    fn pluginKindColor(self: *const App, kind: PluginKind) Color {
+        const ansi = self.renderer.theme.ansi;
+        return switch (kind) {
+            .commands => ansi[4],
+            .theme => ansi[5],
+            .keys => ansi[6],
+            .format => ansi[2],
+            .lint => ansi[3],
+            .ai => ansi[13],
+        };
     }
 
     fn drawWorkspacePicker(self: *App) !void {
-        const w: i32 = 420;
-        const row_h: i32 = 22;
-        const header: i32 = 36;
-        const h: i32 = header + @as(i32, @intCast(@max(1, self.workspaces.names.items.len))) * row_h + 48;
-        const x = @divTrunc(self.window.fb_width - w, 2);
-        const y = @divTrunc(self.window.fb_height - h, 2);
-        try self.renderer.drawRect(x, y, w, h, Color.rgb(24, 28, 36), 0.97);
-        try self.renderer.drawText(x + 16, y + 12, "Load Saved Workspace", Color.rgb(230, 235, 240));
-        try self.renderer.drawText(x + 16, y + h - 28, "Enter open  |  Esc close  |  Del delete", Color.rgb(140, 150, 160));
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+        const ui = ui_scale.uiScale(fb_w, fb_h, self.renderer.content_scale);
+        const title_s = ui * 1.12;
+        const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const cw = ui_scale.scaled(base_cw, ui);
+        const ch = ui_scale.scaled(base_ch, ui);
+        const title_ch = ui_scale.scaled(base_ch, title_s);
 
-        if (self.workspaces.names.items.len == 0) {
-            try self.renderer.drawText(x + 16, y + header + 8, "(none saved yet — Ctrl+Shift+S to save)", Color.rgb(160, 170, 180));
-            return;
-        }
-        for (self.workspaces.names.items, 0..) |name, i| {
-            const ry = y + header + @as(i32, @intCast(i)) * row_h;
-            if (i == self.picker_index) {
-                try self.renderer.drawRect(x + 8, ry, w - 16, row_h, Color.rgb(50, 80, 120), 1.0);
+        const chrome = self.overlayChrome();
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
+
+        const pad_x = @max(cw + 10, @as(i32, @intFromFloat(@round(26.0 * ui))));
+        const pad_y = @max(@divTrunc(ch, 2) + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
+        const row_h = ch + @divTrunc(ch, 2) + @max(6, @divTrunc(ch, 5));
+        const title_h = title_ch + @divTrunc(ch, 4);
+        const subtitle_h = ch + @divTrunc(ch, 3);
+        const gap = @max(@divTrunc(ch, 2), @as(i32, @intFromFloat(@round(12.0 * ui))));
+        const footer_h = ch + pad_y;
+        const accent_h = @max(2, @divTrunc(ch, 10));
+        const name_n = self.workspaces.names.items.len;
+
+        const w = ui_scale.panelWidth(fb_w, cw, 44, @as(i32, @intFromFloat(@round(480.0 * ui))));
+        const chrome_h = pad_y + title_h + subtitle_h + gap + footer_h + gap + ch;
+        const max_rows_by_height = @max(1, @divTrunc(fb_h - chrome_h - ch * 2, row_h));
+        const max_visible: usize = @min(10, @as(usize, @intCast(max_rows_by_height)));
+        const list_rows = @max(@as(usize, 1), @min(@max(name_n, 1), max_visible));
+        const list_h = @as(i32, @intCast(list_rows)) * row_h;
+        const h = pad_y + title_h + subtitle_h + gap + list_h + gap + footer_h;
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @max(ch * 2, @divTrunc(fb_h - h, 2));
+
+        const panel = chrome.panel;
+        const fg = chrome.fg;
+        const muted = chrome.muted;
+        const dim = chrome.dim;
+        const accent = chrome.accent;
+        const sel_bg = chrome.sel_bg;
+        const rule = chrome.rule;
+
+        try self.renderer.drawRect(x, y, w, h, panel, 0.98);
+        try self.renderer.drawRect(x, y, w, accent_h, accent, 0.55);
+
+        var cy = y + pad_y;
+        try self.renderer.drawTextScaled(x + pad_x, cy, "Load Saved Workspace", fg, title_s);
+        cy += title_h;
+
+        var count_buf: [48]u8 = undefined;
+        const subtitle = if (name_n == 0)
+            "No saved layouts yet"
+        else
+            (std.fmt.bufPrint(&count_buf, "{d} saved", .{name_n}) catch "saved");
+        try self.renderer.drawTextScaled(x + pad_x, cy, subtitle, muted, ui);
+        cy += subtitle_h + gap;
+
+        try self.renderer.drawRect(x + pad_x - 4, cy - @divTrunc(gap, 2), w - pad_x * 2 + 8, 1, rule, 0.9);
+
+        if (name_n == 0) {
+            const empty_y = cy + @divTrunc(list_h - ch * 2, 2);
+            try self.renderer.drawTextScaled(x + pad_x + 4, empty_y, "Save a layout with Ctrl+Shift+S", fg, ui);
+            try self.renderer.drawTextScaled(x + pad_x + 4, empty_y + ch + 4, "Then open it again from here", dim, ui);
+        } else {
+            if (self.picker_index >= name_n) self.picker_index = name_n - 1;
+            var start: usize = 0;
+            if (self.picker_index >= max_visible) {
+                start = self.picker_index + 1 - max_visible;
             }
-            try self.renderer.drawText(x + 20, ry + 4, name[0..@min(name.len, 40)], Color.rgb(220, 225, 230));
+            const visible = @min(name_n - start, max_visible);
+            const label_max = @max(8, @divTrunc(w - pad_x * 2 - cw * 2, cw));
+
+            var i: usize = 0;
+            while (i < visible) : (i += 1) {
+                const mi = start + i;
+                const name = self.workspaces.names.items[mi];
+                const ry = cy + @as(i32, @intCast(i)) * row_h;
+                const text_y = ry + @divTrunc(row_h - ch, 2);
+                const selected = mi == self.picker_index;
+
+                if (selected) {
+                    try self.renderer.drawRect(x + 10, ry, w - 20, row_h - 2, sel_bg, 1.0);
+                    try self.renderer.drawRect(x + 10, ry, @max(3, @divTrunc(cw, 4)), row_h - 2, accent, 1.0);
+                }
+
+                const shown = name[0..@min(name.len, @as(usize, @intCast(label_max)))];
+                try self.renderer.drawTextScaled(x + pad_x + 8, text_y, shown, if (selected) fg else muted, ui);
+            }
         }
+
+        const foot = if (name_n == 0)
+            "Ctrl+Shift+S save    Esc close"
+        else
+            "Enter open    Del delete    Esc close";
+        try self.renderer.drawTextScaled(x + pad_x, y + h - footer_h + @divTrunc(pad_y, 2), foot, dim, ui);
     }
 
     fn drawSavePrompt(self: *App) !void {
+        const chrome = self.overlayChrome();
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
         const w: i32 = 400;
         const h: i32 = 90;
-        const x = @divTrunc(self.window.fb_width - w, 2);
-        const y = @divTrunc(self.window.fb_height - h, 2);
-        try self.renderer.drawRect(x, y, w, h, Color.rgb(24, 28, 36), 0.97);
-        try self.renderer.drawText(x + 16, y + 14, "Save Workspace", Color.rgb(230, 235, 240));
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @divTrunc(fb_h - h, 2);
+        try self.renderer.drawRect(x, y, w, h, chrome.panel, 0.98);
+        try self.renderer.drawRect(x, y, w, 2, chrome.accent, 0.55);
+        try self.renderer.drawText(x + 16, y + 14, "Save Workspace", chrome.fg);
         var buf: [80]u8 = undefined;
         const label = std.fmt.bufPrint(&buf, "Name: {s}", .{self.save_name[0..self.save_name_len]}) catch "Name:";
-        try self.renderer.drawText(x + 16, y + 42, label, Color.rgb(200, 210, 220));
-        try self.renderer.drawText(x + 16, y + 66, "Enter save  |  Esc cancel", Color.rgb(140, 150, 160));
+        try self.renderer.drawText(x + 16, y + 42, label, chrome.muted);
+        try self.renderer.drawText(x + 16, y + 66, "Enter save  |  Esc cancel", chrome.dim);
     }
 
     fn focused(self: *App) ?*Session {
@@ -1216,6 +1591,20 @@ pub const App = struct {
             .search => {
                 self.search.inputChar(codepoint);
                 self.refreshSearchResults();
+                return;
+            },
+            .viewer => {
+                if (self.viewer.suppress_next_char) {
+                    self.viewer.suppress_next_char = false;
+                    return;
+                }
+                if (self.viewer.find_open) {
+                    self.viewer.findInputChar(codepoint);
+                    self.viewer.ensureCursorVisible(self.viewerVisibleLines());
+                    return;
+                }
+                self.viewer.insertChar(self.allocator, codepoint);
+                self.viewer.ensureCursorVisible(self.viewerVisibleLines());
                 return;
             },
             .palette => {
@@ -1246,7 +1635,7 @@ pub const App = struct {
                 self.save_name_len += 1;
                 return;
             },
-            .ws_picker, .settings, .plugins => return,
+            .ws_picker, .settings, .plugins, .plugin_result => return,
             .normal => {},
         }
         const session = self.focused() orelse return;
@@ -1265,22 +1654,13 @@ pub const App = struct {
         const alt = (mods & c.GLFW_MOD_ALT) != 0;
         const bmods: bindings.Mods = .{ .ctrl = ctrl, .shift = shift, .super = super, .alt = alt };
 
-        // Global: quit / close tab — must match the *actual* key, not only modifiers.
-        // (Matching "w" while Ctrl is held used to close on every Ctrl chord.)
-        if (glfwKeyName(key)) |name| {
-            if (bindings.match(name, bmods)) |act| {
-                if (act == .quit) {
-                    self.requestQuit();
-                    return;
-                }
-                if (act == .close_tab) {
-                    self.closeTabOrQuit();
-                    return;
-                }
-            }
-        }
+        // Quit / close tab work from every screen (including home).
+        if (self.fireQuitOrClose(key, bmods)) return;
 
         if (self.ui == .home) {
+            if (ctrl or super or alt) {
+                if (self.tryFireKeymap(key, bmods, action)) return;
+            }
             self.handleHomeKey(key, ctrl, shift, super);
             return;
         }
@@ -1300,6 +1680,10 @@ pub const App = struct {
             self.handlePluginsKey(key);
             return;
         }
+        if (self.ui == .plugin_result) {
+            self.handlePluginResultKey(key);
+            return;
+        }
         if (self.ui == .ws_picker) {
             self.handlePickerKey(key);
             return;
@@ -1309,16 +1693,11 @@ pub const App = struct {
             return;
         }
         if (self.ui == .search) {
-            self.handleSearchKey(key);
+            self.handleSearchKey(key, shift);
             return;
         }
-
-        // Palette open is not a palette Action enum member.
-        if (ctrl and shift and key == c.GLFW_KEY_P) {
-            self.rebuildPalette();
-            self.palette.open();
-            self.ui = .palette;
-            self.clearStatus();
+        if (self.ui == .viewer) {
+            self.handleViewerKey(key, ctrl, shift, super);
             return;
         }
 
@@ -1328,57 +1707,8 @@ pub const App = struct {
             return;
         }
 
-        // Clipboard — works the same idea on every OS:
-        //   macOS:           Cmd+C / Cmd+V
-        //   Windows / Linux: Ctrl+V always pastes; Ctrl+C copies when text is
-        //                    selected, otherwise still interrupts the shell.
-        //   All platforms:   Ctrl/Cmd+Shift+C / V (never conflicts with ^C)
-        if (super and !ctrl and !alt and key == c.GLFW_KEY_C) {
-            self.closeContextMenu();
-            self.copySelection();
-            return;
-        }
-        if (super and !ctrl and !alt and key == c.GLFW_KEY_V) {
-            self.closeContextMenu();
-            self.pasteClipboard();
-            return;
-        }
-        if ((ctrl or super) and shift and key == c.GLFW_KEY_C) {
-            self.closeContextMenu();
-            self.copySelection();
-            return;
-        }
-        if ((ctrl or super) and shift and key == c.GLFW_KEY_V) {
-            self.closeContextMenu();
-            self.pasteClipboard();
-            return;
-        }
-        // Primary Ctrl chords on Windows/Linux (and other non-macOS).
-        if (builtin.os.tag != .macos and ctrl and !shift and !super and !alt) {
-            if (key == c.GLFW_KEY_V) {
-                self.closeContextMenu();
-                self.pasteClipboard();
-                return;
-            }
-            if (key == c.GLFW_KEY_C) {
-                if (self.focused()) |s| {
-                    if (s.selection.active) {
-                        self.closeContextMenu();
-                        self.copySelection();
-                        return;
-                    }
-                }
-                // No selection → fall through so ^C still interrupts.
-            }
-        }
+        if (self.tryFireKeymap(key, bmods, action)) return;
 
-        // Built-in chords from the shared bindings table (palette hints stay in sync).
-        if (glfwKeyName(key)) |name| {
-            if (bindings.match(name, bmods)) |act| {
-                self.runAction(act);
-                return;
-            }
-        }
         // Keypad font shortcuts share equal/minus/0 actions.
         if ((ctrl or super) and !shift) {
             switch (key) {
@@ -1398,7 +1728,7 @@ pub const App = struct {
             }
         }
 
-        // Plugin shortcuts (after built-ins so Ctrl+Shift+P etc. stay reserved)
+        // Plugin shortcuts (after config keybinds so users can reserve chords)
         if (self.tryPluginBinding(key, ctrl, shift, super, alt)) return;
 
         const session = self.focused() orelse return;
@@ -1423,17 +1753,116 @@ pub const App = struct {
             c.GLFW_KEY_HOME => session.write("\x1b[H"),
             c.GLFW_KEY_END => session.write("\x1b[F"),
             c.GLFW_KEY_DELETE => session.write("\x1b[3~"),
-            c.GLFW_KEY_PAGE_UP => session.screen.scrollView(10),
-            c.GLFW_KEY_PAGE_DOWN => session.screen.scrollView(-10),
             else => {},
         }
     }
 
+    fn fireQuitOrClose(self: *App, key: c_int, bmods: bindings.Mods) bool {
+        const name = glfwKeyName(key) orelse return false;
+        const trigger = keybind_mod.Trigger.from(bmods, name);
+        return switch (self.config.keymap.advance(&.{}, trigger)) {
+            .fire => |binding| {
+                if (!binding.isQuitOrClose()) return false;
+                if (binding.prefixes.performable and !self.canPerform(binding)) return false;
+                self.seq_len = 0;
+                self.runBinding(binding);
+                return true;
+            },
+            else => false,
+        };
+    }
+
+    fn tryFireKeymap(self: *App, key: c_int, bmods: bindings.Mods, glfw_action: c_int) bool {
+        const name = glfwKeyName(key) orelse return false;
+        const trigger = keybind_mod.Trigger.from(bmods, name);
+
+        if (glfw_action == c.GLFW_REPEAT and self.seq_len > 0) return true;
+
+        switch (self.config.keymap.advance(self.seq[0..self.seq_len], trigger)) {
+            .wait => {
+                if (self.seq_len < keybind_mod.max_sequence) {
+                    self.seq[self.seq_len] = trigger;
+                    self.seq_len += 1;
+                }
+                return true;
+            },
+            .miss => {
+                self.seq_len = 0;
+                return false;
+            },
+            .fire => |binding| {
+                self.seq_len = 0;
+                if (binding.prefixes.performable and !self.canPerform(binding)) return false;
+                self.closeContextMenu();
+                self.runBinding(binding);
+                if (binding.prefixes.unconsumed) {
+                    if (self.focused()) |s| {
+                        var buf: [8]u8 = undefined;
+                        const bytes = keybind_mod.encodeTrigger(trigger, &buf);
+                        if (bytes.len > 0) s.write(bytes);
+                    }
+                }
+                return true;
+            },
+        }
+    }
+
+    fn canPerform(self: *App, binding: *const keybind_mod.Binding) bool {
+        for (binding.actionsSlice()) |act| {
+            switch (act) {
+                .app => |a| switch (a) {
+                    .copy_selection => {
+                        const s = self.focused() orelse return false;
+                        if (!s.selection.active) return false;
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+        return true;
+    }
+
+    fn runBinding(self: *App, binding: *const keybind_mod.Binding) void {
+        var reload = false;
+        for (binding.actionsSlice()) |act| {
+            switch (act) {
+                .ignore, .unbind => {},
+                .app => |a| {
+                    if (a == .reload_config) {
+                        reload = true;
+                    } else {
+                        self.runAction(a);
+                    }
+                },
+                .text => |t| {
+                    if (self.focused()) |s| s.write(t);
+                },
+                .csi => |t| {
+                    if (self.focused()) |s| {
+                        s.write("\x1b[");
+                        s.write(t);
+                    }
+                },
+                .esc => |t| {
+                    if (self.focused()) |s| {
+                        s.write("\x1b");
+                        s.write(t);
+                    }
+                },
+            }
+        }
+        if (reload) self.runAction(.reload_config);
+    }
+
     fn goHome(self: *App) void {
+        self.seq_len = 0;
         self.home = .{};
         self.ui = .home;
         self.closeContextMenu();
+        self.plugin_result.close();
         self.search.close(self.allocator);
+        self.viewer.close(self.allocator);
         self.palette.close();
     }
 
@@ -1493,12 +1922,12 @@ pub const App = struct {
             }
             return;
         }
-        if (ctrl and shift and key == c.GLFW_KEY_P) {
-            self.runHomeAction(.command_palette);
-            return;
-        }
-        if ((ctrl or super) and shift and key == c.GLFW_KEY_F) {
-            self.openSearch();
+        if (ctrl or super or shift) {
+            switch (key) {
+                c.GLFW_KEY_UP => self.home.moveUp(),
+                c.GLFW_KEY_DOWN => self.home.moveDown(),
+                else => {},
+            }
             return;
         }
         switch (key) {
@@ -1558,6 +1987,12 @@ pub const App = struct {
     }
 
     fn leaveOverlay(self: *App) void {
+        if (self.ui == .plugin_result) {
+            const back_viewer = self.plugin_result.return_to_viewer and self.viewer.active;
+            self.plugin_result.close();
+            self.ui = if (back_viewer) .viewer else if (self.tabs.items.items.len == 0) .home else .normal;
+            return;
+        }
         self.ui = if (self.tabs.items.items.len == 0) .home else .normal;
     }
 
@@ -1639,6 +2074,38 @@ pub const App = struct {
             .search => {
                 self.openSearch();
             },
+            .toggle_palette => {
+                if (self.ui == .palette) {
+                    self.palette.close();
+                    self.leaveOverlay();
+                } else {
+                    self.rebuildPalette();
+                    self.palette.open();
+                    self.ui = .palette;
+                    self.clearStatus();
+                }
+            },
+            .copy_selection => self.copySelection(),
+            .paste_clipboard => self.pasteClipboard(),
+            .scroll_page_up => {
+                if (self.focused()) |s| s.screen.scrollView(10);
+            },
+            .scroll_page_down => {
+                if (self.focused()) |s| s.screen.scrollView(-10);
+            },
+            .scroll_to_top => {
+                if (self.focused()) |s| s.screen.scrollView(32767);
+            },
+            .scroll_to_bottom => {
+                if (self.focused()) |s| s.screen.scrollView(-32767);
+            },
+            .open_file => {
+                self.openSearch();
+                if (self.ui == .search) {
+                    self.search.mode = .files;
+                    self.refreshSearchResults();
+                }
+            },
             .ssh => {
                 self.ssh_host_len = 0;
                 self.ui = .ssh_prompt;
@@ -1649,6 +2116,8 @@ pub const App = struct {
             .theme_dracula => self.applyTheme("dracula"),
             .theme_gruvbox => self.applyTheme("gruvbox-dark"),
             .theme_solarized => self.applyTheme("solarized-dark"),
+            .theme_catppuccin => self.applyTheme("catppuccin-mocha"),
+            .theme_tokyo_night => self.applyTheme("tokyo-night"),
             .cursor_block => self.setCursorStyle(.block),
             .cursor_underline => self.setCursorStyle(.underline),
             .cursor_bar => self.setCursorStyle(.bar),
@@ -1663,22 +2132,25 @@ pub const App = struct {
             .go_home => self.goHome(),
             .reload_config => {
                 self.config.reload(self.allocator, self.io);
-                self.renderer.opacity = self.config.opacity;
+                self.seq_len = 0;
                 self.renderer.setContentScale(self.window.contentScale());
                 self.renderer.setFontSize(self.config.font_size);
+                self.renderer.setFontFace(self.config.font_face);
                 self.renderer.cursor_style = self.config.cursor_style;
                 self.renderer.cursor_blink = self.config.cursor_blink;
+                self.applyLookVisuals();
                 self.applyTheme(self.config.theme_name);
-                self.resizeAllSessions();
                 self.setStatus("config reloaded");
             },
             .reload_plugins => {
+                self.fireHooks(.on_unload);
                 self.plugins.reload() catch {
                     self.setStatus("plugin reload failed");
                     return;
                 };
                 self.fireHooks(.on_load);
                 self.applyRendererHooks();
+                self.rebuildPalette();
                 var buf: [64]u8 = undefined;
                 const msg = std.fmt.bufPrint(&buf, "plugins: {d} loaded", .{self.plugins.count()}) catch "plugins reloaded";
                 self.setStatus(msg);
@@ -1687,6 +2159,10 @@ pub const App = struct {
                 self.plugin_row = 0;
                 self.ui = .plugins;
             },
+            .format_document => self.runKindPlugin(.format, "format"),
+            .lint_file => self.runKindPlugin(.lint, "lint"),
+            .ai_explain => self.runKindPlugin(.ai, "explain"),
+            .ai_suggest => self.runKindPlugin(.ai, "suggest"),
         }
     }
 
@@ -1703,6 +2179,7 @@ pub const App = struct {
             c.GLFW_KEY_ENTER, c.GLFW_KEY_SPACE => self.toggleSelectedPlugin(),
             c.GLFW_KEY_R => self.reloadPluginsFromPanel(),
             c.GLFW_KEY_I => self.installBundledPlugins(),
+            c.GLFW_KEY_U, c.GLFW_KEY_DELETE, c.GLFW_KEY_BACKSPACE => self.uninstallSelectedPlugin(),
             else => {},
         }
     }
@@ -1714,6 +2191,7 @@ pub const App = struct {
         }
         const p = &self.plugins.plugins.items[self.plugin_row];
         p.enabled = !p.enabled;
+        self.plugins.persistEnabled();
         self.rebuildPalette();
         self.applyRendererHooks();
         var buf: [64]u8 = undefined;
@@ -1722,6 +2200,7 @@ pub const App = struct {
     }
 
     fn reloadPluginsFromPanel(self: *App) void {
+        self.fireHooks(.on_unload);
         self.plugins.reload() catch {
             self.setStatus("plugin reload failed");
             return;
@@ -2063,9 +2542,11 @@ pub const App = struct {
         for (pack) |item| {
             if (self.writePluginToml(item.name, item.toml)) installed += 1;
         }
+        installed += plugin_bundled.install(self.allocator, self.io, self.plugins.dir_path);
         self.reloadPluginsFromPanel();
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "installed {d} plugins", .{installed}) catch "plugins installed";
+        const n = self.plugins.count();
+        const msg = std.fmt.bufPrint(&buf, "installed {d} plugins", .{if (n > 0) n else installed}) catch "plugins installed";
         self.setStatus(msg);
     }
 
@@ -2084,6 +2565,51 @@ pub const App = struct {
         return true;
     }
 
+    /// Remove the selected plugin folder from `~/.config/orbit/plugins/<name>/`.
+    fn uninstallSelectedPlugin(self: *App) void {
+        if (self.plugin_row >= self.plugins.plugins.items.len) {
+            self.setStatus("no plugin selected");
+            return;
+        }
+        const name = self.plugins.plugins.items[self.plugin_row].name;
+        if (!isSafePluginFolderName(name)) {
+            self.setStatus("invalid plugin name");
+            return;
+        }
+
+        var name_buf: [64]u8 = undefined;
+        const n = @min(name.len, name_buf.len);
+        @memcpy(name_buf[0..n], name[0..n]);
+        const saved = name_buf[0..n];
+
+        const parent = std.Io.Dir.openDirAbsolute(self.io, self.plugins.dir_path, .{}) catch {
+            self.setStatus("uninstall failed");
+            return;
+        };
+        defer parent.close(self.io);
+        parent.deleteTree(self.io, saved) catch {
+            self.setStatus("uninstall failed");
+            return;
+        };
+
+        self.reloadPluginsFromPanel();
+        var buf: [80]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "uninstalled {s}", .{saved}) catch "plugin uninstalled";
+        self.setStatus(msg);
+    }
+
+    fn isSafePluginFolderName(name: []const u8) bool {
+        if (name.len == 0 or name.len > 64) return false;
+        if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
+        for (name) |ch| {
+            switch (ch) {
+                'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
+                else => return false,
+            }
+        }
+        return true;
+    }
+
     fn handleSettingsKey(self: *App, key: c_int) void {
         switch (key) {
             c.GLFW_KEY_ESCAPE => self.leaveOverlay(),
@@ -2091,7 +2617,7 @@ pub const App = struct {
                 if (self.settings_row > 0) self.settings_row -= 1;
             },
             c.GLFW_KEY_DOWN => {
-                if (self.settings_row + 1 < 5) self.settings_row += 1;
+                if (self.settings_row + 1 < SettingsRow.count) self.settings_row += 1;
             },
             c.GLFW_KEY_LEFT => self.nudgeSettings(-1),
             c.GLFW_KEY_RIGHT, c.GLFW_KEY_ENTER => self.nudgeSettings(1),
@@ -2101,12 +2627,12 @@ pub const App = struct {
     }
 
     fn nudgeSettings(self: *App, delta: i32) void {
-        switch (self.settings_row) {
-            0 => {
+        switch (SettingsRow.fromIndex(self.settings_row)) {
+            .theme => {
                 const next = theme_mod.nextName(self.config.theme_name, delta);
                 self.applyTheme(next);
             },
-            1 => {
+            .text => {
                 self.config.cycleFgPreset(self.allocator, delta) catch {
                     self.setStatus("text color failed");
                     return;
@@ -2116,7 +2642,52 @@ pub const App = struct {
                 const msg = std.fmt.bufPrint(&buf, "text {s}", .{self.config.fgDisplay()}) catch "text color";
                 self.setStatus(msg);
             },
-            2 => {
+            .font => {
+                self.adjustFont(if (delta >= 0) 1.0 else -1.0);
+            },
+            .face => {
+                self.config.cycleFontFace(self.allocator, delta) catch {
+                    self.setStatus("font face failed");
+                    return;
+                };
+                self.renderer.setFontFace(self.config.font_face);
+                self.resizeAllSessions();
+                var buf: [80]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "face {s}", .{self.config.fontFaceDisplay()}) catch "font face";
+                self.setStatus(msg);
+            },
+            .look => {
+                self.config.cycleLook(delta);
+                self.applyLookVisuals();
+                var buf: [80]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "look {s}", .{self.config.look.name()}) catch "look updated";
+                self.setStatus(msg);
+            },
+            .opacity => {
+                self.config.cycleOpacity(delta);
+                self.applyLookVisuals();
+                var buf: [48]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "opacity {d:.0}%", .{self.config.opacity * 100.0}) catch "opacity";
+                self.setStatus(msg);
+            },
+            .padding => {
+                self.config.cyclePadding(delta);
+                self.resizeAllSessions();
+                var buf: [48]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "padding {d}x{d}", .{
+                    self.config.padding_x,
+                    self.config.padding_y,
+                }) catch "padding";
+                self.setStatus(msg);
+            },
+            .spacing => {
+                self.config.cycleLineHeight(delta);
+                self.applyLookVisuals();
+                var buf: [64]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "spacing {s}", .{self.config.lineHeightDisplay()}) catch "spacing";
+                self.setStatus(msg);
+            },
+            .cursor => {
                 self.config.cursor_style = if (delta >= 0)
                     self.config.cursor_style.next()
                 else
@@ -2124,8 +2695,14 @@ pub const App = struct {
                 self.renderer.cursor_style = self.config.cursor_style;
                 self.setStatus("cursor style");
             },
-            3 => self.toggleCursorBlink(),
-            4 => {
+            .blink => self.toggleCursorBlink(),
+            .prompt => {
+                self.config.cyclePrompt(delta);
+                var buf: [80]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "prompt {s} (new tabs)", .{self.config.prompt.name()}) catch "prompt updated";
+                self.setStatus(msg);
+            },
+            .shell => {
                 self.config.cycleShell(self.allocator, delta) catch {
                     self.setStatus("shell change failed");
                     return;
@@ -2134,8 +2711,14 @@ pub const App = struct {
                 const msg = std.fmt.bufPrint(&buf, "shell {s} (new tabs)", .{self.config.shellDisplay()}) catch "shell updated";
                 self.setStatus(msg);
             },
-            else => {},
         }
+    }
+
+    fn applyLookVisuals(self: *App) void {
+        self.renderer.opacity = self.config.opacity;
+        self.renderer.setLineHeight(self.config.line_height);
+        self.window.setOpacity(self.config.opacity);
+        self.resizeAllSessions();
     }
 
     fn setCursorStyle(self: *App, style: CursorStyle) void {
@@ -2152,6 +2735,7 @@ pub const App = struct {
 
     fn persistAppearance(self: *App) void {
         self.config.font_size = self.renderer.font_size;
+        self.config.setFontFace(self.allocator, self.renderer.font_face) catch {};
         self.config.save(self.allocator, self.io) catch {
             self.setStatus("could not save config.toml");
             return;
@@ -2174,8 +2758,8 @@ pub const App = struct {
     }
 
     fn runPluginCommand(self: *App, plugin_name: []const u8, command_id: []const u8) void {
-        if (self.plugins.findCommand(plugin_name, command_id)) |cmd| {
-            self.executePluginCommand(cmd);
+        if (self.plugins.findCommandRef(plugin_name, command_id)) |ref| {
+            self.executePluginCommand(ref.plugin, ref.command);
             return;
         }
         if (self.plugins.findTheme(command_id) != null) {
@@ -2185,7 +2769,7 @@ pub const App = struct {
         self.setStatus("plugin command missing");
     }
 
-    fn executePluginCommand(self: *App, cmd: *const PluginCommand) void {
+    fn executePluginCommand(self: *App, plugin: *const plugin_types.Plugin, cmd: *const PluginCommand) void {
         switch (cmd.kind) {
             .insert => {
                 if (plugin_audit.auditInsertPayload(cmd.payload)) |hit| {
@@ -2213,6 +2797,7 @@ pub const App = struct {
             .status => self.setStatus(cmd.payload),
             .theme => self.applyTheme(cmd.payload),
             .host => self.runHostPayload(cmd.payload),
+            .run => self.runPluginTool(plugin, cmd.payload),
         }
     }
 
@@ -2224,8 +2809,8 @@ pub const App = struct {
 
         const name = glfwKeyName(key) orelse return false;
         const command_id = self.plugins.matchBinding(name, ctrl, shift, super, alt) orelse return false;
-        if (self.plugins.findCommandById(command_id)) |cmd| {
-            self.executePluginCommand(cmd);
+        if (self.plugins.findCommandByIdRef(command_id)) |ref| {
+            self.executePluginCommand(ref.plugin, ref.command);
             return true;
         }
         if (self.plugins.findTheme(command_id) != null) {
@@ -2287,11 +2872,264 @@ pub const App = struct {
             self.runAction(.save_workspace);
         } else if (std.mem.eql(u8, payload, "split_right")) {
             self.runAction(.split_right);
+        } else if (std.mem.eql(u8, payload, "split_down")) {
+            self.runAction(.split_down);
         } else if (std.mem.eql(u8, payload, "search")) {
             self.runAction(.search);
         } else {
             self.setStatus(payload);
         }
+    }
+
+    fn runKindPlugin(self: *App, kind: PluginKind, action: []const u8) void {
+        const plugin = self.plugins.findByKind(kind) orelse {
+            const msg: []const u8 = switch (kind) {
+                .format => "no format plugin — Plugins → I to install",
+                .lint => "no lint plugin — Plugins → I to install",
+                .ai => "no AI plugin — Plugins → I to install",
+                else => "plugin not installed",
+            };
+            self.setStatus(msg);
+            return;
+        };
+        self.runPluginTool(plugin, action);
+    }
+
+    fn runPluginTool(self: *App, plugin: *const plugin_types.Plugin, action: []const u8) void {
+        if (!plugin.tool.hasRunner()) {
+            self.setStatus("plugin has no [tool]");
+            return;
+        }
+
+        var sel_buf: [32 * 1024]u8 = undefined;
+        const selection = self.capturePluginSelection(&sel_buf);
+
+        const file_path: []const u8 = if (self.viewer.abs_path) |p| p else "";
+        const language: []const u8 = if (self.viewer.active) @tagName(self.viewer.language) else "";
+        const buffer: []const u8 = if (self.viewer.content) |b| b else "";
+        const cwd = self.sessionCwd();
+        const prompt_t = plugin.tool.prompt orelse "";
+
+        const ctx = plugin_runner.Context{
+            .plugin = plugin.name,
+            .action = action,
+            .file = file_path,
+            .language = language,
+            .cwd = cwd,
+            .selection = selection,
+            .buffer = buffer,
+            .plugin_dir = plugin.dir,
+            .prompt = prompt_t,
+        };
+
+        if (plugin.kind == .format or plugin.kind == .lint) {
+            if (!self.viewer.active or !self.viewer.canEdit()) {
+                if (plugin.kind == .format or plugin.kind == .lint) {
+                    self.setStatus("open a file first (Search → Files / Code)");
+                    return;
+                }
+            }
+        }
+        if (plugin.kind == .format and !plugin.tool.matchesLanguage(language)) {
+            self.setStatus("format plugin does not handle this language");
+            return;
+        }
+
+        self.setStatus("running plugin…");
+        var result = plugin_runner.run(self.allocator, self.io, plugin, ctx) catch |err| {
+            const msg: []const u8 = switch (err) {
+                error.Timeout => "plugin timed out",
+                error.CommandNotFound => "plugin command not found — edit its script",
+                error.NoTool => "plugin has no [tool]",
+                error.UnsafeScriptPath => "plugin script path refused",
+                else => "plugin failed to run",
+            };
+            self.setStatus(msg);
+            return;
+        };
+        defer result.deinit();
+
+        self.applyToolResult(plugin, &result);
+    }
+
+    fn applyToolResult(self: *App, plugin: *const plugin_types.Plugin, result: *plugin_runner.Result) void {
+        const out = std.mem.trim(u8, result.stdout, " \t\r\n");
+        const err_txt = std.mem.trim(u8, result.stderr, " \t\r\n");
+
+        switch (plugin.tool.stdout) {
+            .replace => {
+                if (out.len > 0 and self.viewer.canEdit()) {
+                    self.viewer.replaceContent(self.allocator, result.stdout) catch {
+                        self.setStatus("formatted output too large");
+                        return;
+                    };
+                    self.setStatus("formatted");
+                    self.ui = .viewer;
+                    return;
+                }
+                if (self.viewer.active) {
+                    self.viewer.reloadFromDisk(self.allocator, self.io);
+                    self.setStatus("formatted");
+                    self.ui = .viewer;
+                    return;
+                }
+                self.setStatus(if (result.code == 0) "format ran" else "format failed");
+            },
+            .insert => {
+                if (out.len == 0) {
+                    self.setStatus(if (err_txt.len > 0) err_txt else "plugin produced no output");
+                    return;
+                }
+                if (self.focused()) |s| s.write(out);
+                self.setStatus("plugin inserted");
+            },
+            .status => {
+                const msg = if (out.len > 0) out else if (err_txt.len > 0) err_txt else "plugin done";
+                self.setStatus(msg);
+            },
+            .discard => {
+                self.setStatus(if (result.code == 0) "plugin done" else "plugin exited with error");
+            },
+            .overlay => {
+                var title_buf: [72]u8 = undefined;
+                const title = std.fmt.bufPrint(&title_buf, "{s} · {s}", .{ plugin.kind.badge(), plugin.name }) catch plugin.name;
+                const body = if (out.len > 0) result.stdout else if (err_txt.len > 0) result.stderr else "No output.";
+                const insertable = plugin.kind == .ai or plugin.tool.stdout == .overlay and plugin.kind != .lint;
+                self.plugin_result.open(title, body, insertable and plugin.kind == .ai);
+                self.plugin_result.return_to_viewer = self.viewer.active;
+                if (plugin.tool.parse == .unix) self.plugin_result.applyUnixDiagnostics();
+                self.ui = .plugin_result;
+            },
+        }
+    }
+
+    fn capturePluginSelection(self: *App, buf: []u8) []const u8 {
+        if (self.focused()) |session| {
+            if (session.selection.active) {
+                const n = session.selection.copyText(&session.screen, buf);
+                if (n > 0) return buf[0..n];
+            }
+            const n = App.copyVisibleScreen(&session.screen, buf);
+            if (n > 0) return buf[0..n];
+        }
+        if (self.viewer.content) |body| {
+            const n = @min(body.len, buf.len);
+            @memcpy(buf[0..n], body[0..n]);
+            return buf[0..n];
+        }
+        return "";
+    }
+
+    fn copyVisibleScreen(screen: *const @import("../terminal/screen.zig").Screen, buf: []u8) usize {
+        var out: usize = 0;
+        var row: u16 = 0;
+        while (row < screen.rows) : (row += 1) {
+            var col: u16 = 0;
+            var line_end = out;
+            while (col < screen.cols) : (col += 1) {
+                if (out >= buf.len) return out;
+                const cp = screen.visibleCell(col, row).codepoint;
+                const ch: u8 = if (cp >= 32 and cp < 127) @intCast(cp) else ' ';
+                buf[out] = ch;
+                out += 1;
+                if (ch != ' ') line_end = out;
+            }
+            out = line_end;
+            if (out < buf.len) {
+                buf[out] = '\n';
+                out += 1;
+            }
+        }
+        return out;
+    }
+
+    fn handlePluginResultKey(self: *App, key: c_int) void {
+        const visible = self.pluginResultVisibleLines();
+        switch (key) {
+            c.GLFW_KEY_ESCAPE => self.leaveOverlay(),
+            c.GLFW_KEY_UP => self.plugin_result.scrollBy(-1, visible),
+            c.GLFW_KEY_DOWN => self.plugin_result.scrollBy(1, visible),
+            c.GLFW_KEY_PAGE_UP => self.plugin_result.scrollBy(-@as(i32, @intCast(@max(visible, 1))), visible),
+            c.GLFW_KEY_PAGE_DOWN => self.plugin_result.scrollBy(@as(i32, @intCast(@max(visible, 1))), visible),
+            c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER => {
+                if (self.plugin_result.jump_line) |line| {
+                    if (self.viewer.active) {
+                        const col = if (self.plugin_result.jump_col) |c0| c0 -| 1 else 0;
+                        self.viewer.goTo(line -| 1, col);
+                        self.plugin_result.close();
+                        self.ui = .viewer;
+                        return;
+                    }
+                }
+                if (self.plugin_result.insertable and self.plugin_result.body.len > 0) {
+                    if (self.focused()) |s| s.write(self.plugin_result.body);
+                    self.setStatus("inserted plugin output");
+                    self.leaveOverlay();
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn pluginResultVisibleLines(self: *const App) usize {
+        const ch = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_h)));
+        const h = @max(ch * 8, self.window.fb_height - ch * 10);
+        return @max(1, @as(usize, @intCast(@divTrunc(h, ch + 4))));
+    }
+
+    fn drawPluginResult(self: *App) !void {
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+        const ui = ui_scale.uiScale(fb_w, fb_h, self.renderer.content_scale);
+        const title_s = ui * 1.12;
+        const base_cw = @as(i32, @intFromFloat(self.renderer.cell_w));
+        const base_ch = @as(i32, @intFromFloat(self.renderer.cell_h));
+        const cw = ui_scale.scaled(base_cw, ui);
+        const ch = ui_scale.scaled(base_ch, ui);
+        const title_ch = ui_scale.scaled(base_ch, title_s);
+        const chrome = self.overlayChrome();
+
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
+
+        const pad_x = @max(cw + 10, @as(i32, @intFromFloat(@round(26.0 * ui))));
+        const pad_y = @max(@divTrunc(ch, 2) + 8, @as(i32, @intFromFloat(@round(22.0 * ui))));
+        const w = ui_scale.panelWidth(fb_w, cw, 64, @as(i32, @intFromFloat(@round(720.0 * ui))));
+        const h = @min(fb_h - ch * 2, @max(ch * 16, @divTrunc(fb_h * 3, 4)));
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @max(ch, @divTrunc(fb_h - h, 2));
+
+        try self.renderer.drawRect(x, y, w, h, chrome.panel, 0.98);
+        try self.renderer.drawRect(x, y, w, @max(2, @divTrunc(ch, 10)), chrome.accent, 0.55);
+
+        var cy = y + pad_y;
+        try self.renderer.drawTextScaled(x + pad_x, cy, self.plugin_result.titleSlice(), chrome.fg, title_s);
+        cy += title_ch + @divTrunc(ch, 2);
+
+        const footer_h = ch + pad_y;
+        const list_h = h - (cy - y) - footer_h;
+        const row_h = ch + @max(4, @divTrunc(ch, 6));
+        const visible: usize = @max(1, @as(usize, @intCast(@divTrunc(list_h, row_h))));
+        const total = self.plugin_result.lineCount();
+        const start = self.plugin_result.scroll;
+        const shown = @min(visible, if (total > start) total - start else 0);
+        const max_chars = @max(8, @divTrunc(w - pad_x * 2, cw));
+
+        var i: usize = 0;
+        while (i < shown) : (i += 1) {
+            const text = self.plugin_result.line(start + i);
+            const clip = text[0..@min(text.len, @as(usize, @intCast(max_chars)))];
+            try self.renderer.drawTextScaled(x + pad_x, cy + @as(i32, @intCast(i)) * row_h, clip, chrome.muted, ui);
+        }
+
+        cy = y + h - footer_h;
+        try self.renderer.drawRect(x + pad_x - 4, cy - 8, w - pad_x * 2 + 8, 1, chrome.rule, 0.9);
+        const hint: []const u8 = if (self.plugin_result.insertable)
+            "Enter insert into shell    Esc close"
+        else if (self.plugin_result.jump_line != null)
+            "Enter jump to line    Esc close"
+        else
+            "Esc close";
+        try self.renderer.drawTextScaled(x + pad_x, cy, hint, chrome.dim, ui);
     }
 
     fn showPluginList(self: *App) void {
@@ -2400,11 +3238,38 @@ pub const App = struct {
             self.setStatus("invalid ssh host");
             return;
         }
-        try self.newTab();
-        const session = self.focused() orelse return;
+        // Open a tab titled with the host; inject the command only after the prompt appears
+        // so we don't get a ghost echoed line + weird highlight before the shell is ready.
+        var title_buf: [64]u8 = undefined;
+        const title = std.fmt.bufPrint(&title_buf, "ssh {s}", .{host}) catch "ssh";
+        try self.newTabInDir(self.sessionCwd(), title[0..@min(title.len, 32)]);
+        if (self.focused()) |s| s.selection.clear();
+        const n = @min(host.len, self.pending_ssh_host.len);
+        @memcpy(self.pending_ssh_host[0..n], host[0..n]);
+        self.pending_ssh_len = n;
+        self.setStatus("ssh starting…");
+    }
+
+    fn flushPendingSsh(self: *App) void {
+        if (self.pending_ssh_len == 0) return;
+        const session = self.focused() orelse {
+            self.pending_ssh_len = 0;
+            return;
+        };
+        if (!session.alive or !session.output_seen) return;
+
         var cmd: [192]u8 = undefined;
-        const line = try std.fmt.bufPrint(&cmd, "ssh -- {s}\r", .{host});
+        const line = std.fmt.bufPrint(
+            &cmd,
+            "ssh -- {s}\r",
+            .{self.pending_ssh_host[0..self.pending_ssh_len]},
+        ) catch {
+            self.pending_ssh_len = 0;
+            self.setStatus("ssh failed");
+            return;
+        };
         session.write(line);
+        self.pending_ssh_len = 0;
         self.setStatus("ssh started");
     }
 
@@ -2563,10 +3428,467 @@ pub const App = struct {
     }
 
     fn newTab(self: *App) !void {
-        try self.newTabInDir(self.sessionCwd(), null);
+        try self.openSession(self.sessionCwd(), null, &.{}, false);
     }
 
     fn newTabInDir(self: *App, cwd: []const u8, title_opt: ?[]const u8) !void {
+        try self.openSession(cwd, title_opt, &.{}, false);
+    }
+
+    fn applyLaunch(self: *App, opts: LaunchOpts) void {
+        if (!opts.skip_home) return;
+        const raw = opts.cwd orelse @import("../platform/paths.zig").defaultCwd();
+        var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var file_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const resolved = self.resolveOpenPath(raw, &dir_buf, &file_buf);
+        self.openSession(resolved.dir, opts.title, opts.execute, opts.wait_after_command) catch {
+            self.setStatus("could not open folder");
+            return;
+        };
+        if (resolved.file) |f| self.openViewerPath(f, std.fs.path.basename(f));
+    }
+
+    fn drainExternalOpens(self: *App) void {
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        while (macos_open.take(&buf)) |p| {
+            var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+            var file_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const resolved = self.resolveOpenPath(p, &dir_buf, &file_buf);
+            self.openSession(resolved.dir, null, &.{}, false) catch {
+                self.setStatus("could not open folder");
+                continue;
+            };
+            if (resolved.file) |f| self.openViewerPath(f, std.fs.path.basename(f));
+        }
+    }
+
+    fn pathIsDir(self: *App, path: []const u8) bool {
+        const dir = std.Io.Dir.openDirAbsolute(self.io, path, .{}) catch return false;
+        dir.close(self.io);
+        return true;
+    }
+
+    fn pathIsFile(self: *App, path: []const u8) bool {
+        const file = std.Io.Dir.openFileAbsolute(self.io, path, .{}) catch return false;
+        file.close(self.io);
+        return true;
+    }
+
+    fn absolutizePath(self: *App, path: []const u8, buf: *[std.fs.max_path_bytes]u8) ?[]u8 {
+        if (std.fs.path.isAbsolute(path)) {
+            if (path.len >= buf.len) return null;
+            @memcpy(buf[0..path.len], path);
+            return buf[0..path.len];
+        }
+        var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const n = std.Io.Dir.cwd().realPath(self.io, &cwd_buf) catch return null;
+        return std.fmt.bufPrint(buf, "{s}{c}{s}", .{ cwd_buf[0..n], std.fs.path.sep, path }) catch null;
+    }
+
+    fn resolveOpenPath(
+        self: *App,
+        path: []const u8,
+        dir_buf: *[std.fs.max_path_bytes]u8,
+        file_buf: *[std.fs.max_path_bytes]u8,
+    ) struct { dir: []const u8, file: ?[]const u8 } {
+        const abs = self.absolutizePath(path, file_buf) orelse return .{ .dir = path, .file = null };
+        if (self.pathIsDir(abs)) return .{ .dir = abs, .file = null };
+        if (!self.pathIsFile(abs)) return .{ .dir = abs, .file = null };
+        const parent = std.fs.path.dirname(abs) orelse ".";
+        const n = @min(parent.len, dir_buf.len);
+        @memcpy(dir_buf[0..n], parent[0..n]);
+        return .{ .dir = dir_buf[0..n], .file = abs };
+    }
+
+    fn openViewerPath(self: *App, abs_path: []const u8, display: []const u8) void {
+        self.viewer.open(self.allocator, self.io, abs_path, display);
+        self.ui = .viewer;
+        var buf: [96]u8 = undefined;
+        const msg = std.fmt.bufPrint(
+            &buf,
+            "{s} · {s} · type to edit",
+            .{ std.fs.path.basename(abs_path), viewer_mod.languageLabel(self.viewer.language) },
+        ) catch "opened file";
+        self.setStatus(msg);
+    }
+
+    fn viewerVisibleLines(self: *const App) usize {
+        const ch = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_h)));
+        const row_h = ch + 4;
+        const header = ch + 28;
+        const find_h: i32 = if (self.viewer.find_open) ch + 16 else 0;
+        const footer = ch + 16;
+        const body = @max(row_h, self.window.fb_height - Tabs.bar_height - 24 - header - find_h - footer);
+        return @intCast(@max(1, @divTrunc(body, row_h)));
+    }
+
+    fn handleViewerKey(self: *App, key: c_int, ctrl: bool, shift: bool, super: bool) void {
+        const visible = self.viewerVisibleLines();
+        const cmd = ctrl or super;
+
+        if (cmd and !shift and key == c.GLFW_KEY_S) {
+            if (self.viewer.save(self.io)) {
+                self.setStatus("saved");
+            } else {
+                self.setStatus("could not save");
+            }
+            return;
+        }
+
+        if (cmd and !shift and key == c.GLFW_KEY_F) {
+            self.viewer.suppress_next_char = true;
+            self.viewer.openFind();
+            return;
+        }
+
+        if (cmd and shift and key == c.GLFW_KEY_F) {
+            self.openSearch();
+            if (self.ui == .search) {
+                self.search.mode = .code;
+                self.refreshSearchResults();
+            }
+            return;
+        }
+
+        if (self.viewer.find_open) {
+            switch (key) {
+                c.GLFW_KEY_ESCAPE => {
+                    self.viewer.closeFind();
+                    return;
+                },
+                c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER, c.GLFW_KEY_F3 => {
+                    if (shift) self.viewer.findPrev() else self.viewer.findNext();
+                    self.viewer.ensureCursorVisible(visible);
+                    return;
+                },
+                c.GLFW_KEY_BACKSPACE => {
+                    self.viewer.findBackspace();
+                    self.viewer.ensureCursorVisible(visible);
+                    return;
+                },
+                c.GLFW_KEY_UP => {
+                    self.viewer.findPrev();
+                    self.viewer.ensureCursorVisible(visible);
+                    return;
+                },
+                c.GLFW_KEY_DOWN, c.GLFW_KEY_TAB => {
+                    self.viewer.findNext();
+                    self.viewer.ensureCursorVisible(visible);
+                    return;
+                },
+                else => {},
+            }
+        }
+
+        if (cmd and !shift and key == c.GLFW_KEY_SPACE) {
+            self.viewer.suppress_next_char = true;
+            self.viewer.refreshCompletion(true);
+            return;
+        }
+
+        if (self.viewer.complete_open) {
+            switch (key) {
+                c.GLFW_KEY_ESCAPE => {
+                    self.viewer.complete_open = false;
+                    return;
+                },
+                c.GLFW_KEY_UP => {
+                    self.viewer.completeMove(-1);
+                    return;
+                },
+                c.GLFW_KEY_DOWN => {
+                    self.viewer.completeMove(1);
+                    return;
+                },
+                c.GLFW_KEY_TAB, c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER => {
+                    self.viewer.suppress_next_char = true;
+                    _ = self.viewer.acceptCompletion(self.allocator);
+                    self.viewer.ensureCursorVisible(visible);
+                    return;
+                },
+                else => {},
+            }
+        }
+
+        switch (key) {
+            c.GLFW_KEY_ESCAPE => {
+                if (self.viewer.dirty and !self.viewer.discard_armed) {
+                    self.viewer.discard_armed = true;
+                    self.setStatus("unsaved — Esc again to discard, ⌘/Ctrl+S to save");
+                    return;
+                }
+                self.viewer.close(self.allocator);
+                self.leaveOverlay();
+            },
+            c.GLFW_KEY_UP => {
+                self.viewer.moveUp();
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_DOWN => {
+                self.viewer.moveDown();
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_LEFT => {
+                self.viewer.moveLeft();
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_RIGHT => {
+                self.viewer.moveRight();
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_PAGE_UP => self.viewer.page(-@as(i32, @intCast(visible)), visible),
+            c.GLFW_KEY_PAGE_DOWN => self.viewer.page(@as(i32, @intCast(visible)), visible),
+            c.GLFW_KEY_HOME => {
+                if (cmd) self.viewer.moveFileStart() else self.viewer.moveLineStart();
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_END => {
+                if (cmd) self.viewer.moveFileEnd() else self.viewer.moveLineEnd();
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_BACKSPACE => {
+                self.viewer.backspace(self.allocator);
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_DELETE => {
+                self.viewer.deleteForward(self.allocator);
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER => {
+                self.viewer.newline(self.allocator);
+                self.viewer.ensureCursorVisible(visible);
+            },
+            c.GLFW_KEY_TAB => {
+                self.viewer.suppress_next_char = true;
+                self.viewer.insertBytes(self.allocator, "    ");
+                self.viewer.refreshCompletion(false);
+                self.viewer.ensureCursorVisible(visible);
+            },
+            else => {},
+        }
+    }
+
+    fn drawViewer(self: *App) !void {
+        const chrome = self.overlayChrome();
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+        const cw = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_w)));
+        const ch = @as(i32, @intFromFloat(@max(1.0, self.renderer.cell_h)));
+        const margin: i32 = @max(cw * 2, 16);
+        const x = margin;
+        const y = Tabs.bar_height + 8;
+        const w = @max(cw * 20, fb_w - margin * 2);
+        const h = @max(ch * 8, fb_h - y - 12);
+        const pad_x: i32 = 14;
+        const pad_y: i32 = 10;
+        const header_h = ch + 18;
+        const find_h: i32 = if (self.viewer.find_open) ch + 16 else 0;
+        const footer_h = ch + 14;
+        const row_h = ch + 4;
+        const gutter_cols: i32 = 6;
+        const gutter_w = cw * gutter_cols + 10;
+        const body_y = y + pad_y + header_h + find_h;
+        const body_h = @max(row_h, h - pad_y - header_h - find_h - footer_h);
+        const visible: usize = @intCast(@max(1, @divTrunc(body_h, row_h)));
+        const code_cols: usize = @intCast(@max(8, @divTrunc(w - pad_x * 2 - gutter_w, cw)));
+        self.viewer.ensureCursorVisible(visible);
+
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
+        try self.renderer.drawRect(x, y, w, h, chrome.panel, 0.98);
+        try self.renderer.drawRect(x, y, w, 2, chrome.accent, 0.55);
+
+        const name = self.viewer.displayName();
+        const lang = viewer_mod.languageLabel(self.viewer.language);
+        const dirty_mark: []const u8 = if (self.viewer.dirty) " •" else "";
+        var title_buf: [168]u8 = undefined;
+        const title = std.fmt.bufPrint(&title_buf, "{s}{s}  ·  {s}", .{ name, dirty_mark, lang }) catch name;
+        const title_shown = title[0..@min(title.len, @as(usize, @intCast(@max(8, @divTrunc(w - pad_x * 2, cw)))))];
+        try self.renderer.drawText(x + pad_x, y + pad_y, title_shown, chrome.fg);
+        try self.renderer.drawRect(x + pad_x, y + pad_y + header_h - 8, w - pad_x * 2, 1, chrome.rule, 0.9);
+
+        if (self.viewer.find_open) {
+            const fy = y + pad_y + header_h - 2;
+            try self.renderer.drawRect(x + pad_x, fy, w - pad_x * 2, find_h - 4, chrome.field, 1.0);
+            var find_buf: [96]u8 = undefined;
+            const q = self.viewer.findQuerySlice();
+            const n = self.viewer.find_count;
+            const find_line = if (q.len == 0)
+                "Find in file…"
+            else if (n == 0)
+                (std.fmt.bufPrint(&find_buf, "Find  {s}   no matches", .{q}) catch "Find")
+            else
+                (std.fmt.bufPrint(&find_buf, "Find  {s}   {d}/{d}", .{ q, self.viewer.find_sel + 1, n }) catch "Find");
+            const find_shown = find_line[0..@min(find_line.len, @as(usize, @intCast(@max(8, @divTrunc(w - pad_x * 2 - 8, cw)))))];
+            try self.renderer.drawText(x + pad_x + 8, fy + 4, find_shown, if (q.len == 0) chrome.dim else chrome.accent);
+        }
+
+        const text_x = x + pad_x + gutter_w;
+        var caret_screen_y: ?i32 = null;
+
+        if (self.viewer.error_msg) |err| {
+            try self.renderer.drawText(x + pad_x, body_y + 8, err, chrome.muted);
+        } else if (self.viewer.lineCount() == 0) {
+            try self.renderer.drawText(x + pad_x, body_y + 8, "(empty file)", chrome.muted);
+        } else {
+            const start = self.viewer.scroll;
+            const total = self.viewer.lineCount();
+            const shown_n = @min(visible, total -| start);
+            var i: usize = 0;
+            var spans: [viewer_mod.max_spans]viewer_mod.Span = undefined;
+            while (i < shown_n) : (i += 1) {
+                const li = start + i;
+                const text = self.viewer.line(li);
+                const ry = body_y + @as(i32, @intCast(i)) * row_h;
+                const on_cursor = li == self.viewer.cursor_row;
+                if (on_cursor) {
+                    try self.renderer.drawRect(x + pad_x, ry - 1, w - pad_x * 2, row_h, chrome.sel_bg, 0.28);
+                    caret_screen_y = ry;
+                }
+                if (self.viewer.find_open and self.viewer.find_len > 0) {
+                    const qlen = self.viewer.find_len;
+                    var hi: usize = 0;
+                    while (hi < self.viewer.find_count) : (hi += 1) {
+                        const hit = self.viewer.find_hits[hi];
+                        if (hit.row != li) continue;
+                        if (hit.col >= code_cols) continue;
+                        const hw = @min(qlen, code_cols - hit.col);
+                        if (hw == 0) continue;
+                        const alpha: f32 = if (hi == self.viewer.find_sel) 0.55 else 0.28;
+                        try self.renderer.drawRect(
+                            text_x + @as(i32, @intCast(hit.col)) * cw,
+                            ry,
+                            @as(i32, @intCast(hw)) * cw,
+                            ch,
+                            chrome.accent,
+                            alpha,
+                        );
+                    }
+                }
+                var num_buf: [12]u8 = undefined;
+                const num = std.fmt.bufPrint(&num_buf, "{d: >5}", .{li + 1}) catch "    0";
+                try self.renderer.drawText(x + pad_x, ry, num, if (on_cursor) chrome.accent else chrome.dim);
+
+                const clipped = text[0..@min(text.len, code_cols)];
+                var state = self.viewer.lineState(li);
+                const n = viewer_mod.highlightLine(clipped, self.viewer.language, &state, &spans);
+                if (n == 0) {
+                    try self.renderer.drawText(text_x, ry, clipped, chrome.fg);
+                } else {
+                    var si: usize = 0;
+                    while (si < n) : (si += 1) {
+                        const span = spans[si];
+                        if (span.start >= clipped.len) break;
+                        const end = @min(span.end, clipped.len);
+                        if (end <= span.start) continue;
+                        const color = viewer_mod.colorFor(span.kind, self.renderer.theme);
+                        try self.renderer.drawText(
+                            text_x + @as(i32, @intCast(span.start)) * cw,
+                            ry,
+                            clipped[span.start..end],
+                            color,
+                        );
+                    }
+                }
+            }
+
+            if (caret_screen_y) |cy| {
+                const col = @min(self.viewer.cursor_col, code_cols);
+                const cx = text_x + @as(i32, @intCast(col)) * cw;
+                try self.renderer.drawRect(cx, cy, @max(2, @divTrunc(cw, 5)), ch, chrome.accent, 0.95);
+            }
+        }
+
+        if (self.viewer.complete_open and self.viewer.complete_n > 0) {
+            try self.drawCompletionPopup(chrome, text_x, body_y, body_h, w, pad_x, x, cw, ch, row_h, code_cols);
+        }
+
+        var foot: [128]u8 = undefined;
+        const lines = self.viewer.lineCount();
+        const foot_line = std.fmt.bufPrint(
+            &foot,
+            "{d} lines   ⌘/Ctrl+S save   ⌘/Ctrl+F find   Ctrl+Shift+F code   Esc close",
+            .{lines},
+        ) catch "Esc close";
+        const foot_shown = foot_line[0..@min(foot_line.len, @as(usize, @intCast(@max(8, @divTrunc(w - pad_x * 2, cw)))))];
+        try self.renderer.drawText(x + pad_x, y + h - footer_h + 2, foot_shown, chrome.dim);
+    }
+
+    fn drawCompletionPopup(
+        self: *App,
+        chrome: ui_chrome.Chrome,
+        text_x: i32,
+        body_y: i32,
+        body_h: i32,
+        panel_w: i32,
+        pad_x: i32,
+        panel_x: i32,
+        cw: i32,
+        ch: i32,
+        row_h: i32,
+        code_cols: usize,
+    ) !void {
+        const n = self.viewer.complete_n;
+        const line_text = self.viewer.line(self.viewer.cursor_row);
+        const col = @min(self.viewer.cursor_col, line_text.len);
+        const prefix = viewer_mod.identPrefix(line_text, col);
+        const prefix_col = col - prefix.len;
+        const vis_row = self.viewer.cursor_row -| self.viewer.scroll;
+        const caret_y = body_y + @as(i32, @intCast(vis_row)) * row_h;
+        const doc_h = ch + 10;
+        const list_h = @as(i32, @intCast(n)) * row_h;
+        const pop_h = list_h + doc_h;
+        const pop_w = @min(@as(i32, @intCast(@min(code_cols, 56))) * cw, @max(cw * 24, panel_w - pad_x * 2 - (text_x - panel_x)));
+        var pop_x = text_x + @as(i32, @intCast(@min(prefix_col, code_cols))) * cw;
+        if (pop_x + pop_w > panel_x + panel_w - pad_x) {
+            pop_x = panel_x + panel_w - pad_x - pop_w;
+        }
+        pop_x = @max(panel_x + pad_x, pop_x);
+
+        const below_y = caret_y + row_h + 2;
+        const above_y = caret_y - pop_h - 2;
+        const pop_y = if (below_y + pop_h <= body_y + body_h) below_y else @max(body_y, above_y);
+
+        try self.renderer.drawRect(pop_x, pop_y, pop_w, pop_h, chrome.field, 0.98);
+        try self.renderer.drawRect(pop_x, pop_y, pop_w, 2, chrome.accent, 0.7);
+
+        const cols: usize = @intCast(@max(8, @divTrunc(pop_w - 16, cw)));
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const hit = self.viewer.complete_hits[i];
+            const ry = pop_y + 4 + @as(i32, @intCast(i)) * row_h;
+            if (i == self.viewer.complete_sel) {
+                try self.renderer.drawRect(pop_x + 2, ry - 1, pop_w - 4, row_h, chrome.sel_bg, 0.85);
+            }
+            const kind = hit.kindTag();
+            try self.renderer.drawText(pop_x + 8, ry, kind, chrome.dim);
+            const label_x = pop_x + 8 + cw * 4;
+            const label = hit.label();
+            const label_shown = label[0..@min(label.len, cols / 2)];
+            try self.renderer.drawText(label_x, ry, label_shown, chrome.fg);
+            if (hit.detail.len > 0 and cols > label_shown.len + 10) {
+                const det = hit.detail[0..@min(hit.detail.len, cols / 3)];
+                const det_x = pop_x + pop_w - 8 - @as(i32, @intCast(det.len)) * cw;
+                if (det_x > label_x + @as(i32, @intCast(label_shown.len)) * cw) {
+                    try self.renderer.drawText(det_x, ry, det, chrome.muted);
+                }
+            }
+        }
+
+        const sel = self.viewer.complete_hits[self.viewer.complete_sel];
+        const doc_y = pop_y + list_h + 2;
+        try self.renderer.drawRect(pop_x, doc_y - 1, pop_w, 1, chrome.rule, 0.8);
+        const doc = if (sel.doc.len > 0) sel.doc else sel.detail;
+        const doc_shown = doc[0..@min(doc.len, cols)];
+        try self.renderer.drawText(pop_x + 8, doc_y + 2, doc_shown, chrome.muted);
+    }
+
+    fn openSession(
+        self: *App,
+        cwd: []const u8,
+        title_opt: ?[]const u8,
+        command: []const []const u8,
+        wait_after: bool,
+    ) !void {
         const bounds = self.contentRect();
         const cols, const rows = self.gridSize(bounds.w, bounds.h);
         const theme = self.config.theme();
@@ -2586,16 +3908,25 @@ pub const App = struct {
             }
         }
 
+        var prompt_buf: [80]u8 = undefined;
+        var env_refs: [3][]const u8 = undefined;
+        const env = self.sessionLaunchEnv(&prompt_buf, &env_refs);
+
         const session = try Session.createWith(self.allocator, .{
             .cols = cols,
             .rows = rows,
             .title = title,
             .cwd = cwd,
             .shell = launch,
+            .env = env,
+            .command = command,
+            .wait_after_command = wait_after,
         });
         session.setTheme(theme.foreground, theme.background);
         session.setScrollback(self.config.scrollback);
         try self.tabs.add(title, session);
+        self.ui = .normal;
+        self.updateWindowTitle();
     }
 
     fn splitPane(self: *App, dir: layout_mod.Dir) !void {
@@ -2607,17 +3938,28 @@ pub const App = struct {
             Rect{ .x = 0, .y = 0, .w = bounds.w, .h = @divTrunc(bounds.h, 2) };
         const cols, const rows = self.gridSize(half.w, half.h);
         const theme = self.config.theme();
+        var prompt_buf: [80]u8 = undefined;
+        var env_refs: [3][]const u8 = undefined;
+        const env = self.sessionLaunchEnv(&prompt_buf, &env_refs);
         const session = try Session.createWith(self.allocator, .{
             .cols = cols,
             .rows = rows,
             .title = "Split",
             .cwd = self.sessionCwd(),
             .shell = self.config.resolveLaunchShell(),
+            .env = env,
         });
         session.setTheme(theme.foreground, theme.background);
         session.setScrollback(self.config.scrollback);
         try tab.layout.splitFocused(dir, session);
         self.resizeAllSessions();
+    }
+
+    fn sessionLaunchEnv(self: *const App, prompt_buf: *[80]u8, refs: *[3][]const u8) []const []const u8 {
+        refs[0] = "ORBIT_TERMINAL=1";
+        refs[1] = "TERM_PROGRAM=Orbit";
+        refs[2] = std.fmt.bufPrint(prompt_buf, "ORBIT_PROMPT={s}", .{self.config.prompt.name()}) catch "ORBIT_PROMPT=default";
+        return refs[0..3];
     }
 
     fn copySelection(self: *App) void {
@@ -2761,9 +4103,39 @@ pub const App = struct {
             self.home.scrollHelp(lines);
             return;
         }
+        if (self.ui == .viewer) {
+            const lines: i32 = @intFromFloat(-yoff * 3.0);
+            self.viewer.scrollBy(lines, self.viewerVisibleLines());
+            return;
+        }
+        if (self.ui == .plugin_result) {
+            const lines: i32 = @intFromFloat(-yoff * 3.0);
+            self.plugin_result.scrollBy(lines, self.pluginResultVisibleLines());
+            return;
+        }
         if (self.ui != .normal) return;
         const session = self.focused() orelse return;
         const lines: i32 = @intFromFloat(yoff * 3.0);
         session.screen.scrollView(lines);
     }
 };
+
+fn clipUiText(text: []const u8, max_cols: i32) []const u8 {
+    if (max_cols <= 0) return "";
+    return text[0..@min(text.len, @as(usize, @intCast(max_cols)))];
+}
+
+fn wrapUiText(text: []const u8, max_cols: usize) struct { line: []const u8, rest: []const u8 } {
+    const skip = std.mem.trimStart(u8, text, " ");
+    if (skip.len == 0) return .{ .line = "", .rest = "" };
+    if (max_cols == 0) return .{ .line = "", .rest = skip };
+    if (skip.len <= max_cols) return .{ .line = skip, .rest = "" };
+    var i = max_cols;
+    const floor = @max(@as(usize, 1), max_cols / 2);
+    while (i > floor) : (i -= 1) {
+        if (skip[i] == ' ') {
+            return .{ .line = skip[0..i], .rest = skip[i + 1 ..] };
+        }
+    }
+    return .{ .line = skip[0..max_cols], .rest = skip[max_cols..] };
+}

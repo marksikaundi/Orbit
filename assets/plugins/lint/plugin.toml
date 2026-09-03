@@ -1,0 +1,25 @@
+name = "lint"
+version = "0.1.0"
+kind = "lint"
+description = "Lint the open file with your own tool — ESLint, ruff, or a built-in scan"
+
+[[commands]]
+id = "lint.file"
+label = "Lint: File"
+hint = "ctrl+shift+;"
+action = "run"
+payload = "lint"
+shortcut = "ctrl+shift+;"
+
+[tool]
+command = "sh"
+script = "run.sh"
+args = "{file}"
+stdin = "none"
+stdout = "overlay"
+parse = "unix"
+languages = "javascript,typescript,python,zig,go,rust,json,toml,shell"
+timeout_ms = 20000
+
+[hooks]
+on_load = "status:lint plugin — edit run.sh to use your linter"

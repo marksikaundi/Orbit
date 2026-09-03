@@ -12,6 +12,11 @@ pub const Parser = struct {
     param_idx: u8 = 0,
     osc_buf: [256]u8 = undefined,
     osc_len: u16 = 0,
+    /// CSI private prefix: `?` (DEC), `>` (secondary DA), `=` (ANSI).
+    private_marker: u8 = 0,
+    /// Replies for DSR / DA that the PTY must write back (cursor report, etc.).
+    reply_buf: [128]u8 = undefined,
+    reply_len: u8 = 0,
     /// Last OSC 9 / OSC 99 notify payload (for status toast).
     notify_msg: [96]u8 = undefined,
     notify_len: u16 = 0,
@@ -44,6 +49,7 @@ pub const Parser = struct {
         self.param_count = 0;
         self.param_idx = 0;
         self.intermediate = 0;
+        self.private_marker = 0;
     }
 
     fn consume(self: *Parser, screen: *Screen, byte: u8) void {
@@ -137,10 +143,7 @@ pub const Parser = struct {
                 self.state = .ground;
             },
             'c' => {
-                // RIS — soft reset
-                screen.resetAttrs();
-                screen.moveCursor(0, 0);
-                screen.eraseInDisplay(2);
+                screen.softReset();
                 self.state = .ground;
             },
             '(', ')', '*', '+' => {
@@ -160,6 +163,10 @@ pub const Parser = struct {
     }
 
     fn csi(self: *Parser, screen: *Screen, byte: u8) void {
+        if (byte == '?' or byte == '>' or byte == '=') {
+            self.private_marker = byte;
+            return;
+        }
         if (byte >= 0x30 and byte <= 0x39) { // digit
             self.state = .csi_param;
             const d: u16 = byte - '0';
@@ -199,6 +206,12 @@ pub const Parser = struct {
         return default;
     }
 
+    /// CSI L/M/S/T repeats: more than the region height is wasted work and froze the UI at 9999.
+    fn regionRepeat(self: *const Parser, screen: *const Screen) u16 {
+        const height = screen.scroll_bottom -| screen.scroll_top +| 1;
+        return @min(self.param(0, 1), @max(height, 1));
+    }
+
     fn dispatchCsi(self: *Parser, screen: *Screen, final: u8) void {
         switch (final) {
             'A' => screen.moveCursorRel(0, -@as(i32, @intCast(self.param(0, 1)))),
@@ -222,7 +235,7 @@ pub const Parser = struct {
             'J' => screen.eraseInDisplay(self.param(0, 0)),
             'K' => screen.eraseInLine(self.param(0, 0)),
             'L' => { // insert lines — approximate as scroll down at cursor
-                var n = self.param(0, 1);
+                var n = self.regionRepeat(screen);
                 while (n > 0) : (n -= 1) {
                     // shift rows down within region from cursor
                     const top = screen.cursor_row;
@@ -240,7 +253,7 @@ pub const Parser = struct {
                 screen.dirty = true;
             },
             'M' => { // delete lines
-                var n = self.param(0, 1);
+                var n = self.regionRepeat(screen);
                 while (n > 0) : (n -= 1) {
                     const top = screen.cursor_row;
                     const bottom = screen.scroll_bottom;
@@ -258,11 +271,11 @@ pub const Parser = struct {
             'P' => screen.deleteChars(self.param(0, 1)),
             '@' => screen.insertChars(self.param(0, 1)),
             'S' => { // scroll up
-                var n = self.param(0, 1);
+                var n = self.regionRepeat(screen);
                 while (n > 0) : (n -= 1) screen.scrollUpRegion();
             },
             'T' => {
-                var n = self.param(0, 1);
+                var n = self.regionRepeat(screen);
                 while (n > 0) : (n -= 1) screen.scrollDownRegion();
             },
             'd' => screen.moveCursor(screen.cursor_col, self.param(0, 1) -| 1),
@@ -274,11 +287,72 @@ pub const Parser = struct {
             },
             's' => screen.saveCursor(),
             'u' => screen.restoreCursor(),
-            'n' => {}, // device status — ignore for now
-            'h', 'l' => {}, // set/reset mode — ignore mostly
-            'c' => {}, // DA
+            'n' => self.deviceStatus(screen),
+            'h', 'l' => self.setMode(screen, final == 'h'),
+            'c' => self.deviceAttributes(),
             else => {},
         }
+    }
+
+    fn setMode(self: *Parser, screen: *Screen, enable: bool) void {
+        if (self.private_marker != '?') return;
+        var i: u8 = 0;
+        const n = if (self.param_count == 0) @as(u8, 1) else self.param_count;
+        while (i < n) : (i += 1) {
+            const mode: u16 = if (self.param_count == 0) 0 else self.params[i];
+            switch (mode) {
+                6 => screen.origin_mode = enable,
+                7 => screen.auto_wrap = enable,
+                25 => screen.cursor_visible = enable,
+                47, 1047 => {
+                    if (enable) screen.enterAltScreen(false, false) else screen.leaveAltScreen(false);
+                },
+                1048 => {
+                    if (enable) screen.saveCursor() else screen.restoreCursor();
+                },
+                1049 => {
+                    if (enable) screen.enterAltScreen(true, true) else screen.leaveAltScreen(true);
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn deviceStatus(self: *Parser, screen: *const Screen) void {
+        if (self.private_marker == '?') return;
+        const p = self.param(0, 0);
+        if (p == 5) {
+            self.appendReply("\x1b[0n");
+            return;
+        }
+        if (p == 6) {
+            var tmp: [32]u8 = undefined;
+            const msg = std.fmt.bufPrint(
+                &tmp,
+                "\x1b[{d};{d}R",
+                .{ screen.cursor_row + 1, screen.cursor_col + 1 },
+            ) catch return;
+            self.appendReply(msg);
+        }
+    }
+
+    fn deviceAttributes(self: *Parser) void {
+        if (self.private_marker == '>') {
+            // Secondary DA — report as xterm-like so vim/less enable 256-color + alt screen.
+            self.appendReply("\x1b[>0;276;0c");
+            return;
+        }
+        if (self.private_marker != 0) return;
+        // Primary DA — VT220 + ANSI color.
+        self.appendReply("\x1b[?62;22c");
+    }
+
+    fn appendReply(self: *Parser, bytes: []const u8) void {
+        const space = self.reply_buf.len - self.reply_len;
+        if (space == 0 or bytes.len == 0) return;
+        const n = @min(bytes.len, space);
+        @memcpy(self.reply_buf[self.reply_len..][0..n], bytes[0..n]);
+        self.reply_len += @intCast(n);
     }
 
     // Make scrollUpRegion/scrollDownRegion accessible — they're private on Screen.
