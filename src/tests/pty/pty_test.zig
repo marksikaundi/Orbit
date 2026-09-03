@@ -30,7 +30,7 @@ fn echoCommand() []const u8 {
 
 test "deinit of a live shell returns promptly" {
     var pty = try Pty.create(40, 12);
-    // Hung waitpid after SIGTERM used to freeze Orbit ("not responding") on Ctrl+W.
+    // Blocking waitpid after SIGKILL used to freeze Orbit ("not responding") on Ctrl+W.
     pty.deinit();
 }
 

@@ -143,10 +143,14 @@ pub const Session = struct {
         self.pty.resize(cols, rows);
     }
 
+    /// Cap PTY drain per frame so a flood (`yes`, `cat` huge file) cannot stall the UI.
+    pub const max_reads_per_tick: u8 = 8;
+
     pub fn tick(self: *Session) void {
         if (!self.alive) return;
-        // Drain all available output; shell exit surfaces as EOF.
-        while (true) {
+        // Drain a bounded amount; leftover stays in the kernel buffer for the next frame.
+        var reads: u8 = 0;
+        while (reads < max_reads_per_tick) : (reads += 1) {
             const result = self.pty.read(&self.read_buf);
             if (result.len > 0) {
                 self.output_seen = true;

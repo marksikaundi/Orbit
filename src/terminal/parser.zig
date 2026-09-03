@@ -206,6 +206,12 @@ pub const Parser = struct {
         return default;
     }
 
+    /// CSI L/M/S/T repeats: more than the region height is wasted work and froze the UI at 9999.
+    fn regionRepeat(self: *const Parser, screen: *const Screen) u16 {
+        const height = screen.scroll_bottom -| screen.scroll_top +| 1;
+        return @min(self.param(0, 1), @max(height, 1));
+    }
+
     fn dispatchCsi(self: *Parser, screen: *Screen, final: u8) void {
         switch (final) {
             'A' => screen.moveCursorRel(0, -@as(i32, @intCast(self.param(0, 1)))),
@@ -229,7 +235,7 @@ pub const Parser = struct {
             'J' => screen.eraseInDisplay(self.param(0, 0)),
             'K' => screen.eraseInLine(self.param(0, 0)),
             'L' => { // insert lines — approximate as scroll down at cursor
-                var n = self.param(0, 1);
+                var n = self.regionRepeat(screen);
                 while (n > 0) : (n -= 1) {
                     // shift rows down within region from cursor
                     const top = screen.cursor_row;
@@ -247,7 +253,7 @@ pub const Parser = struct {
                 screen.dirty = true;
             },
             'M' => { // delete lines
-                var n = self.param(0, 1);
+                var n = self.regionRepeat(screen);
                 while (n > 0) : (n -= 1) {
                     const top = screen.cursor_row;
                     const bottom = screen.scroll_bottom;
@@ -265,11 +271,11 @@ pub const Parser = struct {
             'P' => screen.deleteChars(self.param(0, 1)),
             '@' => screen.insertChars(self.param(0, 1)),
             'S' => { // scroll up
-                var n = self.param(0, 1);
+                var n = self.regionRepeat(screen);
                 while (n > 0) : (n -= 1) screen.scrollUpRegion();
             },
             'T' => {
-                var n = self.param(0, 1);
+                var n = self.regionRepeat(screen);
                 while (n > 0) : (n -= 1) screen.scrollDownRegion();
             },
             'd' => screen.moveCursor(screen.cursor_col, self.param(0, 1) -| 1),

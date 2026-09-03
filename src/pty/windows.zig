@@ -86,6 +86,13 @@ const w = struct {
         lpOverlapped: ?*anyopaque,
     ) callconv(.winapi) BOOL;
 
+    extern "kernel32" fn SetNamedPipeHandleState(
+        hNamedPipe: HANDLE,
+        lpMode: ?*DWORD,
+        lpMaxCollectionCount: ?*DWORD,
+        lpCollectDataTimeout: ?*DWORD,
+    ) callconv(.winapi) BOOL;
+
     extern "kernel32" fn PeekNamedPipe(
         hNamedPipe: HANDLE,
         lpBuffer: ?[*]u8,
@@ -106,6 +113,7 @@ const w = struct {
     const UINT = u32;
     const WAIT_OBJECT_0: DWORD = 0;
     const STILL_ACTIVE: DWORD = 259;
+    const PIPE_NOWAIT: DWORD = 0x00000001;
 };
 
 pub const Pty = struct {
@@ -136,6 +144,9 @@ pub const Pty = struct {
         errdefer _ = w.CloseHandle(input_write);
         // Don't let our write end be inherited.
         _ = w.SetHandleInformation(input_write, HANDLE_FLAG_INHERIT, 0);
+        // PIPE_NOWAIT so a full ConPTY input buffer cannot stall the UI on WriteFile.
+        var nowait: DWORD = w.PIPE_NOWAIT;
+        _ = w.SetNamedPipeHandleState(input_write, &nowait, null, null);
 
         // Pipe B: ConPTY output -> we read
         var output_read: HANDLE = undefined;

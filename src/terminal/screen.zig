@@ -23,9 +23,12 @@ pub const Screen = struct {
     default_fg: Color = Color.rgb(230, 235, 240),
     default_bg: Color = Color.rgb(18, 20, 26),
 
-    // Scrollback: ring of rows (each row = cols cells), oldest at head.
+    // Scrollback: circular buffer of rows (each row = cols cells).
+    // Logical index 0 is oldest; physical slot is `(start + i) % len`.
     scrollback: std.ArrayList([]Cell) = .empty,
     scrollback_max: usize = 2000,
+    /// Physical index of the oldest row once the ring is wrapping.
+    scrollback_start: usize = 0,
     /// View offset from bottom (0 = live screen, >0 = scrolled up).
     view_offset: u16 = 0,
 
@@ -59,9 +62,7 @@ pub const Screen = struct {
     }
 
     pub fn deinit(self: *Screen) void {
-        for (self.scrollback.items) |row| {
-            self.allocator.free(row);
-        }
+        self.clearScrollback();
         self.scrollback.deinit(self.allocator);
         self.allocator.free(self.alt_cells);
         self.allocator.free(self.cells);
@@ -144,7 +145,7 @@ pub const Screen = struct {
         }
         const a: usize = @intCast(abs_row);
         if (a < total_back) {
-            const sb_row = self.scrollback.items[a];
+            const sb_row = self.scrollbackRowAt(a);
             if (col < sb_row.len) return sb_row[col];
             return Cell.blankWith(self.default_fg, self.default_bg);
         }
@@ -206,6 +207,12 @@ pub const Screen = struct {
         self.dirty = true;
     }
 
+    /// Oldest-first scrollback row. `i` must be `< scrollback.items.len`.
+    pub fn scrollbackRowAt(self: *const Screen, i: usize) []const Cell {
+        const n = self.scrollback.items.len;
+        return self.scrollback.items[(self.scrollback_start + i) % n];
+    }
+
     fn writeAtCursor(self: *Screen, codepoint: u21) void {
         var fg = self.fg;
         var bg = self.bg;
@@ -240,20 +247,36 @@ pub const Screen = struct {
     }
 
     fn pushScrollbackRow(self: *Screen, row_cells: []const Cell) void {
-        const copy = self.allocator.alloc(Cell, self.cols) catch return;
+        if (self.scrollback_max == 0) return;
+        const blank = Cell.blankWith(self.default_fg, self.default_bg);
         const n = @min(row_cells.len, self.cols);
+
+        // Once at capacity, reuse the oldest slot (O(1)) instead of orderedRemove(0).
+        if (self.scrollback.items.len >= self.scrollback_max and self.scrollback_max > 0) {
+            const slot = self.scrollback.items[self.scrollback_start];
+            @memcpy(slot[0..n], row_cells[0..n]);
+            if (n < self.cols) {
+                @memset(slot[n..], blank);
+            }
+            self.scrollback_start = (self.scrollback_start + 1) % self.scrollback.items.len;
+            return;
+        }
+
+        const copy = self.allocator.alloc(Cell, self.cols) catch return;
         @memcpy(copy[0..n], row_cells[0..n]);
         if (n < self.cols) {
-            @memset(copy[n..], Cell.blankWith(self.default_fg, self.default_bg));
+            @memset(copy[n..], blank);
         }
         self.scrollback.append(self.allocator, copy) catch {
             self.allocator.free(copy);
             return;
         };
-        while (self.scrollback.items.len > self.scrollback_max) {
-            const old = self.scrollback.orderedRemove(0);
-            self.allocator.free(old);
-        }
+    }
+
+    fn clearScrollback(self: *Screen) void {
+        for (self.scrollback.items) |row| self.allocator.free(row);
+        self.scrollback.clearRetainingCapacity();
+        self.scrollback_start = 0;
     }
 
     pub fn scrollUpRegion(self: *Screen) void {
@@ -359,8 +382,7 @@ pub const Screen = struct {
             2, 3 => { // entire screen (+scrollback for 3)
                 @memset(self.cells, blank);
                 if (mode == 3) {
-                    for (self.scrollback.items) |row| self.allocator.free(row);
-                    self.scrollback.clearRetainingCapacity();
+                    self.clearScrollback();
                 }
             },
             else => {},

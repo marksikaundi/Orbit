@@ -35,6 +35,7 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 - **Global launch** — `zig build setup` installs shell integration so `zig build run` / `orbit` work from any directory
 - **Detached launch** — `orbit` / `zig build run` open Orbit in the background and print `Orbit terminal opened successfully`
 - **Security scan** — `zig build security-scan` checks `src/`, `scripts/`, and plugins for secrets and injection risks; CI runs on every push/PR; risky plugin inserts warn at load and run time
+- **UI freeze under load** — PTY output is drained a bounded amount per frame; scrollback eviction is O(1); CSI scroll/insert repeats are clamped; tab close never blocks on `waitpid`
 
 ### Changed
 - Saved layout restore moved to palette command **Load Saved Workspace**

@@ -125,3 +125,12 @@ test "primary DA replies" {
     try std.testing.expect(parser.reply_len > 0);
     try std.testing.expectEqual(@as(u8, 0x1B), parser.reply_buf[0]);
 }
+
+test "CSI scroll repeat is clamped to the region height" {
+    var screen = try Screen.init(std.testing.allocator, 8, 4);
+    defer screen.deinit();
+    screen.scrollback_max = 8;
+    var parser = Parser.init();
+    parser.feed(&screen, "hello\x1b[9999S");
+    try std.testing.expect(screen.scrollback.items.len <= 8);
+}

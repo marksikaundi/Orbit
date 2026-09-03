@@ -254,7 +254,7 @@ fn lineTextAbs(screen: *const Screen, abs_row: usize, buf: *[512]u8) usize {
     const sb = screen.scrollback.items.len;
     const cols = @min(screen.cols, buf.len);
     if (abs_row < sb) {
-        const row = screen.scrollback.items[abs_row];
+        const row = screen.scrollbackRowAt(abs_row);
         var i: usize = 0;
         while (i < cols) : (i += 1) {
             const cp = if (i < row.len) row[i].codepoint else ' ';

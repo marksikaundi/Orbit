@@ -99,26 +99,20 @@ pub const Pty = struct {
         self.* = undefined;
     }
 
-    /// Tear down the shell session without blocking the UI thread indefinitely.
+    /// Tear down the shell session without blocking the UI thread.
     /// Child called `setsid()`, so negative pid targets the whole process group.
     fn terminateSession(self: *Pty) void {
         _ = c.kill(-self.child_pid, c.SIGTERM);
         _ = c.kill(self.child_pid, c.SIGTERM);
-
-        var status: c_int = 0;
-        var waited_ms: usize = 0;
-        while (waited_ms < 150) : (waited_ms += 5) {
-            const r = c.waitpid(self.child_pid, &status, c.WNOHANG);
-            if (r != 0) {
-                self.alive = false;
-                return;
-            }
-            sleepMs(5);
+        if (waitNonblocking(self.child_pid, 30)) {
+            self.alive = false;
+            return;
         }
 
         _ = c.kill(-self.child_pid, c.SIGKILL);
         _ = c.kill(self.child_pid, c.SIGKILL);
-        _ = c.waitpid(self.child_pid, &status, 0);
+        _ = waitNonblocking(self.child_pid, 20);
+        // Never waitpid(..., 0): a child in D-state (NFS, hung ioctl) would freeze the UI.
         self.alive = false;
     }
 
@@ -141,9 +135,11 @@ pub const Pty = struct {
             const n = c.write(self.master_fd, bytes.ptr + offset, bytes.len - offset);
             if (n < 0) {
                 const err = std.c._errno().*;
-                if (err == c.EAGAIN or err == c.EWOULDBLOCK) return;
+                if (err == c.EINTR) continue;
+                // EAGAIN / hard error: don't spin; leftover bytes retry next keystroke/tick.
                 return;
             }
+            if (n == 0) return;
             offset += @intCast(n);
         }
     }
@@ -171,23 +167,29 @@ pub const Pty = struct {
     }
 
     fn reapChild(self: *Pty) void {
-        var status: c_int = 0;
         // Shell already exited (EOF) — reap without hanging the frame loop.
-        const r = c.waitpid(self.child_pid, &status, c.WNOHANG);
-        if (r == 0) {
-            // Rare: EOF before the zombie is ready — brief bounded wait, then kill.
-            var i: usize = 0;
-            while (i < 20) : (i += 1) {
-                if (c.waitpid(self.child_pid, &status, c.WNOHANG) != 0) break;
-                sleepMs(5);
-            } else {
-                _ = c.kill(self.child_pid, c.SIGKILL);
-                _ = c.waitpid(self.child_pid, &status, 0);
-            }
+        if (!waitNonblocking(self.child_pid, 20)) {
+            _ = c.kill(self.child_pid, c.SIGKILL);
+            _ = waitNonblocking(self.child_pid, 10);
         }
         self.alive = false;
     }
 };
+
+/// WNOHANG poll with a short cap. Returns true if the child was reaped.
+/// Never uses blocking waitpid — that froze Orbit when a shell child stuck in D-state.
+fn waitNonblocking(pid: c.pid_t, budget_ms: usize) bool {
+    var status: c_int = 0;
+    var waited_ms: usize = 0;
+    while (waited_ms <= budget_ms) {
+        const r = c.waitpid(pid, &status, c.WNOHANG);
+        if (r != 0) return true;
+        if (waited_ms == budget_ms) break;
+        sleepMs(5);
+        waited_ms += 5;
+    }
+    return false;
+}
 
 fn execChild(opts: CreateOptions) void {
     const shell_path = resolveShell(opts.shell);

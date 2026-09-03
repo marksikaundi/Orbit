@@ -91,3 +91,22 @@ test "enterAltScreen swaps buffers and leave restores" {
     try std.testing.expect(!screen.alt_active);
     try std.testing.expectEqual(@as(u21, 'A'), screen.cellAtConst(0, 0).codepoint);
 }
+
+test "scrollback ring caps length and keeps newest rows" {
+    var screen = try Screen.init(std.testing.allocator, 2, 1);
+    defer screen.deinit();
+    screen.scrollback_max = 3;
+
+    for ("ABCDE") |ch| {
+        screen.putChar(ch);
+        screen.putChar('\n');
+    }
+
+    try std.testing.expectEqual(@as(usize, 3), screen.scrollback.items.len);
+    try std.testing.expectEqual(@as(u21, 'C'), screen.scrollbackRowAt(0)[0].codepoint);
+    try std.testing.expectEqual(@as(u21, 'D'), screen.scrollbackRowAt(1)[0].codepoint);
+    try std.testing.expectEqual(@as(u21, 'E'), screen.scrollbackRowAt(2)[0].codepoint);
+
+    screen.view_offset = 3;
+    try std.testing.expectEqual(@as(u21, 'C'), screen.visibleCell(0, 0).codepoint);
+}
