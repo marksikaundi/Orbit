@@ -152,7 +152,7 @@ Linux
 macOS
 Windows
 
-Responsibilities
+Responsibilities    
 
 - create shell
 - send input
