@@ -152,7 +152,7 @@ Linux
 macOS
 Windows
 
-Responsibilities    
+Responsibilities  for ot
 
 - create shell
 - send input
