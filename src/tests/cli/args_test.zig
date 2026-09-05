@@ -81,10 +81,36 @@ test "help catalog covers launch, developer, and plugin commands" {
     try std.testing.expect(std.mem.indexOf(u8, args.help_text, "zig build test") != null);
     try std.testing.expect(std.mem.indexOf(u8, args.help_text, "zig build security-scan") != null);
     try std.testing.expect(std.mem.indexOf(u8, args.help_text, "ide-setup") != null);
+    try std.testing.expect(std.mem.indexOf(u8, args.help_text, "orbit update") != null);
     try std.testing.expect(std.mem.indexOf(u8, args.help_text, "ORBIT_FOREGROUND") != null);
     try std.testing.expect(std.mem.indexOf(u8, args.help_text, "git status") != null);
     try std.testing.expect(std.mem.indexOf(u8, args.help_text, "Ctrl+Shift+P") != null);
     try std.testing.expect(std.mem.indexOf(u8, args.help_text, "Format: Document") != null);
+}
+
+test "update subcommand and flags" {
+    var u = try args.parse(std.testing.allocator, &.{ "orbit", "update" });
+    defer u.deinit(std.testing.allocator);
+    try std.testing.expectEqual(args.Action.update, u.action);
+    try std.testing.expect(!u.update_check);
+    try std.testing.expect(!u.update_force);
+
+    var c = try args.parse(std.testing.allocator, &.{ "orbit", "update", "--check" });
+    defer c.deinit(std.testing.allocator);
+    try std.testing.expectEqual(args.Action.update, c.action);
+    try std.testing.expect(c.update_check);
+
+    var f = try args.parse(std.testing.allocator, &.{ "orbit", "--update", "--force", "-c" });
+    defer f.deinit(std.testing.allocator);
+    try std.testing.expectEqual(args.Action.update, f.action);
+    try std.testing.expect(f.update_check);
+    try std.testing.expect(f.update_force);
+
+    var r = try args.parse(std.testing.allocator, &.{ "orbit", "--orbit-rebuild", "C:\\src\\Orbit" });
+    defer r.deinit(std.testing.allocator);
+    try std.testing.expectEqual(args.Action.update, r.action);
+    try std.testing.expect(r.update_rebuild);
+    try std.testing.expectEqualStrings("C:\\src\\Orbit", r.cwd.?);
 }
 
 test "ide-setup with editor" {

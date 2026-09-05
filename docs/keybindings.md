@@ -126,6 +126,8 @@ Ghostty names are accepted where they map (for example `close_surface`, `new_spl
 | `scroll_to_top` / `scroll_to_bottom` | |
 | `reload_config` | |
 | `reload_plugins` | |
+| `check_updates` | `check_for_updates` |
+| `update_orbit` | |
 | `open_config` | `settings` |
 | `go_home` | `home` |
 | `open_workspace` / `save_workspace` | |

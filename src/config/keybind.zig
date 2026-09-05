@@ -512,6 +512,8 @@ fn mapAppAction(name: []const u8, param: []const u8) ?AppAction {
 
     if (eql(name, "reload_config") or eql(name, "reload-config")) return .reload_config;
     if (eql(name, "reload_plugins")) return .reload_plugins;
+    if (eql(name, "check_updates") or eql(name, "check_for_updates")) return .check_updates;
+    if (eql(name, "update_orbit")) return .update_orbit;
     if (eql(name, "open_config") or eql(name, "settings")) return .settings;
     if (eql(name, "go_home") or eql(name, "home")) return .go_home;
     if (eql(name, "open_workspace")) return .open_workspace;

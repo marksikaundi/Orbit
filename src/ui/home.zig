@@ -50,6 +50,8 @@ pub const help_rows = [_]HelpRow{
     .{ .item = .{ .keys = "orbit --help", .desc = "Same catalog from any folder" } },
     .{ .item = .{ .keys = "orbit help", .desc = "Same catalog (subcommand)" } },
     .{ .item = .{ .keys = "orbit --version", .desc = "Print the Orbit version" } },
+    .{ .item = .{ .keys = "orbit update", .desc = "Install the latest GitHub release (rebuild in place)" } },
+    .{ .item = .{ .keys = "orbit update --check", .desc = "See if a newer release exists" } },
     .{ .item = .{ .keys = "orbit ide-setup", .desc = "Register as the external terminal in Cursor / VS Code" } },
     .{ .item = .{ .keys = "zig build run", .desc = "Build and launch (any folder after setup)" } },
     .{ .item = .{ .keys = "zig build test", .desc = "Run unit tests" } },

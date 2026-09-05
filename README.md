@@ -144,6 +144,7 @@ After `zig build setup`, open a new terminal tab:
 --help             # all commands and how to use them
 orbit --help       # same catalog
 orbit              # launch from any folder
+orbit update       # install the latest GitHub release
 zig build run      # same — builds & launches detached
 ```
 

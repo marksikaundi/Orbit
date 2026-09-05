@@ -77,11 +77,22 @@ jobs:
             echo
             printf '**Branch:** `2026-live` · **Commit:** `%s`\n' "$SHORT_SHA"
             echo
+            echo "### Already installed?"
+            echo
+            echo "From any terminal (after \`zig build setup\`):"
+            printf '%s\n' '```bash'
+            echo "orbit update --check"
+            echo "orbit update"
+            printf '%s\n' '```'
+            echo
+            echo "Then restart Orbit. People on a build from before \`orbit update\` existed still need one manual pull (below), once."
+            echo
             echo "### Install (from source)"
             printf '%s\n' '```bash'
             echo "git clone https://github.com/marksikaundi/Orbit.git"
             echo "cd Orbit && git checkout ${TAG}"
             echo "zig build -Doptimize=ReleaseFast"
+            echo "zig build setup"
             printf '%s\n' '```'
           } > "$NOTES_FILE"
 

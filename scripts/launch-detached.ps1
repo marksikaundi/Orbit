@@ -17,6 +17,9 @@ if ($args.Count -gt 0) {
         "help" { $cli = $true }
         "ide-setup" { $cli = $true }
         "--ide-setup" { $cli = $true }
+        "update" { $cli = $true }
+        "--update" { $cli = $true }
+        "--orbit-rebuild" { $cli = $true }
         "-h" { $cli = $true }
         "--help" { $cli = $true }
         "-V" { $cli = $true }

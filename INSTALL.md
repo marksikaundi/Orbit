@@ -473,6 +473,27 @@ Or from Orbit’s home screen: **Plugins → I** to install the bundled pack. Gu
 
 ## Update Orbit
 
+After `zig build setup`, upgrade in place from any terminal:
+
+```bash
+orbit update --check        # current vs latest GitHub release
+orbit update                # fetch the latest tag, rebuild, refresh the launcher
+```
+
+That is the path for people who installed before a new version shipped — nothing is pushed to their machine automatically. `orbit update` talks to [GitHub Releases](https://github.com/marksikaundi/Orbit/releases), checks out the newest `vX.Y.Z` tag in the recorded source tree (`~/.config/orbit/source_root`), then runs `zig build -Doptimize=ReleaseFast` and `zig build setup`.
+
+Restart Orbit after it finishes. On Windows, quit the Orbit window first (the running `orbit.exe` cannot be overwritten).
+
+If the source tree has local edits:
+
+```bash
+orbit update --force        # discard those changes, then update
+```
+
+ZIP-only installs (no `.git`) can still `--check`, but applying a release needs a git clone.
+
+Manual equivalent:
+
 ```bash
 cd path/to/Orbit
 git fetch --tags
@@ -480,8 +501,6 @@ git pull origin 2026-live   # or: git checkout vX.Y.Z
 zig build -Doptimize=ReleaseFast
 zig build setup             # refresh the global launcher if you use it
 ```
-
-Check the latest tag on [Releases](https://github.com/marksikaundi/Orbit/releases).
 
 ---
 

@@ -14,6 +14,8 @@ After `zig build setup` (once, from the Orbit repo), open a new terminal tab:
 --help                # all commands and how to use them
 orbit --help          # same catalog
 orbit                 # detached — prints “Orbit terminal opened successfully”
+orbit update --check  # current vs latest GitHub release
+orbit update          # install that release (restart Orbit after)
 zig build run         # same, from any folder (unless that folder has its own build.zig)
 ```
 

@@ -3,7 +3,7 @@
 const std = @import("std");
 const version = @import("../version.zig");
 
-pub const Action = enum { run, help, version, ide_setup };
+pub const Action = enum { run, help, version, ide_setup, update };
 
 pub const ParseError = error{
     MissingValue,
@@ -22,6 +22,12 @@ pub const Launch = struct {
     skip_home: bool = false,
     /// `ide-setup --editor` value (null = all detected).
     editor: ?[]u8 = null,
+    /// `orbit update --check` — report only.
+    update_check: bool = false,
+    /// `orbit update --force` — overwrite a dirty source tree.
+    update_force: bool = false,
+    /// Hidden Windows helper: finish rebuild from a copied binary.
+    update_rebuild: bool = false,
 
     pub fn deinit(self: *Launch, allocator: std.mem.Allocator) void {
         if (self.cwd) |p| allocator.free(p);
@@ -51,6 +57,34 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8) ParseError!
         if (i == 1 and isIdeSetup(arg)) {
             out.action = .ide_setup;
             continue;
+        }
+        if (i == 1 and isUpdateCommand(arg)) {
+            out.action = .update;
+            continue;
+        }
+        if (i == 1 and isRebuildCommand(arg)) {
+            out.action = .update;
+            out.update_rebuild = true;
+            continue;
+        }
+        if (out.action == .update) {
+            if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+                out.action = .help;
+                return out;
+            }
+            if (std.mem.eql(u8, arg, "--check") or std.mem.eql(u8, arg, "-c")) {
+                out.update_check = true;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "--force") or std.mem.eql(u8, arg, "-f")) {
+                out.update_force = true;
+                continue;
+            }
+            if (out.update_rebuild) {
+                try setOwned(&out.cwd, allocator, arg);
+                continue;
+            }
+            return error.UnknownArgument;
         }
         if (i == 1 and isHelpCommand(arg)) {
             out.action = .help;
@@ -155,6 +189,7 @@ pub const help_text =
     \\  orbit [path] [options]
     \\  orbit help | --help | -h
     \\  orbit --version | -V
+    \\  orbit update [--check] [--force]
     \\  orbit ide-setup [--editor cursor|code|codium|windsurf|all]
     \\
     \\After `zig build setup`, open a new terminal and run `--help` or `orbit --help`.
@@ -164,6 +199,9 @@ pub const help_text =
     \\  path                         Folder → shell there. File → editor + shell in that folder
     \\  help, -h, --help             Show this catalog
     \\  -V, --version                Print version
+    \\  update                       Install the latest GitHub release (git pull + rebuild)
+    \\  update --check               Report whether a newer release exists
+    \\  update --force               Overwrite local source changes, then update
     \\  ide-setup                    Register Orbit as the external terminal in IDEs
     \\
     \\Launch options:
@@ -185,6 +223,8 @@ pub const help_text =
     \\  orbit --working-directory=/tmp
     \\  orbit -e git status
     \\  orbit --wait-after-command -e make test
+    \\  orbit update                 Fetch the latest release and rebuild
+    \\  orbit update --check         Only print current vs latest
     \\  orbit ide-setup              Cursor, VS Code, VSCodium, Windsurf if found
     \\  orbit ide-setup --editor cursor
     \\
@@ -238,6 +278,8 @@ pub const help_text =
     \\  Palette → Open File          Syntax-highlighted editor (then ⌘/Ctrl+S to save)
     \\  Palette → Reload Config      Re-read ~/.config/orbit/config.toml
     \\  Palette → Reload Plugins     Re-read ~/.config/orbit/plugins/
+    \\  Palette → Check for Updates  Compare this build to GitHub Releases
+    \\  Palette → Update Orbit       Same as `orbit update` (run from a shell)
     \\
     \\Developer commands in a shell tab (also on the palette if plugins are installed):
     \\  git status                   Working tree
@@ -287,6 +329,14 @@ fn isHelpCommand(arg: []const u8) bool {
 
 fn isIdeSetup(arg: []const u8) bool {
     return std.mem.eql(u8, arg, "ide-setup") or std.mem.eql(u8, arg, "--ide-setup");
+}
+
+fn isUpdateCommand(arg: []const u8) bool {
+    return std.mem.eql(u8, arg, "update") or std.mem.eql(u8, arg, "--update");
+}
+
+fn isRebuildCommand(arg: []const u8) bool {
+    return std.mem.eql(u8, arg, "--orbit-rebuild");
 }
 
 fn isCwdFlag(arg: []const u8) bool {

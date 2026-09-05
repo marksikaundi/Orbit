@@ -20,6 +20,7 @@ Install first: **[INSTALL.md](../INSTALL.md)**. Then come back here.
 | Search the screen, files, or code | [Search & editor](search-and-editor.md) |
 | Format, lint, Git, AI, custom commands | [Plugins](plugins.md) |
 | Connect Cursor / VS Code, or use CLI flags | [CLI & IDEs](cli-and-ides.md) (`orbit --help`) |
+| Update an existing install | [CLI & IDEs — Update](cli-and-ides.md#update) (`orbit update`) |
 
 ---
 

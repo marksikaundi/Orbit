@@ -40,6 +40,7 @@ comptime {
 
     _ = @import("tests/cli/args_test.zig");
     _ = @import("tests/cli/jsonc_test.zig");
+    _ = @import("cli/update.zig");
 
     _ = @import("tests/version_test.zig");
 

@@ -46,6 +46,8 @@ You do not need to remember every shortcut. If something is in this list, you ca
 | Quit Orbit | `Ctrl+Q` |
 | Reload Config | |
 | Reload Plugins | |
+| Check for Updates | `orbit update --check` |
+| Update Orbit | `orbit update` |
 | Plugins… | `L` on home |
 | Format Document | plugin |
 | Lint File | plugin |

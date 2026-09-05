@@ -14,6 +14,7 @@ The full user guide is in **[docs/](docs/README.md)** — how to use every featu
 | Search and file editor | [Search & editor](docs/search-and-editor.md) |
 | Format, lint, Git, AI | [Plugins](docs/plugins.md) |
 | `orbit` flags, Cursor / VS Code | [CLI & IDEs](docs/cli-and-ides.md) |
+| Update to a new release | [CLI & IDEs — Update](docs/cli-and-ides.md#update) (`orbit update`) |
 
 Install: **[INSTALL.md](INSTALL.md)**.
 

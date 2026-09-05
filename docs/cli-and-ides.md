@@ -20,6 +20,7 @@ That catalog lists every launch flag, `zig build` step, environment variable, in
 ```text
 orbit [path] [options]
 orbit help | --help | -h
+orbit update [--check] [--force]
 orbit ide-setup [--editor cursor|code|codium|windsurf|all]
 ```
 
@@ -36,6 +37,9 @@ orbit ide-setup [--editor cursor|code|codium|windsurf|all]
 | `-t`, `--title TITLE` | First tab title |
 | `help`, `-h`, `--help` | Full command catalog |
 | `-V`, `--version` | Version |
+| `update` | Fetch the latest GitHub release, rebuild, refresh the launcher |
+| `update --check` | Only print current vs latest |
+| `update --force` | Overwrite local source changes, then update |
 
 `=` form works: `--working-directory=/tmp`.
 
@@ -46,11 +50,28 @@ orbit ~/code/api
 orbit --working-directory=/tmp
 orbit -e git status
 orbit app.js
+orbit update --check
+orbit update
 ```
+
+A new GitHub Release does not change machines that already have Orbit. They stay on the build they compiled until someone runs `orbit update` (or the manual `git` + `zig build` steps in [INSTALL.md](../INSTALL.md#update-orbit)). After it finishes, restart Orbit.
 
 macOS: `open -a Orbit.app /folder` opens a shell in that folder (`zig build` / `zig build setup` must leave `Orbit.app` resolvable; copy to `~/Applications` if needed).
 
 Detached vs foreground: [Getting started](getting-started.md#launch).
+
+---
+
+## Update
+
+Requires Git, Zig 0.16+, network, and a **git clone** recorded by `zig build setup`.
+
+```bash
+orbit update --check        # compare VERSION to the latest vX.Y.Z tag
+orbit update                # fetch that tag, ReleaseFast rebuild, zig build setup
+```
+
+On Windows, quit the Orbit window first so `orbit.exe` is not locked. Palette **Check for Updates** runs the same check; **Update Orbit** reminds you to run the command in a shell.
 
 ---
 

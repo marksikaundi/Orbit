@@ -3,6 +3,7 @@ const App = @import("app/app.zig").App;
 const version = @import("version.zig");
 const cli = @import("cli/args.zig");
 const ide_setup = @import("cli/ide_setup.zig");
+const updater = @import("cli/update.zig");
 const macos_open = @import("platform/macos_open.zig");
 
 pub fn main(init: std.process.Init) !void {
@@ -37,6 +38,15 @@ pub fn main(init: std.process.Init) !void {
         },
         .ide_setup => {
             try ide_setup.run(gpa, init.io, launch.editor);
+            return;
+        },
+        .update => {
+            try updater.run(gpa, init.io, .{
+                .check_only = launch.update_check,
+                .force = launch.update_force,
+                .rebuild_only = launch.update_rebuild,
+                .rebuild_root = launch.cwd,
+            });
             return;
         },
         .run => {},

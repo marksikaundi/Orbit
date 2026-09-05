@@ -35,6 +35,7 @@ const folder_picker = @import("../platform/folder_picker.zig");
 const macos_open = @import("../platform/macos_open.zig");
 const Color = @import("../terminal/cell.zig").Color;
 const dev_root = @import("../dev_root.zig");
+const updater = @import("../cli/update.zig");
 
 const UiMode = enum { home, normal, search, viewer, ws_picker, ws_save, palette, ssh_prompt, settings, plugins, plugin_result };
 
@@ -2155,6 +2156,8 @@ pub const App = struct {
                 const msg = std.fmt.bufPrint(&buf, "plugins: {d} loaded", .{self.plugins.count()}) catch "plugins reloaded";
                 self.setStatus(msg);
             },
+            .check_updates => self.checkForUpdates(),
+            .update_orbit => self.setStatus("run `orbit update` in a shell, then restart"),
             .list_plugins => {
                 self.plugin_row = 0;
                 self.ui = .plugins;
@@ -2164,6 +2167,22 @@ pub const App = struct {
             .ai_explain => self.runKindPlugin(.ai, "explain"),
             .ai_suggest => self.runKindPlugin(.ai, "suggest"),
         }
+    }
+
+    fn checkForUpdates(self: *App) void {
+        self.setStatus("checking for updates…");
+        const root = dev_root.resolve(self.allocator, self.io) orelse {
+            self.setStatus("update check failed — run zig build setup");
+            return;
+        };
+        defer self.allocator.free(root);
+        var status = updater.queryLatest(self.allocator, self.io, root) catch {
+            self.setStatus("update check failed — offline or no git?");
+            return;
+        };
+        defer status.deinit(self.allocator);
+        var buf: [96]u8 = undefined;
+        self.setStatus(updater.shortMessage(&status, &buf));
     }
 
     fn handlePluginsKey(self: *App, key: c_int) void {

@@ -27,6 +27,9 @@ if exist "%ORBIT_ROOT%\zig-out\bin\orbit.exe" (
   if /I "%~1"=="help" goto :fg
   if /I "%~1"=="ide-setup" goto :fg
   if /I "%~1"=="--ide-setup" goto :fg
+  if /I "%~1"=="update" goto :fg
+  if /I "%~1"=="--update" goto :fg
+  if /I "%~1"=="--orbit-rebuild" goto :fg
   if /I "%~1"=="-h" goto :fg
   if /I "%~1"=="--help" goto :fg
   if /I "%~1"=="-V" goto :fg
