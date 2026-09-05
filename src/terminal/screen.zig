@@ -3,6 +3,8 @@ const cell_mod = @import("cell.zig");
 const Cell = cell_mod.Cell;
 const Color = cell_mod.Color;
 const Attrs = cell_mod.Attrs;
+const width = @import("../font/width.zig");
+const mouse_mod = @import("mouse.zig");
 
 pub const Screen = struct {
     allocator: std.mem.Allocator,
@@ -43,6 +45,21 @@ pub const Screen = struct {
     alt_cells: []Cell = &.{},
     alt_active: bool = false,
 
+    /// OSC 8 hyperlink table. Index 0 is unused (no link).
+    links: std.ArrayList([]u8) = .empty,
+    active_link: u16 = 0,
+    /// OSC 0/2 title (owned bytes in title[0..title_len]).
+    title: [96]u8 = undefined,
+    title_len: u16 = 0,
+    title_dirty: bool = false,
+    /// OSC 7 working directory.
+    osc_cwd: [std.fs.max_path_bytes]u8 = undefined,
+    osc_cwd_len: u16 = 0,
+    cwd_dirty: bool = false,
+    mouse_tracking: mouse_mod.Tracking = .off,
+    mouse_sgr: bool = false,
+    bell: bool = false,
+
     pub fn init(allocator: std.mem.Allocator, cols: u16, rows: u16) !Screen {
         const n = @as(usize, cols) * @as(usize, rows);
         const cells = try allocator.alloc(Cell, n);
@@ -64,16 +81,59 @@ pub const Screen = struct {
     pub fn deinit(self: *Screen) void {
         self.clearScrollback();
         self.scrollback.deinit(self.allocator);
+        for (self.links.items) |s| self.allocator.free(s);
+        self.links.deinit(self.allocator);
         self.allocator.free(self.alt_cells);
         self.allocator.free(self.cells);
         self.* = undefined;
     }
 
+    pub fn internLink(self: *Screen, url: []const u8) u16 {
+        if (url.len == 0) return 0;
+        for (self.links.items, 0..) |existing, i| {
+            if (std.mem.eql(u8, existing, url)) return @intCast(i + 1);
+        }
+        const owned = self.allocator.dupe(u8, url) catch return 0;
+        self.links.append(self.allocator, owned) catch {
+            self.allocator.free(owned);
+            return 0;
+        };
+        return @intCast(self.links.items.len);
+    }
+
+    pub fn linkUrl(self: *const Screen, id: u16) ?[]const u8 {
+        if (id == 0 or id > self.links.items.len) return null;
+        return self.links.items[id - 1];
+    }
+
+    pub fn setTitle(self: *Screen, text: []const u8) void {
+        const n = @min(text.len, self.title.len);
+        if (n == 0) return;
+        @memcpy(self.title[0..n], text[0..n]);
+        self.title_len = @intCast(n);
+        self.title_dirty = true;
+    }
+
+    pub fn setOscCwd(self: *Screen, path: []const u8) void {
+        const n = @min(path.len, self.osc_cwd.len);
+        if (n == 0) return;
+        @memcpy(self.osc_cwd[0..n], path[0..n]);
+        self.osc_cwd_len = @intCast(n);
+        self.cwd_dirty = true;
+    }
+
     pub fn setThemeColors(self: *Screen, fg: Color, bg: Color) void {
+        const old_fg = self.default_fg;
+        const old_bg = self.default_bg;
         self.default_fg = fg;
         self.default_bg = bg;
         self.fg = fg;
         self.bg = bg;
+        recolorDefaults(self.cells, old_fg, old_bg, fg, bg);
+        recolorDefaults(self.alt_cells, old_fg, old_bg, fg, bg);
+        for (self.scrollback.items) |row| {
+            recolorDefaults(row, old_fg, old_bg, fg, bg);
+        }
         self.dirty = true;
     }
 
@@ -187,13 +247,19 @@ pub const Screen = struct {
                 }
                 return;
             },
-            0x07 => return, // BEL
+            0x07 => {
+                self.bell = true;
+                return;
+            },
             else => {},
         }
 
         if (codepoint < 0x20) return;
 
-        if (self.cursor_col >= self.cols) {
+        const cols = width.columns(codepoint);
+        const need: u16 = if (cols >= 2) 2 else 1;
+
+        if (self.cursor_col + need > self.cols) {
             if (self.auto_wrap) {
                 self.cursor_col = 0;
                 self.lineFeed();
@@ -202,8 +268,9 @@ pub const Screen = struct {
             }
         }
 
-        self.writeAtCursor(codepoint);
-        self.cursor_col += 1;
+        self.writeAtCursorWide(codepoint, need);
+        self.cursor_col += need;
+        if (self.cursor_col > self.cols) self.cursor_col = self.cols;
         self.dirty = true;
     }
 
@@ -214,6 +281,10 @@ pub const Screen = struct {
     }
 
     fn writeAtCursor(self: *Screen, codepoint: u21) void {
+        self.writeAtCursorWide(codepoint, 1);
+    }
+
+    fn writeAtCursorWide(self: *Screen, codepoint: u21, cols: u16) void {
         var fg = self.fg;
         var bg = self.bg;
         if (self.attrs.reverse) {
@@ -221,7 +292,11 @@ pub const Screen = struct {
             fg = bg;
             bg = t;
         }
-        self.cellAt(self.cursor_col, self.cursor_row).set(codepoint, fg, bg, self.attrs);
+        const wide: u8 = if (cols >= 2) 1 else 0;
+        self.cellAt(self.cursor_col, self.cursor_row).setFull(codepoint, fg, bg, self.attrs, wide, self.active_link);
+        if (cols >= 2 and self.cursor_col + 1 < self.cols) {
+            self.cellAt(self.cursor_col + 1, self.cursor_row).setFull(0, fg, bg, self.attrs, 2, self.active_link);
+        }
     }
 
     pub fn lineFeed(self: *Screen) void {
@@ -522,3 +597,10 @@ pub const Screen = struct {
         return self.cols;
     }
 };
+
+fn recolorDefaults(cells: []Cell, old_fg: Color, old_bg: Color, fg: Color, bg: Color) void {
+    for (cells) |*cell| {
+        if (cell.bg.eql(old_bg)) cell.bg = bg;
+        if (cell.fg.eql(old_fg)) cell.fg = fg;
+    }
+}

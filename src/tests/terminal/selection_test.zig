@@ -75,6 +75,30 @@ test "copyText extracts ASCII with newlines" {
     try std.testing.expect(std.mem.indexOf(u8, buf[0..n], "cd") != null);
 }
 
+test "copyText writes UTF-8" {
+    var screen = try Screen.init(std.testing.allocator, 8, 1);
+    defer screen.deinit();
+    screen.putChar(0x00E9); // é
+    var sel: Selection = .{};
+    sel.begin(0, 0);
+    sel.update(1, 0);
+    sel.finish();
+    var buf: [8]u8 = undefined;
+    const n = sel.copyText(&screen, &buf);
+    try std.testing.expect(n >= 2);
+    try std.testing.expectEqualStrings("é", buf[0..2]);
+}
+
+test "selectWord expands around identifier" {
+    var screen = try Screen.init(std.testing.allocator, 16, 1);
+    defer screen.deinit();
+    for ("foo_bar") |ch| screen.putChar(ch);
+    var sel: Selection = .{};
+    sel.selectWord(&screen, 3, 0);
+    try std.testing.expect(sel.contains(0, 0));
+    try std.testing.expect(sel.contains(6, 0));
+}
+
 test "clear resets selection" {
     var sel: Selection = .{};
     sel.begin(0, 0);

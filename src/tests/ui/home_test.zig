@@ -62,3 +62,11 @@ test "selectedAction follows selection" {
     h.selected = 3;
     try std.testing.expectEqual(home.Action.settings, h.selectedAction());
 }
+
+test "recents extend the home list" {
+    var h: home.Home = .{ .recents_count = 2 };
+    var i: usize = 0;
+    while (i < 20) : (i += 1) h.moveDown();
+    try std.testing.expectEqual(@as(usize, home.entries.len + 1), h.selected);
+    try std.testing.expectEqual(@as(?usize, 1), h.recentIndex());
+}

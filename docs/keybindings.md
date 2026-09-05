@@ -18,7 +18,9 @@ Same idea as [Ghostty keybindings](https://ghostty.org/docs/config/keybind). Plu
 | `Ctrl+Shift+]` / `[` | Next / previous tab |
 | `Ctrl+Shift+D` | Split right (horizontal) |
 | `Ctrl+Shift+E` | Split down (vertical) |
-| `Ctrl+PageDown` | Focus next pane |
+| `Ctrl+PageDown` / `Ctrl+PageUp` | Focus next / previous pane |
+| `Ctrl+Shift+K` | Close focused pane |
+| `Ctrl+Shift+Z` | Zoom / unzoom focused pane |
 | `Ctrl/Cmd+Shift+F` | Search |
 | `Cmd+C` / `Cmd+V` | Copy / paste (macOS) |
 | `Ctrl+C` | Copy **if** there is a selection; otherwise interrupt (Windows/Linux) |
@@ -116,6 +118,9 @@ Ghostty names are accepted where they map (for example `close_surface`, `new_spl
 | `goto_tab:next` | `next_tab`, `goto_tab:current+1` |
 | `goto_tab:previous` | `prev_tab`, `previous_tab` |
 | `goto_split` | `focus_next_pane`, `next_split` |
+| `focus_prev_pane` | `previous_split`, `prev_split` |
+| `close_pane` | `close_split` |
+| `zoom_pane` | `toggle_split_zoom` |
 | `increase_font_size` | `font_larger` |
 | `decrease_font_size` | `font_smaller` |
 | `reset_font_size` | `font_reset` |

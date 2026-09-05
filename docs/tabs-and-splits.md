@@ -18,7 +18,7 @@ Closing the **last** tab returns to the [home screen](getting-started.md), it do
 
 Palette: **New Tab**, **Close Tab**, **Next Tab**, **Previous Tab**.
 
-The tab title comes from the shell (OSC title) or the pane title when you [save a workspace](workspaces.md).
+The tab title follows OSC 0 / 2 from the shell (for example `printf '\033]0;%s\007' "$PWD"`), then the pane title when you [save a workspace](workspaces.md). Drag a tab to reorder it.
 
 ---
 
@@ -29,10 +29,14 @@ The tab title comes from the shell (OSC title) or the pane title when you [save 
 | `Ctrl+Shift+D` | Split **right** (horizontal split — new pane on the right) |
 | `Ctrl+Shift+E` | Split **down** (vertical split — new pane below) |
 | `Ctrl+PageDown` | Focus the next pane in that tab |
+| `Ctrl+PageUp` | Focus the previous pane |
+| `Ctrl+Shift+K` | Close the focused pane (asks first if a session is running) |
+| `Ctrl+Shift+Z` | Zoom / unzoom the focused pane |
+| Drag the divider | Resize the split |
 
-Palette: **Split Right**, **Split Down**, **Focus Next Pane**.
+Palette: **Split Right**, **Split Down**, **Focus Next / Previous Pane**, **Close Pane**, **Zoom Pane**.
 
-Each pane is its own PTY (own shell, cwd, scrollback). Click a pane or use **Focus Next Pane** to type into it.
+Each pane is its own PTY (own shell, cwd, scrollback). Click a pane or cycle focus to type into it.
 
 ---
 

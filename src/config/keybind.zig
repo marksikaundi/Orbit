@@ -493,6 +493,9 @@ fn mapAppAction(name: []const u8, param: []const u8) ?AppAction {
         return .focus_next_pane;
     }
     if (eql(name, "focus_next_pane") or eql(name, "next_split")) return .focus_next_pane;
+    if (eql(name, "focus_prev_pane") or eql(name, "previous_split") or eql(name, "prev_split")) return .focus_prev_pane;
+    if (eql(name, "close_pane") or eql(name, "close_split")) return .close_pane;
+    if (eql(name, "zoom_pane") or eql(name, "toggle_split_zoom")) return .zoom_pane;
 
     if (eql(name, "increase_font_size") or eql(name, "font_larger") or eql(name, "font-increase")) return .font_larger;
     if (eql(name, "decrease_font_size") or eql(name, "font_smaller") or eql(name, "font-decrease")) return .font_smaller;

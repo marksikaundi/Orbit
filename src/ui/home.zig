@@ -95,6 +95,10 @@ pub const help_rows = [_]HelpRow{
     .{ .item = .{ .keys = "Ctrl+Shift+D", .desc = "Split pane right (horizontal)" } },
     .{ .item = .{ .keys = "Ctrl+Shift+E", .desc = "Split pane down (vertical)" } },
     .{ .item = .{ .keys = "Ctrl+PageDown", .desc = "Focus the next pane" } },
+    .{ .item = .{ .keys = "Ctrl+PageUp", .desc = "Focus the previous pane" } },
+    .{ .item = .{ .keys = "Ctrl+Shift+K", .desc = "Close the focused pane" } },
+    .{ .item = .{ .keys = "Ctrl+Shift+Z", .desc = "Zoom / unzoom the focused pane" } },
+    .{ .item = .{ .keys = "Drag divider", .desc = "Resize a split" } },
     .{ .spacer = {} },
 
     .{ .heading = "Font size" },
@@ -109,6 +113,11 @@ pub const help_rows = [_]HelpRow{
     .{ .item = .{ .keys = "Ctrl+V", .desc = "Paste (Windows/Linux)" } },
     .{ .item = .{ .keys = "Ctrl/Cmd+Shift+C / V", .desc = "Copy / paste (all platforms)" } },
     .{ .item = .{ .keys = "Right-click", .desc = "Copy / Paste context menu" } },
+    .{ .item = .{ .keys = "Double-click", .desc = "Select word" } },
+    .{ .item = .{ .keys = "Triple-click", .desc = "Select line" } },
+    .{ .item = .{ .keys = "Alt-drag", .desc = "Rectangular select" } },
+    .{ .item = .{ .keys = "Cmd/Ctrl-click", .desc = "Open URL / OSC 8 hyperlink" } },
+    .{ .item = .{ .keys = "Drop file", .desc = "Paste the path into the shell" } },
     .{ .item = .{ .keys = "Cmd/Ctrl+Shift+F", .desc = "Search terminal, file names, or code in files" } },
     .{ .item = .{ .keys = "Tab", .desc = "Switch Terminal / Files / Code in search" } },
     .{ .item = .{ .keys = "Enter (Files / Code)", .desc = "Open the file in the editor (Code jumps to the line)" } },
@@ -132,6 +141,8 @@ pub const help_rows = [_]HelpRow{
     .{ .item = .{ .keys = "Ctrl+Shift+O", .desc = "Open a folder from disk (native picker)" } },
     .{ .item = .{ .keys = "Ctrl+Shift+S", .desc = "Save current tabs/splits" } },
     .{ .item = .{ .keys = "Palette → Load Saved", .desc = "Restore a previously saved layout" } },
+    .{ .item = .{ .keys = "Launch", .desc = "Restores the last session when restore_last_workspace is on" } },
+    .{ .item = .{ .keys = "R / ↑↓ Enter", .desc = "Open a recent saved workspace from home" } },
     .{ .item = .{ .keys = "↑ ↓ Enter", .desc = "Choose a saved workspace" } },
     .{ .item = .{ .keys = "Delete", .desc = "Delete selected saved workspace" } },
     .{ .spacer = {} },
@@ -193,6 +204,16 @@ pub const Home = struct {
     selected: usize = 0,
     show_help: bool = false,
     help_scroll: usize = 0,
+    recents_count: usize = 0,
+
+    fn itemCount(self: *const Home) usize {
+        return entries.len + self.recents_count;
+    }
+
+    pub fn recentIndex(self: *const Home) ?usize {
+        if (self.selected >= entries.len) return self.selected - entries.len;
+        return null;
+    }
 
     pub fn moveUp(self: *Home) void {
         if (self.show_help) {
@@ -207,7 +228,7 @@ pub const Home = struct {
             self.scrollHelp(1);
             return;
         }
-        if (self.selected + 1 < entries.len) self.selected += 1;
+        if (self.selected + 1 < self.itemCount()) self.selected += 1;
     }
 
     pub fn openHelp(self: *Home) void {
@@ -238,6 +259,7 @@ pub const Home = struct {
     }
 
     pub fn selectedAction(self: *const Home) Action {
+        if (self.selected >= entries.len) return .open_workspace;
         return entries[self.selected].action;
     }
 };
@@ -255,6 +277,7 @@ pub fn draw(
     theme_name: []const u8,
     font_size: f32,
     plugin_count: usize,
+    recents: []const []const u8,
 ) !void {
     const chrome = ui_chrome.fromTheme(renderer.theme);
     const bg = chrome.bg;
@@ -293,7 +316,8 @@ pub fn draw(
     const logo_size = @max(ch * 5, @as(i32, @intFromFloat(@round(72.0 * ui))));
 
     // Approximate stacked height so we can vertically center on tall displays.
-    const block_h = logo_size + brand_ch + tag_ch + ch * 3 + row_h * @as(i32, @intCast(entries.len)) + ch * 5;
+    const recent_rows: i32 = if (recents.len == 0) 0 else @as(i32, @intCast(recents.len)) + 1;
+    const block_h = logo_size + brand_ch + tag_ch + ch * 3 + row_h * @as(i32, @intCast(entries.len + @as(usize, @intCast(recent_rows)))) + ch * 5;
     const pad_y = @max(ch * 2, @divTrunc(fb_h - block_h, 3));
     var y = @min(@max(ch * 2, pad_y), @divTrunc(fb_h, 4));
 
@@ -336,7 +360,25 @@ pub fn draw(
         try renderer.drawTextScaled(key_x, ry + 2, entry.key, muted, body);
     }
 
-    y += @as(i32, @intCast(entries.len)) * row_h + ch;
+    y += @as(i32, @intCast(entries.len)) * row_h + @divTrunc(ch, 2);
+
+    if (recents.len > 0) {
+        try renderer.drawTextScaled(list_x, y, "Recent", muted, body);
+        y += row_h;
+        for (recents, 0..) |name, i| {
+            const ry = y + @as(i32, @intCast(i)) * row_h;
+            const idx = entries.len + i;
+            if (idx == home.selected) {
+                try renderer.drawRect(list_x - 10, ry - 4, list_w + 20, row_h - 2, chrome.sel_bg, 1.0);
+                try renderer.drawRect(list_x - 10, ry - 4, @max(3, @divTrunc(cw, 3)), row_h - 2, accent, 1.0);
+            }
+            const shown = name[0..@min(name.len, 28)];
+            try renderer.drawTextScaled(list_x + 10, ry + 2, shown, fg, body);
+        }
+        y += @as(i32, @intCast(recents.len)) * row_h + ch;
+    } else {
+        y += ch;
+    }
 
     var foot: [96]u8 = undefined;
     const foot_line = std.fmt.bufPrint(

@@ -110,3 +110,16 @@ test "scrollback ring caps length and keeps newest rows" {
     screen.view_offset = 3;
     try std.testing.expectEqual(@as(u21, 'C'), screen.visibleCell(0, 0).codepoint);
 }
+
+test "setThemeColors recolors default cells so unused rows match" {
+    var screen = try Screen.init(std.testing.allocator, 4, 2);
+    defer screen.deinit();
+    screen.putChar('A');
+    const old_bg = screen.cellAtConst(1, 0).bg;
+    const themed = Color.rgb(0, 43, 54);
+    screen.setThemeColors(Color.rgb(200, 200, 200), themed);
+    try std.testing.expect(screen.cellAtConst(1, 0).bg.eql(themed));
+    try std.testing.expect(screen.cellAtConst(0, 1).bg.eql(themed));
+    try std.testing.expect(screen.cellAtConst(0, 0).bg.eql(themed));
+    try std.testing.expect(old_bg.eql(Color.rgb(18, 20, 26)));
+}

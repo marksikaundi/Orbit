@@ -40,6 +40,10 @@ pub const Cell = struct {
     bg: Color = Color.rgb(18, 20, 26),
     attrs: Attrs = .{},
     dirty: bool = true,
+    /// 0 = narrow, 1 = wide head, 2 = wide continuation.
+    wide: u8 = 0,
+    /// 0 = none; otherwise index into Screen.links.
+    link_id: u16 = 0,
 
     pub fn blank() Cell {
         return .{};
@@ -55,6 +59,21 @@ pub const Cell = struct {
             self.fg = fg;
             self.bg = bg;
             self.attrs = attrs;
+            self.dirty = true;
+        }
+    }
+
+    pub fn setFull(self: *Cell, codepoint: u21, fg: Color, bg: Color, attrs: Attrs, wide: u8, link_id: u16) void {
+        if (self.codepoint != codepoint or !self.fg.eql(fg) or !self.bg.eql(bg) or
+            @as(u8, @bitCast(self.attrs)) != @as(u8, @bitCast(attrs)) or
+            self.wide != wide or self.link_id != link_id)
+        {
+            self.codepoint = codepoint;
+            self.fg = fg;
+            self.bg = bg;
+            self.attrs = attrs;
+            self.wide = wide;
+            self.link_id = link_id;
             self.dirty = true;
         }
     }

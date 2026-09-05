@@ -99,6 +99,10 @@ pub fn build(allocator: std.mem.Allocator, pixel_size: u32, preferred_path: ?[:0
     };
 }
 
+pub fn readFile(allocator: std.mem.Allocator, path: [:0]const u8) ![]u8 {
+    return readAbsolute(allocator, path);
+}
+
 fn readAbsolute(allocator: std.mem.Allocator, path: [:0]const u8) ![]u8 {
     if (builtin.os.tag == .windows) {
         const w = struct {

@@ -4,6 +4,7 @@ const Screen = @import("../terminal/screen.zig").Screen;
 const Selection = @import("../terminal/selection.zig").Selection;
 const Color = @import("../terminal/cell.zig").Color;
 const atlas_mod = @import("../font/atlas.zig");
+const dyn_mod = @import("../font/dynamic.zig");
 const faces = @import("../font/faces.zig");
 const theme_mod = @import("../config/theme.zig");
 const CursorStyle = @import("../config/config.zig").CursorStyle;
@@ -28,6 +29,7 @@ pub const Renderer = struct {
     logo_tex: c.GLuint = 0,
     logo_px: i32 = 0,
     atlas: ?atlas_mod.Atlas = null,
+    glyphs: ?dyn_mod.Cache = null,
     cell_w: f32 = 8,
     cell_h: f32 = 16,
     /// Logical point size (Ghostty-style). Scaled by content_scale for Retina.
@@ -97,6 +99,7 @@ pub const Renderer = struct {
 
     pub fn deinit(self: *Renderer) void {
         self.vertices.deinit(self.allocator);
+        if (self.glyphs) |*g| g.deinit();
         if (self.atlas) |*a| a.deinit();
         if (self.atlas_tex != 0) c.glDeleteTextures(1, &self.atlas_tex);
         if (self.logo_tex != 0) c.glDeleteTextures(1, &self.logo_tex);
@@ -130,6 +133,15 @@ pub const Renderer = struct {
     pub fn rebuildAtlas(self: *Renderer) !void {
         const px: u32 = @intFromFloat(@round(@max(10.0, self.font_size * self.content_scale)));
         const path = faces.pathForId(self.font_face);
+        if (dyn_mod.Cache.create(self.allocator, px, path)) |cache| {
+            if (self.glyphs) |*old| old.deinit();
+            self.glyphs = cache;
+            self.cell_w = @floatFromInt(cache.cell_w);
+            self.glyph_h = @floatFromInt(cache.cell_h);
+            self.cell_h = self.glyph_h * @max(1.0, self.line_height);
+            self.uploadGlyphs();
+            return;
+        } else |_| {}
         const new_atlas = try atlas_mod.Atlas.create(self.allocator, px, path);
         if (self.atlas) |*old| old.deinit();
         self.atlas = new_atlas;
@@ -137,6 +149,28 @@ pub const Renderer = struct {
         self.glyph_h = @floatFromInt(new_atlas.cell_h);
         self.cell_h = self.glyph_h * @max(1.0, self.line_height);
         self.uploadAtlas();
+    }
+
+    fn uploadGlyphs(self: *Renderer) void {
+        const g = &(self.glyphs orelse return);
+        c.glBindTexture(c.GL_TEXTURE_2D, self.atlas_tex);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MIN_FILTER, c.GL_NEAREST);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MAG_FILTER, c.GL_NEAREST);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_S, c.GL_CLAMP_TO_EDGE);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_T, c.GL_CLAMP_TO_EDGE);
+        c.glPixelStorei(c.GL_UNPACK_ALIGNMENT, 1);
+        c.glTexImage2D(
+            c.GL_TEXTURE_2D,
+            0,
+            c.GL_RGBA,
+            @intCast(g.tex_w),
+            @intCast(g.tex_h),
+            0,
+            c.GL_RGBA,
+            c.GL_UNSIGNED_BYTE,
+            g.rgba.ptr,
+        );
+        g.dirty = false;
     }
 
     fn uploadAtlas(self: *Renderer) void {
@@ -237,15 +271,18 @@ pub const Renderer = struct {
         const fh: f32 = @floatFromInt(self.fb_h);
         const cell_w = self.cell_w;
         const cell_h = self.cell_h;
-        const glyph_count: f32 = @floatFromInt(atlas_mod.glyph_count);
         const ox: f32 = @floatFromInt(origin_x);
         const oy: f32 = @floatFromInt(origin_y);
+        if (self.glyphs) |*g| {
+            if (g.dirty) self.uploadGlyphs();
+        }
 
         var row: u16 = 0;
         while (row < screen.rows) : (row += 1) {
             var col: u16 = 0;
             while (col < screen.cols) : (col += 1) {
                 const cell = screen.visibleCell(col, row);
+                if (cell.wide == 2) continue;
                 var bg = cell.bg;
                 if (selection.contains(col, row)) {
                     bg = self.theme.selection_bg;
@@ -260,15 +297,22 @@ pub const Renderer = struct {
                     }
                 }
 
-                try self.appendSolid(ox, oy, fw, fh, col, row, cell_w, cell_h, bg, self.opacity);
+                const span_w = if (cell.wide == 1) cell_w * 2 else cell_w;
+                const x0 = ox + @as(f32, @floatFromInt(col)) * cell_w;
+                const y0 = oy + @as(f32, @floatFromInt(row)) * cell_h;
+                // Leave default-bg cells to the pane fill so unused rows match the chrome.
+                if (!bg.eql(self.theme.background)) {
+                    try self.appendPixelRect(fw, fh, x0, y0, span_w, cell_h, bg, self.opacity);
+                }
+
+                if (cell.link_id != 0 or cell.attrs.underline) {
+                    const link_c = if (cell.link_id != 0) Color.rgb(90, 160, 230) else cell.fg;
+                    const uy = y0 + cell_h - 2;
+                    try self.appendPixelRect(fw, fh, x0, uy, span_w, 1.5, link_c, 0.85);
+                }
 
                 const cp = cell.codepoint;
-                if (cp < atlas_mod.first_codepoint or cp > atlas_mod.last_codepoint) continue;
-                if (cp == ' ') continue;
-
-                const gi: f32 = @floatFromInt(cp - atlas_mod.first_codepoint);
-                const uv_left = gi / glyph_count;
-                const uv_right = (gi + 1.0) / glyph_count;
+                if (cp == 0 or cp == ' ') continue;
 
                 var fg = cell.fg;
                 if (cell.attrs.bold) {
@@ -278,7 +322,17 @@ pub const Renderer = struct {
                         @min(255, fg.b +| 20),
                     );
                 }
-                try self.appendGlyph(ox, oy, fw, fh, col, row, cell_w, cell_h, uv_left, uv_right, fg);
+                if (self.glyphs) |*g| {
+                    const slot = g.lookup(cp);
+                    if (slot.ok) {
+                        try self.appendGlyphUv(ox, oy, fw, fh, col, row, span_w, cell_h, slot.u0, slot.v0, slot.u1, slot.v1, fg);
+                    }
+                } else {
+                    if (cp < atlas_mod.first_codepoint or cp > atlas_mod.last_codepoint) continue;
+                    const glyph_count: f32 = @floatFromInt(atlas_mod.glyph_count);
+                    const gi: f32 = @floatFromInt(cp - atlas_mod.first_codepoint);
+                    try self.appendGlyph(ox, oy, fw, fh, col, row, cell_w, cell_h, gi / glyph_count, (gi + 1.0) / glyph_count, fg);
+                }
             }
         }
 
@@ -389,19 +443,44 @@ pub const Renderer = struct {
         self.vertices.clearRetainingCapacity();
         const fw: f32 = @floatFromInt(self.fb_w);
         const fh: f32 = @floatFromInt(self.fb_h);
-        const glyph_count: f32 = @floatFromInt(atlas_mod.glyph_count);
         const cw = self.cell_w * s;
         const ch = @max(1.0, self.glyph_h) * s;
+        if (self.glyphs) |*g| {
+            if (g.dirty) self.uploadGlyphs();
+        }
         var i: usize = 0;
-        while (i < text.len) : (i += 1) {
-            const cp: u21 = text[i];
-            if (cp < atlas_mod.first_codepoint or cp > atlas_mod.last_codepoint) continue;
-            const gi: f32 = @floatFromInt(cp - atlas_mod.first_codepoint);
-            const uv_left = gi / glyph_count;
-            const uv_right = (gi + 1.0) / glyph_count;
-            const px = @as(f32, @floatFromInt(x)) + @as(f32, @floatFromInt(i)) * cw;
+        var col_i: f32 = 0;
+        while (i < text.len) {
+            const seq_len = std.unicode.utf8ByteSequenceLength(text[i]) catch {
+                i += 1;
+                continue;
+            };
+            if (i + seq_len > text.len) break;
+            const cp: u21 = std.unicode.utf8Decode(text[i .. i + seq_len]) catch {
+                i += 1;
+                continue;
+            };
+            i += seq_len;
+            if (cp == ' ' or cp == 0x00A0 or cp == '\t') {
+                col_i += 1;
+                continue;
+            }
+            const px = @as(f32, @floatFromInt(x)) + col_i * cw;
             const py = @as(f32, @floatFromInt(y));
-            try self.appendGlyphPx(fw, fh, px, py, cw, ch, uv_left, uv_right, color);
+            if (self.glyphs) |*g| {
+                const slot = g.lookup(cp);
+                if (slot.ok) {
+                    const gw = cw * @as(f32, @floatFromInt(@max(@as(u8, 1), slot.columns)));
+                    try self.appendGlyphPxUv(fw, fh, px, py, gw, ch, slot.u0, slot.v0, slot.u1, slot.v1, color);
+                    col_i += @floatFromInt(@max(@as(u8, 1), slot.columns));
+                    continue;
+                }
+            } else if (cp >= atlas_mod.first_codepoint and cp <= atlas_mod.last_codepoint) {
+                const glyph_count: f32 = @floatFromInt(atlas_mod.glyph_count);
+                const gi: f32 = @floatFromInt(cp - atlas_mod.first_codepoint);
+                try self.appendGlyphPx(fw, fh, px, py, cw, ch, gi / glyph_count, (gi + 1.0) / glyph_count, color);
+            }
+            col_i += 1;
         }
         try self.flushMode(self.atlas_tex, 0);
     }
@@ -561,6 +640,61 @@ pub const Renderer = struct {
             nx_tr, ny_tr, -1, 0, r, g, b, alpha,
             nx_br, ny_br, -1, 0, r, g, b, alpha,
             nx_bl, ny_bl, -1, 0, r, g, b, alpha,
+        });
+    }
+
+    fn appendGlyphUv(
+        self: *Renderer,
+        ox: f32,
+        oy: f32,
+        fw: f32,
+        fh: f32,
+        col: u16,
+        row: u16,
+        cell_w: f32,
+        cell_h: f32,
+        tex_u0: f32,
+        tex_v0: f32,
+        tex_u1: f32,
+        tex_v1: f32,
+        color: Color,
+    ) !void {
+        const x0 = ox + @as(f32, @floatFromInt(col)) * self.cell_w;
+        const extra = cell_h - self.glyph_h;
+        const y0 = oy + @as(f32, @floatFromInt(row)) * cell_h + extra * 0.5;
+        try self.appendGlyphPxUv(fw, fh, x0, y0, cell_w, self.glyph_h, tex_u0, tex_v0, tex_u1, tex_v1, color);
+    }
+
+    fn appendGlyphPxUv(
+        self: *Renderer,
+        fw: f32,
+        fh: f32,
+        x0: f32,
+        y0: f32,
+        cell_w: f32,
+        cell_h: f32,
+        tex_u0: f32,
+        tex_v0: f32,
+        tex_u1: f32,
+        tex_v1: f32,
+        color: Color,
+    ) !void {
+        const x1 = x0 + cell_w;
+        const y1 = y0 + cell_h;
+        const nx0 = (x0 / fw) * 2.0 - 1.0;
+        const nx1 = (x1 / fw) * 2.0 - 1.0;
+        const ny0 = 1.0 - (y0 / fh) * 2.0;
+        const ny1 = 1.0 - (y1 / fh) * 2.0;
+        const r = @as(f32, @floatFromInt(color.r)) / 255.0;
+        const g = @as(f32, @floatFromInt(color.g)) / 255.0;
+        const b = @as(f32, @floatFromInt(color.b)) / 255.0;
+        try self.vertices.appendSlice(self.allocator, &.{
+            nx0, ny0, tex_u0, tex_v0, r, g, b, 1.0,
+            nx1, ny0, tex_u1, tex_v0, r, g, b, 1.0,
+            nx0, ny1, tex_u0, tex_v1, r, g, b, 1.0,
+            nx1, ny0, tex_u1, tex_v0, r, g, b, 1.0,
+            nx1, ny1, tex_u1, tex_v1, r, g, b, 1.0,
+            nx0, ny1, tex_u0, tex_v1, r, g, b, 1.0,
         });
     }
 

@@ -568,51 +568,79 @@ PTY Latency
 
 # Release Roadmap
 
-v0.1
+v0.1 – v1.0 shipped the foundations (terminal → workspaces → plugins).
 
-Basic terminal
-
-v0.2
-
-ANSI support
-
-v0.3
-
-Themes
-
-v0.4
-
-Tabs
-
-v0.5
-
-Splits
-
-v0.6
-
-Workspaces
-
-v0.7
-
-Plugins
-
-v0.8
-
-Search
-
-v0.9
-
-Performance
-
-v1.0
-
-Stable Release
+The next releases close daily-use gaps. Order is what users hit first, not what is most impressive.
 
 ---
 
-# Future
+## Phase 8 — Daily completeness (v2.2) — shipped
 
-SSH Manager
+Table-stakes terminal behavior. Without these, Orbit fails in the first hour.
+
+| Item | Status |
+| --- | --- |
+| Unicode glyph cache + fallback fonts | Shipped — on-demand atlas, fallbacks, box-drawing |
+| UTF-8 selection copy | Shipped |
+| Wide-character cells | Shipped — CJK / emoji occupy two columns |
+| xterm mouse protocol (1000 / 1002 / 1006) | Shipped — Shift still selects |
+| IME / composed input | Shipped — GLFW char callback + Unicode glyphs |
+| Word / line / rectangular select | Shipped — double / triple / Alt-drag |
+| OSC 8 hyperlinks + clickable URLs | Shipped — Cmd/Ctrl-click |
+| OSC 0 / 2 window and tab titles | Shipped |
+
+---
+
+## Phase 9 — Project-centric restore (v2.3) — shipped
+
+The product pitch: projects are first-class. Make that true on every launch.
+
+| Item | Status |
+| --- | --- |
+| Recent workspaces on home | Shipped — Recent list, `R` / ↑↓ Enter |
+| Restore last session on launch | Shipped — `__last__` + `restore_last_workspace` |
+| Live cwd (OSC 7 + shell hook) | Shipped — `assets/shell/orbit.sh` |
+| SSH host list from `~/.ssh/config` | Shipped — palette SSH picker |
+| Split UX | Shipped — drag divider, close, prev, zoom, drag-reorder tabs |
+
+---
+
+## Phase 10 — Weekly power-user (v2.4)
+
+| Item | Status |
+| --- | --- |
+| Regex + case-sensitive search | Shipped — F2 / F3 in terminal search |
+| Desktop bell / notifications | Shipped — OS notify when unfocused |
+| File drop | Shipped — path pasted into the shell |
+| Close confirm | Shipped — quit / close tab / close pane |
+| Inline images (iTerm OSC 1337) | Next — after text rendering is solid |
+
+---
+
+## Phase 11 — Distribution (v2.5)
+
+| Item | Why |
+| --- | --- |
+| Prebuilt binaries per platform | Source-only install blocks non-Zig users |
+| Signed macOS `.app` / Linux archives / Windows zip | GitHub Releases as the install path |
+
+---
+
+## Phase 12 — Later
+
+Do not schedule these ahead of Phases 8–11.
+
+- HarfBuzz ligatures and full shaping
+- Kitty graphics protocol (beyond iTerm inline images)
+- SSH keys, jump hosts, ControlMaster, reconnect
+- Cloud sync, workspace sharing, remote development
+- Session recording, terminal replay, command timeline
+- GPU effects, multi-cursor
+- WebGPU renderer
+
+---
+
+# Future (deferred)
 
 Cloud Sync
 
@@ -621,8 +649,6 @@ Workspace Sharing
 Remote Development
 
 Session Recording
-
-Image Protocol
 
 GPU Effects
 

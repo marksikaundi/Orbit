@@ -11,6 +11,21 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 ## [Unreleased]
 
 ### Added
+- **Unicode text** — on-demand glyph cache with fallback fonts, wide cells (CJK / emoji), synthesized box-drawing for TUI apps, and UTF-8 clipboard copy
+- **xterm mouse** — DECSET 1000 / 1002 / 1003 / 1006 so vim, less, tmux, htop, and lazygit receive clicks and wheel events (Shift still selects)
+- **Selection** — double-click word, triple-click line, Alt-drag rectangle
+- **Clickable URLs** — OSC 8 hyperlinks plus Cmd/Ctrl-click on `http(s)://` text
+- **OSC 0/2 titles** — tab and window titles follow the shell
+- **Live cwd** — OSC 7 plus an `orbit.sh` hook so Save Workspace records `cd`
+- **Restore last session** — auto-saves `__last__` on quit; `restore_last_workspace` reopens it on launch; recents in `session.toml`
+- **SSH host list** — palette SSH reads `~/.ssh/config` Host entries
+- **Split UX** — drag the divider, close pane (`Ctrl+Shift+K`), focus previous (`Ctrl+PageUp`), zoom pane (`Ctrl+Shift+Z`)
+- **Search** — F2 case-sensitive, F3 regex-lite
+- **File drop** — drag a path from Finder / Explorer into the shell
+- **Close confirm** — quit / close tab / close pane asks before killing sessions
+- **Desktop notifications** — OSC 9/99 and BEL notify the OS when Orbit is unfocused
+- **IME** — composed Unicode already goes to the PTY; glyphs now render so CJK / dead keys are visible
+
 - **`orbit update`** — people on an older install can upgrade from the terminal: checks GitHub Releases, fetches the latest `vX.Y.Z` tag, rebuilds, and refreshes the launcher (`orbit update --check` to only report). Palette: **Check for Updates** / **Update Orbit**
 - **`--help` catalog** — `orbit --help`, `orbit help`, and (after setup) a bare `--help` in a new terminal list every launch flag, `zig build` step, environment variable, shortcut, plugin command, and developer shell command
 - **User docs hub** — `docs/` covers how to use and configure every feature (home, config, appearance, keybindings, palette, tabs, workspaces, search/editor, plugins, CLI/IDEs)

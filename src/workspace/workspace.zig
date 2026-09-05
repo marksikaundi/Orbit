@@ -51,6 +51,7 @@ pub const Manager = struct {
             if (!std.mem.endsWith(u8, entry.name, ".toml")) continue;
             const name = entry.name[0 .. entry.name.len - 5];
             if (name.len == 0) continue;
+            if (std.mem.eql(u8, name, "__last__")) continue;
             const owned = try self.allocator.dupe(u8, name);
             try self.names.append(self.allocator, owned);
         }

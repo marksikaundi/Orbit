@@ -89,6 +89,19 @@ zig() {
   (cd "$root" && command zig build "$@")
 }
 
+# Report the live working directory so Save Workspace records `cd` (OSC 7).
+if [ -n "${ORBIT_TERMINAL:-}" ]; then
+  _orbit_osc7() {
+    printf '\033]7;file://%s%s\033\\' "${HOST:-localhost}" "$PWD"
+  }
+  if [ -n "${ZSH_VERSION:-}" ]; then
+    autoload -Uz add-zsh-hook 2>/dev/null || true
+    add-zsh-hook precmd _orbit_osc7 2>/dev/null || precmd_functions+=(_orbit_osc7)
+  elif [ -n "${BASH_VERSION:-}" ]; then
+    PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND;}_orbit_osc7"
+  fi
+fi
+
 # Ghostty-style prompt — only inside Orbit, and only when Appearance → Prompt
 # is not "default". Sourced last from ~/.zshrc / ~/.bashrc so it wins.
 if [ -n "${ORBIT_TERMINAL:-}" ] && [ -n "${ORBIT_PROMPT:-}" ] && [ "${ORBIT_PROMPT}" != "default" ]; then

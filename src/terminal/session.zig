@@ -165,6 +165,7 @@ pub const Session = struct {
                     self.pushStatus(self.parser.notify_msg[0..self.parser.notify_len]);
                     self.parser.notify_len = 0;
                 }
+                self.applyOscMeta();
             }
             if (result.eof) {
                 self.alive = false;
@@ -185,6 +186,29 @@ pub const Session = struct {
     pub fn write(self: *Session, bytes: []const u8) void {
         if (!self.alive) return;
         self.pty.write(bytes);
+    }
+
+    fn applyOscMeta(self: *Session) void {
+        if (self.screen.title_dirty and self.screen.title_len > 0) {
+            const next = self.screen.title[0..self.screen.title_len];
+            if (!std.mem.eql(u8, self.title, next)) {
+                if (self.allocator.dupe(u8, next)) |owned| {
+                    self.allocator.free(self.title);
+                    self.title = owned;
+                } else |_| {}
+            }
+            self.screen.title_dirty = false;
+        }
+        if (self.screen.cwd_dirty and self.screen.osc_cwd_len > 0) {
+            const next = self.screen.osc_cwd[0..self.screen.osc_cwd_len];
+            if (!std.mem.eql(u8, self.cwd, next)) {
+                if (self.allocator.dupe(u8, next)) |owned| {
+                    self.allocator.free(self.cwd);
+                    self.cwd = owned;
+                } else |_| {}
+            }
+            self.screen.cwd_dirty = false;
+        }
     }
 
     fn pushStatus(self: *Session, msg: []const u8) void {

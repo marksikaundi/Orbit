@@ -27,6 +27,9 @@ You do not need to remember every shortcut. If something is in this list, you ca
 | Next Tab | `Ctrl+Tab` |
 | Previous Tab | `Ctrl+Shift+Tab` |
 | Focus Next Pane | `Ctrl+PageDown` |
+| Focus Previous Pane | `Ctrl+PageUp` |
+| Close Pane | `Ctrl+Shift+K` |
+| Zoom Pane | `Ctrl+Shift+Z` |
 | Open Workspace | `Ctrl+Shift+O` |
 | Load Saved Workspace | saved |
 | Save Workspace | `Ctrl+Shift+S` |
@@ -54,7 +57,7 @@ You do not need to remember every shortcut. If something is in this list, you ca
 | AI: Explain | plugin |
 | AI: Suggest command | plugin |
 
-**SSH…** inserts an `ssh ` prompt into the shell so you type the host. Format, lint, and AI need the matching [plugin](plugins.md) installed and (for format/lint) a file open.
+**SSH…** lists `Host` entries from `~/.ssh/config` (wildcards skipped). Arrow to a host or type one, then Enter inserts `ssh -- host` after the prompt. Format, lint, and AI need the matching [plugin](plugins.md) installed and (for format/lint) a file open.
 
 Plugin rows keep the label from `plugin.toml` (`Git: Status`, `Dev: Tree`, …).
 

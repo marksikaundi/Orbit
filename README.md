@@ -76,7 +76,9 @@ Everything revolves around the developer’s workflow — Backend, Frontend, Pro
 - **GPU-rendered** text with dirty-cell redraws
 - POSIX PTY (Linux / macOS) and ConPTY (Windows)
 - Full ANSI parsing — CSI, OSC, SGR, DEC, DCS, UTF-8
-- Colors, cursor, scrolling, selection, clipboard
+- Colors, cursor, scrolling, selection (word / line / rectangle), clipboard (UTF-8)
+- Unicode glyphs with fallback fonts, wide cells, and TUI box-drawing
+- xterm mouse protocol, OSC 8 / clickable URLs, OSC 0/2 titles, OSC 7 live cwd
 - **Syntax-highlighted file editor** (JS, Python, Java, Zig, and more) with autocomplete and short docs
 - Tabs, split panes, search, themes, transparency
 - TOML config with **live reload** and **Ghostty-compatible keybinds** (`keybind = trigger=action`)
@@ -346,7 +348,9 @@ One shared PTY interface across platforms.
 | v0.9 | Performance |
 | **v1.0** | **Stable release** |
 
-**Later ideas:** SSH manager, cloud sync, workspace sharing, remote development, session recording, image protocol, GPU effects, multi-cursor, terminal replay, command timeline.
+**Phase 8–10:** Unicode, mouse, selection, URLs, last-session restore, live cwd, SSH hosts, split UX, search regex, file drop, close confirm, notifications. Inline images and signed installers are next.
+
+**Later:** HarfBuzz ligatures, Kitty graphics, cloud sync, session recording. See [roamap.md](roamap.md).
 
 See [roamap.md](roamap.md) for full phase detail · [CHANGELOG.md](CHANGELOG.md) for shipped changes.
 

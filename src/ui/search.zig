@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Screen = @import("../terminal/screen.zig").Screen;
+const pattern = @import("pattern.zig");
 
 pub const Mode = enum { terminal, files, code };
 
@@ -46,6 +47,8 @@ pub const Search = struct {
     code_count: usize = 0,
     /// Absolute workspace / cwd being searched (owned).
     root: ?[]u8 = null,
+    case_sensitive: bool = false,
+    regex: bool = false,
 
     pub fn open(self: *Search, allocator: std.mem.Allocator, root_path: ?[]const u8) void {
         self.clearHits(allocator);
@@ -125,6 +128,16 @@ pub const Search = struct {
         self.selected = 0;
     }
 
+    pub fn toggleCase(self: *Search) void {
+        self.case_sensitive = !self.case_sensitive;
+        self.selected = 0;
+    }
+
+    pub fn toggleRegex(self: *Search) void {
+        self.regex = !self.regex;
+        self.selected = 0;
+    }
+
     pub fn toggleMode(self: *Search) void {
         self.mode = switch (self.mode) {
             .terminal => .files,
@@ -158,12 +171,13 @@ pub const Search = struct {
             const n = lineTextAbs(screen, abs, &line_buf);
             const line = line_buf[0..n];
             var from: usize = 0;
+            const opts = pattern.Options{ .case_sensitive = self.case_sensitive, .regex = self.regex };
             while (from < line.len and self.term_count < max_hits) {
-                if (indexOfIgnoreCase(line[from..], q)) |rel| {
+                if (pattern.find(line[from..], q, opts)) |rel| {
                     const col = from + rel;
                     self.term_hits[self.term_count] = .{ .abs_row = abs, .col = col };
                     self.term_count += 1;
-                    from = col + 1;
+                    from = col + @max(@as(usize, 1), q.len);
                 } else break;
             }
         }
@@ -256,20 +270,37 @@ fn lineTextAbs(screen: *const Screen, abs_row: usize, buf: *[512]u8) usize {
     if (abs_row < sb) {
         const row = screen.scrollbackRowAt(abs_row);
         var i: usize = 0;
+        var n: usize = 0;
         while (i < cols) : (i += 1) {
-            const cp = if (i < row.len) row[i].codepoint else ' ';
-            buf[i] = if (cp < 128) @intCast(cp) else '?';
+            const cell = if (i < row.len) row[i] else continue;
+            if (cell.wide == 2) continue;
+            n += putCp(buf, n, cell.codepoint);
         }
-        return trimTrailingSpaces(buf[0..cols]);
+        return trimTrailingSpaces(buf[0..n]);
     }
     const screen_row = abs_row - sb;
     if (screen_row >= screen.rows) return 0;
     var i: usize = 0;
+    var n: usize = 0;
     while (i < cols) : (i += 1) {
-        const cp = screen.cellAtConst(@intCast(i), @intCast(screen_row)).codepoint;
-        buf[i] = if (cp < 128) @intCast(cp) else '?';
+        const cell = screen.cellAtConst(@intCast(i), @intCast(screen_row));
+        if (cell.wide == 2) continue;
+        n += putCp(buf, n, cell.codepoint);
     }
-    return trimTrailingSpaces(buf[0..cols]);
+    return trimTrailingSpaces(buf[0..n]);
+}
+
+fn putCp(buf: *[512]u8, at: usize, cp: u21) usize {
+    if (at >= buf.len) return 0;
+    if (cp < 0x80) {
+        buf[at] = if (cp == 0) ' ' else @intCast(cp);
+        return 1;
+    }
+    var tmp: [4]u8 = undefined;
+    const k = std.unicode.utf8Encode(cp, &tmp) catch return 0;
+    if (at + k > buf.len) return 0;
+    @memcpy(buf[at .. at + k], tmp[0..k]);
+    return k;
 }
 
 fn trimTrailingSpaces(line: []u8) usize {

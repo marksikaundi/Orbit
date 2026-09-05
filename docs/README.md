@@ -47,6 +47,7 @@ Install first: **[INSTALL.md](../INSTALL.md)**. Then come back here.
 | Config | `~/.config/orbit/config.toml` | `%APPDATA%\orbit\config.toml` |
 | Plugins | `~/.config/orbit/plugins/<name>/` | `%APPDATA%\orbit\plugins\<name>\` |
 | Workspaces | `~/.config/orbit/workspaces/<name>.toml` | `%APPDATA%\orbit\workspaces\<name>.toml` |
+| Session / recents | `~/.config/orbit/session.toml` | `%APPDATA%\orbit\session.toml` |
 | Logs | `~/.config/orbit/logs/orbit.log` | `%APPDATA%\orbit\logs\orbit.log` |
 
 Orbit watches `config.toml` and reloads it automatically. You can also run **Reload Config** from the palette.
@@ -78,7 +79,8 @@ These are the built-in chords. Override them in [Keybindings](keybindings.md).
 | `Ctrl+Shift+T` / `W` | New / close tab |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+Shift+D` / `E` | Split right / down |
-| `Ctrl+PageDown` | Focus next pane |
+| `Ctrl+PageDown` / `PageUp` | Focus next / previous pane |
+| `Ctrl+Shift+K` / `Z` | Close / zoom pane |
 | `Ctrl/Cmd+Shift+F` | Search (terminal, files, or code) |
 | `Ctrl/Cmd+Shift+C` / `V` | Copy / paste |
 | `Ctrl/Cmd+=` `/` `-` `/` `0` | Font larger / smaller / reset |

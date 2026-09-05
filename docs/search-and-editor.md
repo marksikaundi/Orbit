@@ -15,9 +15,11 @@ Orbit can search the **terminal**, **file names**, and **code inside files**, an
 | `↑` `↓` | Move between matches |
 | `Enter` | Terminal: jump to the hit · Files: open the file · Code: open the file at that line |
 | `Shift+Enter` | Files / Code: insert the path into the shell |
+| `F2` | Toggle case-sensitive match |
+| `F3` | Toggle regex-lite (`. * + ? ^ $`, `\d` `\w` `\s`, `[abc]`) |
 | `Esc` | Close (returns to the editor if a file is still open) |
 
-- **Terminal** — visible screen + scrollback, case-insensitive
+- **Terminal** — visible screen + scrollback (substring by default; F2 / F3 for case and regex)
 - **Files** — names under the opened folder / current cwd
 - **Code** — contents of those files; Enter opens the editor on that line
 

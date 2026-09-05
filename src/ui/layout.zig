@@ -83,6 +83,14 @@ pub const Layout = struct {
     }
 
     pub fn focusNext(self: *Layout) void {
+        self.focusBy(1);
+    }
+
+    pub fn focusPrev(self: *Layout) void {
+        self.focusBy(-1);
+    }
+
+    fn focusBy(self: *Layout, delta: i32) void {
         var list: std.ArrayList(*Session) = .empty;
         defer list.deinit(self.allocator);
         self.collect(self.root, &list) catch return;
@@ -94,7 +102,147 @@ pub const Layout = struct {
                 break;
             }
         }
-        self.focused = list.items[(idx + 1) % list.items.len];
+        const n: i32 = @intCast(list.items.len);
+        var next = @as(i32, @intCast(idx)) + delta;
+        next = @mod(next, n);
+        if (next < 0) next += n;
+        self.focused = list.items[@intCast(next)];
+    }
+
+    /// Close the focused pane. Returns true if the tab still has panes.
+    pub fn closeFocused(self: *Layout) bool {
+        if (self.root.* == .leaf) {
+            // Single pane — caller should close the tab.
+            return false;
+        }
+        const removed = self.removeSession(self.root, self.focused) orelse return true;
+        self.root = removed;
+        var list: std.ArrayList(*Session) = .empty;
+        defer list.deinit(self.allocator);
+        self.collect(self.root, &list) catch return true;
+        if (list.items.len == 0) return false;
+        self.focused = list.items[0];
+        return true;
+    }
+
+    fn removeSession(self: *Layout, node: *Node, target: *Session) ?*Node {
+        switch (node.*) {
+            .leaf => |s| {
+                if (s != target) return node;
+                s.destroy();
+                self.allocator.destroy(node);
+                return null;
+            },
+            .split => |sp| {
+                const first = self.removeSession(sp.first, target);
+                const second = self.removeSession(sp.second, target);
+                if (first == null and second == null) {
+                    self.allocator.destroy(node);
+                    return null;
+                }
+                if (first == null) {
+                    self.allocator.destroy(node);
+                    return second;
+                }
+                if (second == null) {
+                    self.allocator.destroy(node);
+                    return first;
+                }
+                node.* = .{ .split = .{
+                    .dir = sp.dir,
+                    .ratio = sp.ratio,
+                    .first = first.?,
+                    .second = second.?,
+                } };
+                return node;
+            },
+        }
+    }
+
+    pub fn setRatioAt(self: *Layout, px: i32, py: i32, bounds: Rect, new_ratio: f32) bool {
+        return self.adjustSplit(self.root, bounds, px, py, new_ratio, false);
+    }
+
+    /// Update the nearest split seam while the pointer is dragging (no 6px lock).
+    pub fn dragRatio(self: *Layout, px: i32, py: i32, bounds: Rect) bool {
+        return self.adjustSplit(self.root, bounds, px, py, 0.5, true);
+    }
+
+    fn adjustSplit(self: *Layout, node: *Node, bounds: Rect, px: i32, py: i32, ratio: f32, dragging: bool) bool {
+        switch (node.*) {
+            .leaf => return false,
+            .split => |*sp| {
+                const clamped = @min(0.85, @max(0.15, ratio));
+                if (sp.dir == .horizontal) {
+                    const left_w: i32 = @intFromFloat(@as(f32, @floatFromInt(bounds.w)) * sp.ratio);
+                    const seam = bounds.x + left_w;
+                    if (dragging or @abs(px - seam) <= 6) {
+                        const rel = @as(f32, @floatFromInt(px - bounds.x)) / @as(f32, @floatFromInt(@max(1, bounds.w)));
+                        sp.ratio = @min(0.85, @max(0.15, rel));
+                        return true;
+                    }
+                    if (px < seam) {
+                        return self.adjustSplit(sp.first, .{ .x = bounds.x, .y = bounds.y, .w = left_w, .h = bounds.h }, px, py, clamped, dragging);
+                    }
+                    return self.adjustSplit(sp.second, .{
+                        .x = bounds.x + left_w,
+                        .y = bounds.y,
+                        .w = bounds.w - left_w,
+                        .h = bounds.h,
+                    }, px, py, clamped, dragging);
+                } else {
+                    const top_h: i32 = @intFromFloat(@as(f32, @floatFromInt(bounds.h)) * sp.ratio);
+                    const seam = bounds.y + top_h;
+                    if (dragging or @abs(py - seam) <= 6) {
+                        const rel = @as(f32, @floatFromInt(py - bounds.y)) / @as(f32, @floatFromInt(@max(1, bounds.h)));
+                        sp.ratio = @min(0.85, @max(0.15, rel));
+                        return true;
+                    }
+                    if (py < seam) {
+                        return self.adjustSplit(sp.first, .{ .x = bounds.x, .y = bounds.y, .w = bounds.w, .h = top_h }, px, py, clamped, dragging);
+                    }
+                    return self.adjustSplit(sp.second, .{
+                        .x = bounds.x,
+                        .y = bounds.y + top_h,
+                        .w = bounds.w,
+                        .h = bounds.h - top_h,
+                    }, px, py, clamped, dragging);
+                }
+            },
+        }
+    }
+
+    pub fn hitDivider(self: *Layout, bounds: Rect, px: i32, py: i32) bool {
+        return self.dividerAt(self.root, bounds, px, py);
+    }
+
+    fn dividerAt(self: *Layout, node: *Node, bounds: Rect, px: i32, py: i32) bool {
+        switch (node.*) {
+            .leaf => return false,
+            .split => |sp| {
+                if (sp.dir == .horizontal) {
+                    const left_w: i32 = @intFromFloat(@as(f32, @floatFromInt(bounds.w)) * sp.ratio);
+                    if (@abs(px - (bounds.x + left_w)) <= 6 and py >= bounds.y and py < bounds.y + bounds.h) return true;
+                    if (self.dividerAt(sp.first, .{ .x = bounds.x, .y = bounds.y, .w = left_w, .h = bounds.h }, px, py)) return true;
+                    return self.dividerAt(sp.second, .{
+                        .x = bounds.x + left_w,
+                        .y = bounds.y,
+                        .w = bounds.w - left_w,
+                        .h = bounds.h,
+                    }, px, py);
+                } else {
+                    const top_h: i32 = @intFromFloat(@as(f32, @floatFromInt(bounds.h)) * sp.ratio);
+                    if (@abs(py - (bounds.y + top_h)) <= 6 and px >= bounds.x and px < bounds.x + bounds.w) return true;
+                    if (self.dividerAt(sp.first, .{ .x = bounds.x, .y = bounds.y, .w = bounds.w, .h = top_h }, px, py)) return true;
+                    return self.dividerAt(sp.second, .{
+                        .x = bounds.x,
+                        .y = bounds.y + top_h,
+                        .w = bounds.w,
+                        .h = bounds.h - top_h,
+                    }, px, py);
+                }
+            },
+        }
     }
 
     fn collect(self: *Layout, node: *Node, list: *std.ArrayList(*Session)) !void {

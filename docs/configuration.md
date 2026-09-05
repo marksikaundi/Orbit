@@ -15,6 +15,7 @@ Example file in the repo: [`assets/config.example.toml`](../assets/config.exampl
 | Plugins | `plugins/<name>/plugin.toml` | same |
 | Plugin on/off | `plugins.enabled` | same |
 | Saved layouts | `workspaces/<name>.toml` | same |
+| Last session / recents | `session.toml` | same |
 | Shell helper | `shell/orbit.sh` (from `zig build setup`) | n/a |
 | Logs | `logs/orbit.log` | same |
 
@@ -58,6 +59,7 @@ prompt = "ghostty"        # default | ghostty | minimal | starship
 # shell = "/bin/zsh"      # omit for $SHELL / platform default
 cursor_style = "block"    # block | underline | bar (beam = bar)
 cursor_blink = true
+restore_last_workspace = true
 
 # Ghostty-compatible (overlay the defaults)
 # keybind = ctrl+k=reload_config
@@ -105,8 +107,9 @@ Setting `look` applies that profile’s padding, spacing, and opacity. Fine-tune
 | `shell` | platform default | Unix: `/bin/zsh`, `/bin/bash`, `/bin/sh`, fish paths. Windows: `powershell.exe`, `pwsh.exe`, `cmd.exe`. Ignored if missing or not allowed |
 | `cursor_style` | `block` | `block`, `underline`, `bar` (`beam` = bar) |
 | `cursor_blink` | `true` | `true` / `false` |
+| `restore_last_workspace` | `true` | Reopen the last tabs/splits on launch (auto-saved as `__last__`). Alias: `restore-last-workspace`. |
 
-`shell` applies to **new** tabs, not the one already open.
+`shell` applies to **new** tabs, not the one already open. Saved pane cwd follows OSC 7 after `zig build setup` sources `orbit.sh`.
 
 ---
 

@@ -33,11 +33,18 @@ const plugin_audit = @import("../security/plugin_audit.zig");
 const clipboard = @import("../clipboard/clipboard.zig");
 const folder_picker = @import("../platform/folder_picker.zig");
 const macos_open = @import("../platform/macos_open.zig");
+const recents_mod = @import("../workspace/recents.zig");
+const ssh_config = @import("../platform/ssh_config.zig");
+const notify = @import("../platform/notify.zig");
+const open_url = @import("../platform/open_url.zig");
+const url_mod = @import("../ui/url.zig");
+const mouse_mod = @import("../terminal/mouse.zig");
+const SelectionKind = @import("../terminal/selection.zig").Kind;
 const Color = @import("../terminal/cell.zig").Color;
 const dev_root = @import("../dev_root.zig");
 const updater = @import("../cli/update.zig");
 
-const UiMode = enum { home, normal, search, viewer, ws_picker, ws_save, palette, ssh_prompt, settings, plugins, plugin_result };
+const UiMode = enum { home, normal, search, viewer, ws_picker, ws_save, palette, ssh_prompt, settings, plugins, plugin_result, confirm };
 
 const SettingsRow = enum(u8) {
     theme,
@@ -117,6 +124,18 @@ pub const App = struct {
     /// In-progress key sequence (`ctrl+a` waiting for `n` in `ctrl+a>n`).
     seq: [keybind_mod.max_sequence]keybind_mod.Trigger = undefined,
     seq_len: u8 = 0,
+    recents: recents_mod.Store = undefined,
+    ssh_hosts: [ssh_config.max_hosts]ssh_config.Host = undefined,
+    ssh_host_count: usize = 0,
+    ssh_pick: usize = 0,
+    zoomed: bool = false,
+    dragging_split: bool = false,
+    dragging_tab: ?usize = null,
+    click_count: u8 = 0,
+    last_click_at: f64 = 0,
+    last_click_col: u16 = 0,
+    last_click_row: u16 = 0,
+    confirm_kind: enum { none, close_tab, quit, close_pane } = .none,
 
     pub const LaunchOpts = struct {
         cwd: ?[]const u8 = null,
@@ -157,6 +176,8 @@ pub const App = struct {
         var plugins = try PluginRegistry.init(allocator, io);
         errdefer plugins.deinit();
 
+        const recents = recents_mod.Store.init(allocator, io);
+
         // Start on home — no shell until the user chooses an action.
         self.* = .{
             .allocator = allocator,
@@ -169,6 +190,7 @@ pub const App = struct {
             .plugins = plugins,
             .plugin_result = plugin_result_mod.ResultView.init(allocator),
             .ui = .home,
+            .recents = recents,
         };
 
         Window.active = self;
@@ -177,6 +199,7 @@ pub const App = struct {
         Window.on_mouse_button = onMouseButton;
         Window.on_cursor_pos = onCursorPos;
         Window.on_scroll = onScroll;
+        Window.on_drop = onDrop;
 
         self.updateWindowTitle();
         self.fireHooks(.on_load);
@@ -185,6 +208,7 @@ pub const App = struct {
         macos_open.install();
         self.applyLaunch(opts);
         self.drainExternalOpens();
+        if (!opts.skip_home) self.tryRestoreLast();
         return self;
     }
 
@@ -204,6 +228,9 @@ pub const App = struct {
         Window.on_mouse_button = null;
         Window.on_cursor_pos = null;
         Window.on_scroll = null;
+        Window.on_drop = null;
+        self.saveLastSession();
+        self.recents.deinit();
         self.plugin_result.deinit();
         self.plugins.deinit();
         self.workspaces.deinit();
@@ -363,6 +390,16 @@ pub const App = struct {
             fn cb(ctx: *@This(), session: *Session, _: Rect) void {
                 if (session.takeStatus()) |msg| {
                     ctx.app.setStatus(msg);
+                    if (!notify.isFocused(ctx.app.window.handle)) {
+                        notify.send(ctx.app.allocator, ctx.app.io, "Orbit", msg);
+                    }
+                }
+                if (session.screen.bell) {
+                    session.screen.bell = false;
+                    ctx.app.setStatus("bell");
+                    if (!notify.isFocused(ctx.app.window.handle)) {
+                        notify.send(ctx.app.allocator, ctx.app.io, "Orbit", "Bell");
+                    }
                 }
             }
         };
@@ -418,6 +455,7 @@ pub const App = struct {
 
     fn draw(self: *App) !void {
         if (self.ui == .home) {
+            self.home.recents_count = self.recents.names.items.len;
             try home_mod.draw(
                 &self.renderer,
                 self.window.fb_width,
@@ -426,6 +464,7 @@ pub const App = struct {
                 self.config.theme_name,
                 self.renderer.font_size,
                 self.plugins.count(),
+                self.recents.names.items,
             );
             if (self.status_len > 0) {
                 try self.drawStatusBar();
@@ -467,7 +506,8 @@ pub const App = struct {
         var x: i32 = 6;
         for (self.tabs.items.items, 0..) |tab, i| {
             const active = i == self.tabs.active;
-            const title = tab.title[0..@min(tab.title.len, 16)];
+            const raw_title = if (tab.layout.focused.title.len > 0) tab.layout.focused.title else tab.title;
+            const title = raw_title[0..@min(raw_title.len, 16)];
             const text_w: i32 = @as(i32, @intCast(title.len)) * cell_w_i;
             const label_w: i32 = text_w + 28;
             if (active) {
@@ -500,6 +540,7 @@ pub const App = struct {
                 .ws_picker => try self.drawWorkspacePicker(),
                 .ws_save => try self.drawSavePrompt(),
                 .ssh_prompt => try self.drawSshPrompt(),
+                .confirm => try self.drawConfirm(),
                 .search => try self.drawSearch(),
                 .viewer => try self.drawViewer(),
                 .home, .normal => self.ui = .home,
@@ -510,6 +551,7 @@ pub const App = struct {
             return;
         };
         const bounds = self.contentRect();
+        try self.renderer.drawRect(bounds.x, bounds.y, bounds.w, bounds.h, tbg, 1.0);
 
         const DrawCtx = struct {
             app: *App,
@@ -538,7 +580,11 @@ pub const App = struct {
             }
         };
         var dctx: DrawCtx = .{ .app = self };
-        tab.layout.forEachLeaf(bounds, *DrawCtx, &dctx, DrawCtx.cb);
+        if (self.zoomed) {
+            DrawCtx.cb(&dctx, tab.layout.focused, bounds);
+        } else {
+            tab.layout.forEachLeaf(bounds, *DrawCtx, &dctx, DrawCtx.cb);
+        }
 
         if (self.ui == .search) {
             try self.drawSearch();
@@ -557,6 +603,9 @@ pub const App = struct {
         }
         if (self.ui == .ssh_prompt) {
             try self.drawSshPrompt();
+        }
+        if (self.ui == .confirm) {
+            try self.drawConfirm();
         }
         if (self.ui == .settings) {
             try self.drawSettings();
@@ -960,6 +1009,16 @@ pub const App = struct {
                 self.search.backspace();
                 self.refreshSearchResults();
             },
+            c.GLFW_KEY_F2 => {
+                self.search.toggleCase();
+                self.refreshSearchResults();
+                self.setStatus(if (self.search.case_sensitive) "search: case" else "search: ignore case");
+            },
+            c.GLFW_KEY_F3 => {
+                self.search.toggleRegex();
+                self.refreshSearchResults();
+                self.setStatus(if (self.search.regex) "search: regex" else "search: text");
+            },
             c.GLFW_KEY_ENTER => self.activateSearchSelection(shift),
             else => {},
         }
@@ -1031,8 +1090,9 @@ pub const App = struct {
         const fb_w = self.window.fb_width;
         const fb_h = self.window.fb_height;
         try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.55);
-        const w: i32 = 440;
-        const h: i32 = 90;
+        const host_rows: i32 = @intCast(@min(self.ssh_host_count, 8));
+        const w: i32 = 480;
+        const h: i32 = 100 + host_rows * 20;
         const x = @divTrunc(fb_w - w, 2);
         const y = @divTrunc(fb_h - h, 2);
         try self.renderer.drawRect(x, y, w, h, chrome.panel, 0.98);
@@ -1040,8 +1100,38 @@ pub const App = struct {
         try self.renderer.drawText(x + 16, y + 14, "SSH", chrome.fg);
         var buf: [160]u8 = undefined;
         const label = std.fmt.bufPrint(&buf, "Host: {s}", .{self.ssh_host[0..self.ssh_host_len]}) catch "Host:";
-        try self.renderer.drawText(x + 16, y + 42, label, chrome.muted);
-        try self.renderer.drawText(x + 16, y + 66, "Enter connect  |  Esc cancel", chrome.dim);
+        try self.renderer.drawText(x + 16, y + 38, label, chrome.muted);
+        var row: usize = 0;
+        while (row < self.ssh_host_count and row < 8) : (row += 1) {
+            const name = self.ssh_hosts[row].slice();
+            const ry = y + 60 + @as(i32, @intCast(row)) * 20;
+            const fg = if (row == self.ssh_pick) chrome.fg else chrome.muted;
+            if (row == self.ssh_pick) {
+                try self.renderer.drawRect(x + 12, ry - 2, w - 24, 18, chrome.sel_bg, 1.0);
+            }
+            try self.renderer.drawText(x + 20, ry, name, fg);
+        }
+        try self.renderer.drawText(x + 16, y + h - 22, "↑↓ pick  Enter connect  Esc cancel", chrome.dim);
+    }
+
+    fn drawConfirm(self: *App) !void {
+        const chrome = self.overlayChrome();
+        const fb_w = self.window.fb_width;
+        const fb_h = self.window.fb_height;
+        try self.renderer.drawRect(0, 0, fb_w, fb_h, chrome.bg, 0.45);
+        const w: i32 = 420;
+        const h: i32 = 100;
+        const x = @divTrunc(fb_w - w, 2);
+        const y = @divTrunc(fb_h - h, 2);
+        try self.renderer.drawRect(x, y, w, h, chrome.panel, 0.98);
+        const msg: []const u8 = switch (self.confirm_kind) {
+            .quit => "Quit Orbit? Running sessions will close.",
+            .close_tab => "Close this tab?",
+            .close_pane => "Close this pane?",
+            .none => "Continue?",
+        };
+        try self.renderer.drawText(x + 16, y + 24, msg, chrome.fg);
+        try self.renderer.drawText(x + 16, y + 58, "Y / Enter  confirm    N / Esc  cancel", chrome.muted);
     }
 
     fn drawSettings(self: *App) !void {
@@ -1637,6 +1727,11 @@ pub const App = struct {
                 return;
             },
             .ws_picker, .settings, .plugins, .plugin_result => return,
+            .confirm => {
+                if (codepoint == 'y' or codepoint == 'Y') self.confirmYes();
+                if (codepoint == 'n' or codepoint == 'N') self.confirmNo();
+                return;
+            },
             .normal => {},
         }
         const session = self.focused() orelse return;
@@ -1667,6 +1762,11 @@ pub const App = struct {
         }
         if (self.ui == .palette) {
             self.handlePaletteKey(key);
+            return;
+        }
+        if (self.ui == .confirm) {
+            if (key == c.GLFW_KEY_ENTER or key == c.GLFW_KEY_KP_ENTER) self.confirmYes()
+            else if (key == c.GLFW_KEY_ESCAPE) self.confirmNo();
             return;
         }
         if (self.ui == .ssh_prompt) {
@@ -1868,7 +1968,47 @@ pub const App = struct {
     }
 
     fn requestQuit(self: *App) void {
+        if (self.tabs.items.items.len > 0) {
+            self.confirm_kind = .quit;
+            self.ui = .confirm;
+            return;
+        }
         self.window.requestClose();
+    }
+
+    fn requestClosePane(self: *App) void {
+        const tab = self.tabs.current() orelse return;
+        if (tab.layout.root.* == .leaf) {
+            self.closeTabOrQuit();
+            return;
+        }
+        self.confirm_kind = .close_pane;
+        self.ui = .confirm;
+    }
+
+    fn confirmYes(self: *App) void {
+        const kind = self.confirm_kind;
+        self.confirm_kind = .none;
+        self.ui = .normal;
+        switch (kind) {
+            .none => {},
+            .quit => {
+                self.saveLastSession();
+                self.window.requestClose();
+            },
+            .close_tab => self.closeTabNow(),
+            .close_pane => {
+                if (self.tabs.current()) |tab| {
+                    if (!tab.layout.closeFocused()) self.closeTabNow();
+                    self.resizeAllSessions();
+                }
+            },
+        }
+    }
+
+    fn confirmNo(self: *App) void {
+        self.confirm_kind = .none;
+        self.leaveOverlay();
     }
 
     /// Cmd+W / Ctrl+Shift+W: close active tab; from home or with no tabs → quit.
@@ -1877,12 +2017,56 @@ pub const App = struct {
             self.requestQuit();
             return;
         }
+        if (self.tabs.items.items.len > 1 or self.hasSplit()) {
+            self.confirm_kind = .close_tab;
+            self.ui = .confirm;
+            return;
+        }
+        self.closeTabNow();
+    }
+
+    fn hasSplit(self: *App) bool {
+        const tab = self.tabs.current() orelse return false;
+        return tab.layout.root.* != .leaf;
+    }
+
+    fn closeTabNow(self: *App) void {
         if (self.tabs.items.items.len <= 1) {
             self.tabs.clear();
             self.goHome();
             return;
         }
         self.tabs.closeActive();
+    }
+
+    fn tryRestoreLast(self: *App) void {
+        if (!self.config.restore_last_workspace) return;
+        const name = self.recents.last orelse return;
+        self.loadWorkspace(name) catch return;
+        self.ui = .normal;
+        self.setStatus("restored last session");
+    }
+
+    fn openRecentAt(self: *App, index: usize) void {
+        if (index >= self.recents.names.items.len) return;
+        const name = self.recents.names.items[index];
+        self.loadWorkspace(name) catch {
+            self.setStatus("recent workspace missing");
+            return;
+        };
+    }
+
+    fn saveLastSession(self: *App) void {
+        if (self.tabs.items.items.len == 0) return;
+        self.workspaces.saveTabs(recents_mod.last_name, &self.tabs) catch return;
+        self.recents.setLast(recents_mod.last_name);
+    }
+
+    fn openSshPrompt(self: *App) void {
+        self.ssh_host_len = 0;
+        self.ssh_pick = 0;
+        self.ssh_host_count = ssh_config.load(self.allocator, self.io, &self.ssh_hosts);
+        self.ui = .ssh_prompt;
     }
 
     fn handleHomeChar(self: *App, codepoint: u32) void {
@@ -1934,7 +2118,16 @@ pub const App = struct {
         switch (key) {
             c.GLFW_KEY_UP => self.home.moveUp(),
             c.GLFW_KEY_DOWN => self.home.moveDown(),
-            c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER => self.runHomeAction(self.home.selectedAction()),
+            c.GLFW_KEY_ENTER, c.GLFW_KEY_KP_ENTER => {
+                if (self.home.recentIndex()) |ri| {
+                    self.openRecentAt(ri);
+                    return;
+                }
+                self.runHomeAction(self.home.selectedAction());
+            },
+            c.GLFW_KEY_R => {
+                if (self.recents.names.items.len > 0) self.openRecentAt(0);
+            },
             c.GLFW_KEY_1 => self.runHomeAction(.new_terminal),
             c.GLFW_KEY_2 => self.runHomeAction(.open_workspace),
             c.GLFW_KEY_3 => self.runHomeAction(.command_palette),
@@ -2027,12 +2220,25 @@ pub const App = struct {
     fn handleSshKey(self: *App, key: c_int) void {
         switch (key) {
             c.GLFW_KEY_ESCAPE => self.leaveOverlay(),
+            c.GLFW_KEY_UP => {
+                if (self.ssh_pick > 0) self.ssh_pick -= 1;
+            },
+            c.GLFW_KEY_DOWN => {
+                if (self.ssh_host_count > 0 and self.ssh_pick + 1 < self.ssh_host_count) {
+                    self.ssh_pick += 1;
+                }
+            },
             c.GLFW_KEY_BACKSPACE => {
                 if (self.ssh_host_len > 0) self.ssh_host_len -= 1;
             },
             c.GLFW_KEY_ENTER => {
-                if (self.ssh_host_len == 0) return;
-                self.connectSsh(self.ssh_host[0..self.ssh_host_len]) catch {
+                const host = if (self.ssh_host_len > 0)
+                    self.ssh_host[0..self.ssh_host_len]
+                else if (self.ssh_host_count > 0)
+                    self.ssh_hosts[self.ssh_pick].slice()
+                else
+                    return;
+                self.connectSsh(host) catch {
                     self.setStatus("ssh failed");
                 };
                 self.ui = .normal;
@@ -2068,6 +2274,14 @@ pub const App = struct {
             .prev_tab => self.tabs.prev(),
             .focus_next_pane => {
                 if (self.tabs.current()) |tab| tab.layout.focusNext();
+            },
+            .focus_prev_pane => {
+                if (self.tabs.current()) |tab| tab.layout.focusPrev();
+            },
+            .close_pane => self.requestClosePane(),
+            .zoom_pane => {
+                self.zoomed = !self.zoomed;
+                self.setStatus(if (self.zoomed) "pane zoomed" else "pane unzoomed");
             },
             .open_workspace => self.openFolderWorkspace(),
             .load_saved_workspace => self.openPicker(),
@@ -2107,10 +2321,7 @@ pub const App = struct {
                     self.refreshSearchResults();
                 }
             },
-            .ssh => {
-                self.ssh_host_len = 0;
-                self.ui = .ssh_prompt;
-            },
+            .ssh => self.openSshPrompt(),
             .theme_orbit_dark => self.applyTheme("orbit-dark"),
             .theme_orbit_light => self.applyTheme("orbit-light"),
             .theme_nord => self.applyTheme("nord"),
@@ -3342,6 +3553,7 @@ pub const App = struct {
         const name = folder_picker.folderBasename(path);
         try self.newTabInDir(path, name);
         self.workspaces.setCurrent(name) catch {};
+        self.recents.remember(name);
         self.updateWindowTitle();
         self.fireHooks(.on_workspace_open);
         self.ui = .normal;
@@ -3416,6 +3628,7 @@ pub const App = struct {
                     return;
                 };
                 self.updateWindowTitle();
+                self.recents.remember(name);
                 self.fireHooks(.on_workspace_save);
                 self.setStatus("workspace saved");
                 self.ui = .normal;
@@ -3442,6 +3655,7 @@ pub const App = struct {
         );
         self.resizeAllSessions();
         self.updateWindowTitle();
+        if (!std.mem.eql(u8, name, recents_mod.last_name)) self.recents.remember(name);
         self.fireHooks(.on_workspace_open);
         self.setStatus("workspace loaded");
     }
@@ -4032,15 +4246,49 @@ pub const App = struct {
     }
 
     fn onMouseButton(ptr: *anyopaque, button: c_int, action: c_int, mods: c_int) void {
-        _ = mods;
         const self: *App = @ptrCast(@alignCast(ptr));
         if (self.ui != .normal) return;
         const fb = self.window.windowToFb(self.mouse_x, self.mouse_y);
+        const shift = (mods & c.GLFW_MOD_SHIFT) != 0;
+        const alt = (mods & c.GLFW_MOD_ALT) != 0;
+        const ctrl = (mods & c.GLFW_MOD_CONTROL) != 0;
+        const super = (mods & c.GLFW_MOD_SUPER) != 0;
+
+        if (button == c.GLFW_MOUSE_BUTTON_LEFT and action == c.GLFW_PRESS) {
+            if (self.hitTabBar(fb.x, fb.y)) |idx| {
+                if (idx < self.tabs.items.items.len) {
+                    self.tabs.setActive(idx);
+                    self.dragging_tab = idx;
+                }
+                return;
+            }
+            const bounds = self.contentRect();
+            if (self.tabs.current()) |tab| {
+                if (tab.layout.hitDivider(bounds, fb.x, fb.y)) {
+                    self.dragging_split = true;
+                    return;
+                }
+            }
+        }
+        if (button == c.GLFW_MOUSE_BUTTON_LEFT and action == c.GLFW_RELEASE) {
+            self.dragging_split = false;
+            self.dragging_tab = null;
+        }
 
         // Context menu interaction (open on right-click; activate / dismiss on left-click).
         if (button == c.GLFW_MOUSE_BUTTON_RIGHT and action == c.GLFW_PRESS) {
-            if (self.focusSessionAt(fb.x, fb.y) != null) {
+            if (self.focusSessionAt(fb.x, fb.y)) |hit| {
+                if (self.sendMouseIfTracking(hit.session, hit.rect, fb.x, fb.y, 2, true, false, shift, alt, ctrl)) {
+                    return;
+                }
                 self.openContextMenu(fb.x, fb.y);
+            }
+            return;
+        }
+        if (button == c.GLFW_MOUSE_BUTTON_RIGHT and action == c.GLFW_RELEASE) {
+            if (self.focused()) |s| {
+                const hit = self.focusSessionAt(fb.x, fb.y) orelse return;
+                _ = self.sendMouseIfTracking(s, hit.rect, fb.x, fb.y, 2, false, false, shift, alt, ctrl);
             }
             return;
         }
@@ -4055,22 +4303,121 @@ pub const App = struct {
                         return;
                     }
                     self.closeContextMenu();
-                    // Fall through so a click outside still starts selection.
                 }
                 if (self.focusSessionAt(fb.x, fb.y)) |hit| {
                     const cw: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
                     const ch: i32 = @intFromFloat(@max(1.0, self.renderer.cell_h));
                     const col: u16 = @intCast(@max(0, @divTrunc(fb.x - hit.rect.x, cw)));
                     const row: u16 = @intCast(@max(0, @divTrunc(fb.y - hit.rect.y, ch)));
-                    hit.session.selection.begin(@min(col, hit.session.screen.cols -| 1), @min(row, hit.session.screen.rows -| 1));
+                    const ccol = @min(col, hit.session.screen.cols -| 1);
+                    const crow = @min(row, hit.session.screen.rows -| 1);
+
+                    if (!shift and self.sendMouseIfTracking(hit.session, hit.rect, fb.x, fb.y, 0, true, false, shift, alt, ctrl)) {
+                        return;
+                    }
+
+                    if (super or ctrl) {
+                        if (self.openLinkAt(hit.session, ccol, crow)) return;
+                    }
+
+                    const now = c.glfwGetTime();
+                    if (now - self.last_click_at < 0.4 and self.last_click_col == ccol and self.last_click_row == crow) {
+                        self.click_count = if (self.click_count < 3) self.click_count + 1 else 1;
+                    } else {
+                        self.click_count = 1;
+                    }
+                    self.last_click_at = now;
+                    self.last_click_col = ccol;
+                    self.last_click_row = crow;
+
+                    if (self.click_count >= 3) {
+                        hit.session.selection.selectLine(&hit.session.screen, crow);
+                        self.copySelection();
+                    } else if (self.click_count == 2) {
+                        hit.session.selection.selectWord(&hit.session.screen, ccol, crow);
+                        self.copySelection();
+                    } else {
+                        const kind: SelectionKind = if (alt) .rect else .stream;
+                        hit.session.selection.beginKind(ccol, crow, kind);
+                    }
                 }
             } else if (action == c.GLFW_RELEASE) {
                 if (self.focused()) |s| {
+                    if (self.focusSessionAt(fb.x, fb.y)) |hit| {
+                        _ = self.sendMouseIfTracking(s, hit.rect, fb.x, fb.y, 0, false, false, shift, alt, ctrl);
+                    }
                     s.selection.finish();
                     if (s.selection.active) self.copySelection();
                 }
             }
         }
+    }
+
+    fn hitTabBar(self: *App, fb_x: i32, fb_y: i32) ?usize {
+        if (fb_y < 0 or fb_y >= Tabs.bar_height) return null;
+        const cell_w_i: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
+        var x: i32 = 6;
+        for (self.tabs.items.items, 0..) |tab, i| {
+            const raw = if (tab.layout.focused.title.len > 0) tab.layout.focused.title else tab.title;
+            const title_len: i32 = @intCast(@min(raw.len, 16));
+            const label_w = title_len * cell_w_i + 28;
+            if (fb_x >= x and fb_x < x + label_w) return i;
+            x += label_w + 2;
+        }
+        return null;
+    }
+
+    fn sendMouseIfTracking(
+        self: *App,
+        session: *Session,
+        rect: Rect,
+        fb_x: i32,
+        fb_y: i32,
+        button: u8,
+        press: bool,
+        motion: bool,
+        shift: bool,
+        alt: bool,
+        ctrl: bool,
+    ) bool {
+        const tracking = session.screen.mouse_tracking;
+        if (tracking == .off) return false;
+        const cw: i32 = @intFromFloat(@max(1.0, self.renderer.cell_w));
+        const ch: i32 = @intFromFloat(@max(1.0, self.renderer.cell_h));
+        const col: u16 = @intCast(@max(0, @divTrunc(fb_x - rect.x, cw)));
+        const row: u16 = @intCast(@max(0, @divTrunc(fb_y - rect.y, ch)));
+        var buf: [32]u8 = undefined;
+        const n = mouse_mod.encode(tracking, session.screen.mouse_sgr, .{
+            .button = button,
+            .col = @min(col, session.screen.cols -| 1),
+            .row = @min(row, session.screen.rows -| 1),
+            .press = press,
+            .motion = motion,
+            .shift = shift,
+            .alt = alt,
+            .ctrl = ctrl,
+        }, &buf);
+        if (n > 0) session.write(buf[0..n]);
+        return n > 0;
+    }
+
+    fn openLinkAt(self: *App, session: *Session, col: u16, row: u16) bool {
+        const cell = session.screen.visibleCell(col, row);
+        if (session.screen.linkUrl(cell.link_id)) |url| {
+            open_url.open(self.allocator, self.io, url);
+            self.setStatus("opened link");
+            return true;
+        }
+        if (url_mod.at(&session.screen, col, row)) |span| {
+            var buf: [512]u8 = undefined;
+            const url = url_mod.sliceOf(&session.screen, row, span, &buf);
+            if (url.len > 0) {
+                open_url.open(self.allocator, self.io, url);
+                self.setStatus("opened link");
+                return true;
+            }
+        }
+        return false;
     }
 
     fn onCursorPos(ptr: *anyopaque, x: f64, y: f64) void {
@@ -4080,6 +4427,23 @@ pub const App = struct {
         if (self.ui != .normal) return;
 
         const fb = self.window.windowToFb(x, y);
+        if (self.dragging_tab) |from| {
+            if (self.hitTabBar(fb.x, fb.y)) |to| {
+                if (to != from and to < self.tabs.items.items.len) {
+                    const delta: i32 = @as(i32, @intCast(to)) - @as(i32, @intCast(from));
+                    self.tabs.moveActive(delta);
+                    self.dragging_tab = to;
+                }
+            }
+            return;
+        }
+        if (self.dragging_split) {
+            if (self.tabs.current()) |tab| {
+                _ = tab.layout.dragRatio(fb.x, fb.y, self.contentRect());
+                self.resizeAllSessions();
+            }
+            return;
+        }
         if (self.context_menu) |*menu| {
             if (self.contextMenuHit(menu.*, fb.x, fb.y)) |idx| {
                 menu.hover = idx;
@@ -4088,6 +4452,13 @@ pub const App = struct {
         }
 
         const session = self.focused() orelse return;
+        if (session.screen.mouse_tracking == .any or
+            (session.screen.mouse_tracking == .button and session.selection.selecting == false))
+        {
+            if (self.focusSessionAt(fb.x, fb.y)) |hit| {
+                _ = self.sendMouseIfTracking(session, hit.rect, fb.x, fb.y, 0, true, true, false, false, false);
+            }
+        }
         if (!session.selection.selecting) return;
 
         const tab = self.tabs.current() orelse return;
@@ -4134,8 +4505,42 @@ pub const App = struct {
         }
         if (self.ui != .normal) return;
         const session = self.focused() orelse return;
+        if (session.screen.mouse_tracking != .off) {
+            if (mouse_mod.wheelButton(yoff)) |btn| {
+                const fb = self.window.windowToFb(self.mouse_x, self.mouse_y);
+                if (self.focusSessionAt(fb.x, fb.y)) |hit| {
+                    _ = self.sendMouseIfTracking(session, hit.rect, fb.x, fb.y, btn, true, false, false, false, false);
+                    return;
+                }
+            }
+        }
         const lines: i32 = @intFromFloat(yoff * 3.0);
         session.screen.scrollView(lines);
+    }
+
+    fn onDrop(ptr: *anyopaque, paths: []const []const u8) void {
+        const self: *App = @ptrCast(@alignCast(ptr));
+        if (self.ui != .normal and self.ui != .home) return;
+        if (self.ui == .home) {
+            if (paths.len > 0) {
+                self.openFolderAsWorkspace(paths[0]) catch {
+                    self.setStatus("drop failed");
+                };
+            }
+            return;
+        }
+        const session = self.focused() orelse return;
+        for (paths, 0..) |p, i| {
+            if (i > 0) session.write(" ");
+            if (std.mem.indexOfAny(u8, p, " \t") != null) {
+                session.write("'");
+                session.write(p);
+                session.write("'");
+            } else {
+                session.write(p);
+            }
+        }
+        self.setStatus("path dropped");
     }
 };
 

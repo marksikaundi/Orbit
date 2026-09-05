@@ -92,6 +92,8 @@ pub const Config = struct {
     shell: ?[]const u8 = null,
     cursor_style: CursorStyle = .block,
     cursor_blink: bool = true,
+    /// Reload the last saved layout when Orbit starts with no folder argument.
+    restore_last_workspace: bool = true,
     /// Owned theme name buffer when loaded from file.
     theme_name_owned: ?[]u8 = null,
     fg_preset_owned: ?[]u8 = null,
@@ -327,6 +329,7 @@ pub const Config = struct {
         try appendFmt(&body, allocator, "prompt = \"{s}\"\n", .{self.prompt.name()});
         try appendFmt(&body, allocator, "cursor_style = \"{s}\"\n", .{self.cursor_style.name()});
         try appendFmt(&body, allocator, "cursor_blink = {s}\n", .{if (self.cursor_blink) "true" else "false"});
+        try appendFmt(&body, allocator, "restore_last_workspace = {s}\n", .{if (self.restore_last_workspace) "true" else "false"});
         if (self.shellPath()) |sh| {
             try appendFmt(&body, allocator, "shell = \"{s}\"\n", .{sh});
         } else {
@@ -477,6 +480,9 @@ pub const Config = struct {
                     }
                     if (std.mem.eql(u8, key, "cursor_blink")) {
                         cfg.cursor_blink = parseBool(val);
+                    }
+                    if (std.mem.eql(u8, key, "restore_last_workspace") or std.mem.eql(u8, key, "restore-last-workspace")) {
+                        cfg.restore_last_workspace = parseBool(val);
                     }
                 },
                 .keybind, .none => {},

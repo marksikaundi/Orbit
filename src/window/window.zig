@@ -17,6 +17,7 @@ pub const Window = struct {
     pub var on_mouse_button: ?*const fn (*anyopaque, c_int, c_int, c_int) void = null;
     pub var on_cursor_pos: ?*const fn (*anyopaque, f64, f64) void = null;
     pub var on_scroll: ?*const fn (*anyopaque, f64, f64) void = null;
+    pub var on_drop: ?*const fn (*anyopaque, []const []const u8) void = null;
 
     pub fn init(title: [:0]const u8, width: i32, height: i32, opacity: f32) !Window {
         if (c.glfwInit() == c.GLFW_FALSE) return error.GlfwInitFailed;
@@ -65,6 +66,7 @@ pub const Window = struct {
         _ = c.glfwSetMouseButtonCallback(handle, mouseButtonCallback);
         _ = c.glfwSetCursorPosCallback(handle, cursorPosCallback);
         _ = c.glfwSetScrollCallback(handle, scrollCallback);
+        _ = c.glfwSetDropCallback(handle, dropCallback);
 
         return self;
     }
@@ -173,6 +175,20 @@ pub const Window = struct {
         _ = win;
         if (active) |ptr| {
             if (on_scroll) |cb| cb(ptr, xoff, yoff);
+        }
+    }
+
+    fn dropCallback(win: ?*c.GLFWwindow, count: c_int, paths_c: [*c]const [*c]const u8) callconv(.c) void {
+        _ = win;
+        if (count <= 0 or paths_c == null) return;
+        var tmp: [16][]const u8 = undefined;
+        const n: usize = @min(@as(usize, @intCast(count)), tmp.len);
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            tmp[i] = std.mem.span(paths_c[i]);
+        }
+        if (active) |ptr| {
+            if (on_drop) |cb| cb(ptr, tmp[0..n]);
         }
     }
 };

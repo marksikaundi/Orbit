@@ -56,6 +56,21 @@ pub const Tabs = struct {
         self.active = if (self.active == 0) self.items.items.len - 1 else self.active - 1;
     }
 
+    pub fn moveActive(self: *Tabs, delta: i32) void {
+        if (self.items.items.len < 2) return;
+        const n: i32 = @intCast(self.items.items.len);
+        var dest = @as(i32, @intCast(self.active)) + delta;
+        dest = @mod(dest, n);
+        if (dest < 0) dest += n;
+        const to: usize = @intCast(dest);
+        const item = self.items.orderedRemove(self.active);
+        self.items.insert(self.allocator, to, item) catch {
+            self.items.append(self.allocator, item) catch {};
+            return;
+        };
+        self.active = to;
+    }
+
     pub fn closeActive(self: *Tabs) void {
         if (self.items.items.len <= 1) return; // keep at least one
         var tab = self.items.orderedRemove(self.active);

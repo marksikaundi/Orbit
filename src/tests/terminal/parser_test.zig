@@ -126,6 +126,45 @@ test "primary DA replies" {
     try std.testing.expectEqual(@as(u8, 0x1B), parser.reply_buf[0]);
 }
 
+test "OSC 0 sets the title" {
+    var screen = try Screen.init(std.testing.allocator, 8, 2);
+    defer screen.deinit();
+    var parser = Parser.init();
+    parser.feed(&screen, "\x1b]0;api-server\x07");
+    try std.testing.expect(screen.title_dirty);
+    try std.testing.expectEqualStrings("api-server", screen.title[0..screen.title_len]);
+}
+
+test "OSC 7 sets live cwd" {
+    var screen = try Screen.init(std.testing.allocator, 8, 2);
+    defer screen.deinit();
+    var parser = Parser.init();
+    parser.feed(&screen, "\x1b]7;file://localhost/tmp/proj\x07");
+    try std.testing.expect(screen.cwd_dirty);
+    try std.testing.expectEqualStrings("/tmp/proj", screen.osc_cwd[0..screen.osc_cwd_len]);
+}
+
+test "OSC 8 hyperlink is stored on the next cell" {
+    var screen = try Screen.init(std.testing.allocator, 20, 2);
+    defer screen.deinit();
+    var parser = Parser.init();
+    parser.feed(&screen, "\x1b]8;;https://example.com\x07hi\x1b]8;;\x07");
+    try std.testing.expect(screen.cellAtConst(0, 0).link_id != 0);
+    try std.testing.expectEqualStrings("https://example.com", screen.linkUrl(screen.cellAtConst(0, 0).link_id).?);
+    try std.testing.expectEqual(@as(u16, 0), screen.active_link);
+}
+
+test "DECSET 1000 and 1006 enable mouse tracking" {
+    var screen = try Screen.init(std.testing.allocator, 8, 2);
+    defer screen.deinit();
+    var parser = Parser.init();
+    parser.feed(&screen, "\x1b[?1000h\x1b[?1006h");
+    try std.testing.expect(screen.mouse_tracking == .x10);
+    try std.testing.expect(screen.mouse_sgr);
+    parser.feed(&screen, "\x1b[?1000l");
+    try std.testing.expect(screen.mouse_tracking == .off);
+}
+
 test "CSI scroll repeat is clamped to the region height" {
     var screen = try Screen.init(std.testing.allocator, 8, 4);
     defer screen.deinit();

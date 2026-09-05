@@ -10,7 +10,7 @@ pub const Parser = struct {
     params: [16]u16 = .{0} ** 16,
     param_count: u8 = 0,
     param_idx: u8 = 0,
-    osc_buf: [256]u8 = undefined,
+    osc_buf: [2048]u8 = undefined,
     osc_len: u16 = 0,
     /// CSI private prefix: `?` (DEC), `>` (secondary DA), `=` (ANSI).
     private_marker: u8 = 0,
@@ -304,6 +304,10 @@ pub const Parser = struct {
                 6 => screen.origin_mode = enable,
                 7 => screen.auto_wrap = enable,
                 25 => screen.cursor_visible = enable,
+                1000 => screen.mouse_tracking = if (enable) .x10 else .off,
+                1002 => screen.mouse_tracking = if (enable) .button else .off,
+                1003 => screen.mouse_tracking = if (enable) .any else .off,
+                1006 => screen.mouse_sgr = enable,
                 47, 1047 => {
                     if (enable) screen.enterAltScreen(false, false) else screen.leaveAltScreen(false);
                 },
@@ -447,12 +451,14 @@ pub const Parser = struct {
     }
 
     fn finishOsc(self: *Parser, screen: *Screen) void {
-        _ = screen;
         const data = self.osc_buf[0..self.osc_len];
-        // OSC 0/2 — window title (ignored for now).
-        // OSC 9 ; message — iTerm2-style notification → status toast.
-        // OSC 99 ; message — Orbit status toast.
-        if (std.mem.startsWith(u8, data, "9;") or std.mem.startsWith(u8, data, "99;")) {
+        if (data.len >= 2 and (data[0] == '0' or data[0] == '1' or data[0] == '2') and data[1] == ';') {
+            screen.setTitle(data[2..]);
+        } else if (std.mem.startsWith(u8, data, "7;")) {
+            applyOsc7(screen, data[2..]);
+        } else if (std.mem.startsWith(u8, data, "8;")) {
+            applyOsc8(screen, data[2..]);
+        } else if (std.mem.startsWith(u8, data, "9;") or std.mem.startsWith(u8, data, "99;")) {
             const msg = if (std.mem.startsWith(u8, data, "99;"))
                 data["99;".len..]
             else
@@ -466,3 +472,30 @@ pub const Parser = struct {
         self.osc_len = 0;
     }
 };
+
+fn applyOsc7(screen: *Screen, payload: []const u8) void {
+    // file://hostname/abs/path  or  file:///abs/path
+    var path = payload;
+    if (std.mem.startsWith(u8, path, "file://")) {
+        path = path["file://".len..];
+        if (std.mem.indexOfScalar(u8, path, '/')) |slash| {
+            path = path[slash..];
+        }
+    }
+    if (path.len == 0) return;
+    screen.setOscCwd(path);
+}
+
+fn applyOsc8(screen: *Screen, payload: []const u8) void {
+    // 8 ; params ; URI
+    const semi = std.mem.indexOfScalar(u8, payload, ';') orelse {
+        screen.active_link = 0;
+        return;
+    };
+    const uri = payload[semi + 1 ..];
+    if (uri.len == 0) {
+        screen.active_link = 0;
+        return;
+    }
+    screen.active_link = screen.internLink(uri);
+}

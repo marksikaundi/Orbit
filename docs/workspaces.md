@@ -1,8 +1,8 @@
 # Workspaces
 
-Projects are first-class. A workspace is a **folder you open** plus, optionally, a **saved layout** (tabs, splits, cwd, shell).
+Projects are first-class. A workspace is a **folder you open** plus, optionally, a **saved layout** (tabs, splits, live cwd, shell).
 
-Saved files live in `~/.config/orbit/workspaces/<name>.toml` (Unix) or `%APPDATA%\orbit\workspaces\<name>.toml` (Windows).
+Saved files live in `~/.config/orbit/workspaces/<name>.toml` (Unix) or `%APPDATA%\orbit\workspaces\<name>.toml` (Windows). The last session is written to `__last__.toml` on quit (hidden from the picker). Recents live in `session.toml`.
 
 ---
 
@@ -31,7 +31,9 @@ The file records:
 
 - Active tab
 - Each tab’s title, split tree, focus, pane ratios
-- Each pane’s title, cwd, and shell
+- Each pane’s title, **live cwd** (OSC 7 after `cd`), and shell
+
+After `zig build setup`, `orbit.sh` emits OSC 7 on every prompt so Save Workspace records where you actually are — not only the folder you opened.
 
 Example (also in [`assets/workspaces/Backend.example.toml`](../assets/workspaces/Backend.example.toml)):
 
@@ -56,7 +58,9 @@ You can copy that example into the workspaces directory, or only use **Save Work
 
 ## Restore
 
-Palette → **Load Saved Workspace** → **↑↓** **Enter**.
+On launch, Orbit reopens the last session when `[terminal] restore_last_workspace = true` (the default). Turn it off in `config.toml` if you always want the home screen.
+
+Home lists **Recent** saved names — **↑↓** then **Enter**, or **R** for the most recent. Palette → **Load Saved Workspace** → **↑↓** **Enter**.
 
 In that picker:
 

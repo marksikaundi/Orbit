@@ -11,7 +11,7 @@ A new tab starts a login-style session:
 - **Unix:** POSIX PTY, `$SHELL` unless you set [`shell`](appearance.md#shell)
 - **Windows:** ConPTY (`powershell.exe` / `pwsh` / `cmd`)
 
-`TERM=xterm-256color`. ANSI/CSI/OSC/SGR/DEC/UTF-8 are parsed (colors, cursor, title, hyperlinks).
+`TERM=xterm-256color`. ANSI/CSI/OSC/SGR/DEC/UTF-8 are parsed (colors, cursor, titles, OSC 7 cwd, OSC 8 hyperlinks, xterm mouse 1000/1002/1006). Glyphs load on demand with fallback fonts; CJK and emoji occupy two columns.
 
 Ctrl+A–Z (except app chords) go to the shell: `Ctrl+C` interrupt, `Ctrl+D` EOF, readline, and so on. On Windows/Linux, `Ctrl+C` **copies** when there is a selection (`performable:`), otherwise it interrupts.
 
@@ -33,7 +33,13 @@ Default **2000** lines (`[terminal] scrollback` in [config](configuration.md)).
 
 | How | What |
 | --- | --- |
-| Drag, then release | Select text (copies on release) |
+| Drag, then release | Select text (copies on release, UTF-8) |
+| Double-click | Select word |
+| Triple-click | Select line |
+| Alt-drag | Rectangular select |
+| Cmd/Ctrl-click | Open `http(s)://` or an OSC 8 hyperlink |
+| Drop a file | Paste the path into the shell |
+| TUI mouse | vim / less / tmux / htop / lazygit (Shift-drag still selects) |
 | `Cmd+C` / `Cmd+V` | Copy / paste (macOS) |
 | `Ctrl+C` / `Ctrl+V` | Copy (when selected) / paste (Windows/Linux) |
 | `Ctrl/Cmd+Shift+C` / `V` | Copy / paste on every platform |
@@ -44,7 +50,7 @@ Default **2000** lines (`[terminal] scrollback` in [config](configuration.md)).
 
 ## Toasts
 
-Short status messages appear bottom-left and hide after a few seconds: save, theme change, plugin load, errors. Terminal output can also raise a toast for file create/edit/save/delete lines, `error:` / `failed`, and OSC 9 / OSC 99.
+Short status messages appear bottom-left and hide after a few seconds: save, theme change, plugin load, errors. Terminal output can also raise a toast for file create/edit/save/delete lines, `error:` / `failed`, and OSC 9 / OSC 99. When Orbit is unfocused, OSC 9/99 and BEL also send a desktop notification.
 
 ---
 

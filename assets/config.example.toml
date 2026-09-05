@@ -36,6 +36,8 @@ prompt = "ghostty"
 # Cursor: block | underline | bar
 cursor_style = "block"
 cursor_blink = true
+# Reopen the last tabs/splits when Orbit starts with no folder argument.
+restore_last_workspace = true
 
 # Custom keybindings — Ghostty-compatible: trigger=action
 # https://ghostty.org/docs/config/keybind

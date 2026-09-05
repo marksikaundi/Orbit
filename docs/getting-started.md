@@ -61,7 +61,7 @@ More flags: [CLI & IDEs](cli-and-ides.md).
 
 1. **Enter** — open a terminal, or **O** to start in a project folder.
 2. Arrange [tabs and splits](tabs-and-splits.md) as you like.
-3. `Ctrl+Shift+S` — [save the layout](workspaces.md) so you can restore it later.
+3. `Ctrl+Shift+S` — [save the layout](workspaces.md). The next launch restores the last session automatically; home also lists recent names.
 4. `Ctrl+Shift+P` — jump to any action (theme, new tab, plugin commands, …).
 5. `Ctrl+Shift+F` — [search](search-and-editor.md) the screen, file names, or code.
 6. `H` on home — the same shortcuts as this docs set, inside the app.
@@ -75,7 +75,7 @@ More flags: [CLI & IDEs](cli-and-ides.md).
 | `Cmd+Q` / `Ctrl+Q` | Quit Orbit (works anywhere) |
 | `Cmd+W` / `Ctrl+Shift+W` | Close the current tab; on home, quit |
 | `exit` / `Ctrl+D` | End the shell; closes that tab |
-| Window close button | Close the Orbit window |
+| Window close button | Close the Orbit window (asks first if a session is running) |
 
 Plain `Ctrl+W` is left for the shell (kill-word). Use `Ctrl+Shift+W` or `Cmd+W` to close a tab.
 
