@@ -77,6 +77,14 @@ jobs:
             echo
             printf '**Branch:** `2026-live` · **Commit:** `%s`\n' "$SHORT_SHA"
             echo
+            echo "### Prebuilt install"
+            echo
+            echo "Download the archive for your OS from the Assets list below, then:"
+            echo
+            echo "- **macOS:** unzip and drag \`Orbit.app\` to Applications. Optional signing: set \`ORBIT_SIGN_IDENTITY\` when packaging."
+            echo "- **Linux:** \`tar -xzf orbit-*-linux-*.tar.gz && sudo install -m 755 orbit/orbit /usr/local/bin/orbit\`"
+            echo "- **Windows:** unzip and run \`orbit.exe\` (or copy to \`%LOCALAPPDATA%\\Orbit\\bin\`)."
+            echo
             echo "### Already installed?"
             echo
             echo "From any terminal (after \`zig build setup\`):"
@@ -85,7 +93,7 @@ jobs:
             echo "orbit update"
             printf '%s\n' '```'
             echo
-            echo "Then restart Orbit. People on a build from before \`orbit update\` existed still need one manual pull (below), once."
+            echo "\`orbit update\` prefers a matching prebuilt asset, then falls back to git pull + rebuild."
             echo
             echo "### Install (from source)"
             printf '%s\n' '```bash'
@@ -156,3 +164,58 @@ jobs:
               --latest
           fi
           echo "Release page: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+  package:
+    name: Prebuilt (${{ matrix.os }})
+    needs: release
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-13, ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Install GLFW (macOS)
+        if: runner.os == 'macOS'
+        run: brew install glfw
+
+      - name: Install GLFW (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglfw3-dev libgl1-mesa-dev libx11-dev pkg-config
+
+      - name: Package
+        shell: bash
+        env:
+          ORBIT_SIGN_IDENTITY: ${{ secrets.ORBIT_SIGN_IDENTITY }}
+          ORBIT_NOTARIZE: ${{ secrets.ORBIT_NOTARIZE }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: bash scripts/package.sh
+
+      - name: Upload to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          TAG="v${VERSION}"
+          shopt -s nullglob
+          files=(zig-out/dist/orbit-"${VERSION}"-*)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No archives in zig-out/dist" >&2
+            exit 1
+          fi
+          gh release upload "$TAG" "${files[@]}" --clobber
+          echo "Uploaded ${files[*]} to $TAG"

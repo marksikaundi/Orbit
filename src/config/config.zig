@@ -94,11 +94,16 @@ pub const Config = struct {
     cursor_blink: bool = true,
     /// Reload the last saved layout when Orbit starts with no folder argument.
     restore_last_workspace: bool = true,
+    /// Programming ligatures (`=>`, `!=`, `->`). HarfBuzz when built with `-Dharfbuzz`.
+    font_ligatures: bool = true,
+    /// Git remote for `orbit sync` (config + workspaces + ssh.toml).
+    sync_remote: ?[]const u8 = null,
     /// Owned theme name buffer when loaded from file.
     theme_name_owned: ?[]u8 = null,
     fg_preset_owned: ?[]u8 = null,
     font_face_owned: ?[]u8 = null,
     shell_owned: ?[]u8 = null,
+    sync_remote_owned: ?[]u8 = null,
     /// User `keybind = …` lines, in file order (Ghostty-compatible).
     keybind_lines: [][]u8 = &.{},
     /// Compiled defaults + user keybinds.
@@ -109,11 +114,14 @@ pub const Config = struct {
         if (self.fg_preset_owned) |f| allocator.free(f);
         if (self.font_face_owned) |f| allocator.free(f);
         if (self.shell_owned) |s| allocator.free(s);
+        if (self.sync_remote_owned) |s| allocator.free(s);
         self.theme_name_owned = null;
         self.fg_preset_owned = null;
         self.font_face_owned = null;
         self.shell_owned = null;
+        self.sync_remote_owned = null;
         self.shell = null;
+        self.sync_remote = null;
         self.freeKeybindLines(allocator);
         self.keymap.deinit(allocator);
     }
@@ -330,6 +338,13 @@ pub const Config = struct {
         try appendFmt(&body, allocator, "cursor_style = \"{s}\"\n", .{self.cursor_style.name()});
         try appendFmt(&body, allocator, "cursor_blink = {s}\n", .{if (self.cursor_blink) "true" else "false"});
         try appendFmt(&body, allocator, "restore_last_workspace = {s}\n", .{if (self.restore_last_workspace) "true" else "false"});
+        try appendFmt(&body, allocator, "font_ligatures = {s}\n", .{if (self.font_ligatures) "true" else "false"});
+        try body.appendSlice(allocator, "\n[sync]\n");
+        if (self.sync_remote) |r| {
+            try appendFmt(&body, allocator, "remote = \"{s}\"\n", .{r});
+        } else {
+            try body.appendSlice(allocator, "# remote = \"git@github.com:you/orbit-dotfiles.git\"\n");
+        }
         if (self.shellPath()) |sh| {
             try appendFmt(&body, allocator, "shell = \"{s}\"\n", .{sh});
         } else {
@@ -369,7 +384,7 @@ pub const Config = struct {
         var keybinds: std.ArrayList([]u8) = .empty;
         defer keybinds.deinit(allocator);
 
-        var section: enum { none, window, theme, terminal, keybind } = .none;
+        var section: enum { none, window, theme, terminal, keybind, sync } = .none;
         var lines = std.mem.splitScalar(u8, data, '\n');
         while (lines.next()) |raw| {
             var line = std.mem.trim(u8, raw, " \t\r");
@@ -385,6 +400,8 @@ pub const Config = struct {
                         section = .terminal;
                     } else if (std.mem.eql(u8, name, "keybind") or std.mem.eql(u8, name, "keybinds")) {
                         section = .keybind;
+                    } else if (std.mem.eql(u8, name, "sync")) {
+                        section = .sync;
                     } else {
                         section = .none;
                     }
@@ -483,6 +500,17 @@ pub const Config = struct {
                     }
                     if (std.mem.eql(u8, key, "restore_last_workspace") or std.mem.eql(u8, key, "restore-last-workspace")) {
                         cfg.restore_last_workspace = parseBool(val);
+                    }
+                    if (std.mem.eql(u8, key, "font_ligatures") or std.mem.eql(u8, key, "font-ligatures") or std.mem.eql(u8, key, "ligatures")) {
+                        cfg.font_ligatures = parseBool(val);
+                    }
+                },
+                .sync => {
+                    if (std.mem.eql(u8, key, "remote") or std.mem.eql(u8, key, "url")) {
+                        if (cfg.sync_remote_owned) |old| allocator.free(old);
+                        const owned = allocator.dupe(u8, val) catch continue;
+                        cfg.sync_remote_owned = owned;
+                        cfg.sync_remote = owned;
                     }
                 },
                 .keybind, .none => {},

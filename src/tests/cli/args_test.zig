@@ -82,6 +82,8 @@ test "help catalog covers launch, developer, and plugin commands" {
     try std.testing.expect(std.mem.indexOf(u8, args.help_text, "zig build security-scan") != null);
     try std.testing.expect(std.mem.indexOf(u8, args.help_text, "ide-setup") != null);
     try std.testing.expect(std.mem.indexOf(u8, args.help_text, "orbit update") != null);
+    try std.testing.expect(std.mem.indexOf(u8, args.help_text, "orbit sync") != null);
+    try std.testing.expect(std.mem.indexOf(u8, args.help_text, "zig build package") != null);
     try std.testing.expect(std.mem.indexOf(u8, args.help_text, "ORBIT_FOREGROUND") != null);
     try std.testing.expect(std.mem.indexOf(u8, args.help_text, "git status") != null);
     try std.testing.expect(std.mem.indexOf(u8, args.help_text, "Ctrl+Shift+P") != null);
@@ -111,6 +113,22 @@ test "update subcommand and flags" {
     try std.testing.expectEqual(args.Action.update, r.action);
     try std.testing.expect(r.update_rebuild);
     try std.testing.expectEqualStrings("C:\\src\\Orbit", r.cwd.?);
+}
+
+test "sync subcommand and modes" {
+    var s = try args.parse(std.testing.allocator, &.{ "orbit", "sync" });
+    defer s.deinit(std.testing.allocator);
+    try std.testing.expectEqual(args.Action.sync, s.action);
+    try std.testing.expectEqual(args.SyncMode.sync, s.sync_mode);
+
+    var p = try args.parse(std.testing.allocator, &.{ "orbit", "sync", "pull" });
+    defer p.deinit(std.testing.allocator);
+    try std.testing.expectEqual(args.SyncMode.pull, p.sync_mode);
+
+    var u = try args.parse(std.testing.allocator, &.{ "orbit", "--sync", "push" });
+    defer u.deinit(std.testing.allocator);
+    try std.testing.expectEqual(args.Action.sync, u.action);
+    try std.testing.expectEqual(args.SyncMode.push, u.sync_mode);
 }
 
 test "ide-setup with editor" {

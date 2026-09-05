@@ -41,6 +41,8 @@ You do not need to remember every shortcut. If something is in this list, you ca
 | Scroll to Top / Bottom | |
 | Open File | edit |
 | SSH… | `ssh host` |
+| SSH Reconnect | last host |
+| Sync Config Now / Push / Pull | `orbit sync` |
 | Theme: Orbit Dark / Light, Nord, Dracula, Gruvbox Dark, Solarized Dark, Catppuccin Mocha, Tokyo Night | |
 | Cursor: Block / Underline / Bar / Toggle Blink | |
 | Font: Larger / Smaller / Reset Size | `Ctrl+=` / `-` / `0` |
@@ -57,7 +59,7 @@ You do not need to remember every shortcut. If something is in this list, you ca
 | AI: Explain | plugin |
 | AI: Suggest command | plugin |
 
-**SSH…** lists `Host` entries from `~/.ssh/config` (wildcards skipped). Arrow to a host or type one, then Enter inserts `ssh -- host` after the prompt. Format, lint, and AI need the matching [plugin](plugins.md) installed and (for format/lint) a file open.
+**SSH…** lists `Host` entries from `~/.ssh/config` plus `~/.config/orbit/ssh.toml` (wildcards skipped). Arrow to a host or type `user@host:port`, then Enter builds `ssh` with identity, jump host, port, and ControlMaster multiplexing. Typed hosts are saved to `ssh.toml`. **SSH Reconnect** repeats the last command. Format, lint, and AI need the matching [plugin](plugins.md) installed and (for format/lint) a file open.
 
 Plugin rows keep the label from `plugin.toml` (`Git: Status`, `Dev: Tree`, …).
 

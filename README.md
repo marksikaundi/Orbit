@@ -124,6 +124,8 @@ Full detail in [roamap.md](roamap.md).
 
 **Full install for macOS, Linux, and Windows:** → **[INSTALL.md](INSTALL.md)**
 
+Prebuilt archives (and signed macOS `.app` when a Developer ID is configured) ship on [GitHub Releases](https://github.com/marksikaundi/Orbit/releases). `orbit update` prefers those assets.
+
 ```bash
 git clone https://github.com/marksikaundi/Orbit.git
 cd Orbit
@@ -137,6 +139,8 @@ zig build run      # detached launch
 zig build run-fg   # foreground (logs in this terminal)
 zig build setup    # once: global `orbit` + zig build run from anywhere
 zig build test
+zig build package         # release zip / tar / Orbit.app
+zig build -Dharfbuzz      # optional OpenType ligatures
 zig build security-scan
 ```
 

@@ -50,7 +50,7 @@ fi
 LAUNCH="$ROOT/scripts/launch-detached.sh"
 if [[ -x "$LAUNCH" ]]; then
   case "${1:-}" in
-    help|ide-setup|--ide-setup|update|--update|--orbit-rebuild|-h|--help|-V|--version)
+    help|ide-setup|--ide-setup|update|--update|sync|--sync|--orbit-rebuild|-h|--help|-V|--version)
       export ORBIT_FOREGROUND=1
       ;;
   esac
@@ -74,7 +74,7 @@ if [[ "${ORBIT_FOREGROUND:-}" == "1" ]]; then
   exec "$EXE" "$@"
 fi
 case "${1:-}" in
-  help|ide-setup|--ide-setup|update|--update|--orbit-rebuild|-h|--help|-V|--version)
+  help|ide-setup|--ide-setup|update|--update|sync|--sync|--orbit-rebuild|-h|--help|-V|--version)
     exec "$EXE" "$@"
     ;;
 esac

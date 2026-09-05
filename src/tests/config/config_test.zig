@@ -176,6 +176,19 @@ test "explicit opacity wins over look preset" {
     try std.testing.expectEqual(@as(f32, 0.95), cfg.opacity);
 }
 
+test "parse ligatures and sync remote" {
+    var cfg: Config = .{};
+    defer cfg.deinit(std.testing.allocator);
+    Config.parseInto(&cfg, std.testing.allocator,
+        \\[terminal]
+        \\font_ligatures = false
+        \\[sync]
+        \\remote = "git@github.com:you/orbit-dotfiles.git"
+    );
+    try std.testing.expect(!cfg.font_ligatures);
+    try std.testing.expectEqualStrings("git@github.com:you/orbit-dotfiles.git", cfg.sync_remote.?);
+}
+
 test "comments and blank lines ignored" {
     var cfg: Config = .{};
     defer cfg.deinit(std.testing.allocator);

@@ -21,6 +21,7 @@ That catalog lists every launch flag, `zig build` step, environment variable, in
 orbit [path] [options]
 orbit help | --help | -h
 orbit update [--check] [--force]
+orbit sync [pull|push|status]
 orbit ide-setup [--editor cursor|code|codium|windsurf|all]
 ```
 
@@ -37,9 +38,11 @@ orbit ide-setup [--editor cursor|code|codium|windsurf|all]
 | `-t`, `--title TITLE` | First tab title |
 | `help`, `-h`, `--help` | Full command catalog |
 | `-V`, `--version` | Version |
-| `update` | Fetch the latest GitHub release, rebuild, refresh the launcher |
+| `update` | Prefer a matching prebuilt GitHub asset, else rebuild from source |
 | `update --check` | Only print current vs latest |
 | `update --force` | Overwrite local source changes, then update |
+| `sync` | Git pull --rebase then push `~/.config/orbit` (`[sync] remote`) |
+| `sync pull` / `push` / `status` | One-way or status only |
 
 `=` form works: `--working-directory=/tmp`.
 
@@ -64,11 +67,12 @@ Detached vs foreground: [Getting started](getting-started.md#launch).
 
 ## Update
 
-Requires Git, Zig 0.16+, network, and a **git clone** recorded by `zig build setup`.
+Requires network. Prefers a prebuilt archive for this OS/CPU. Source rebuild still needs Git, Zig 0.16+, and a **git clone** recorded by `zig build setup`.
 
 ```bash
 orbit update --check        # compare VERSION to the latest vX.Y.Z tag
-orbit update                # fetch that tag, ReleaseFast rebuild, zig build setup
+orbit update                # prebuilt asset if published, else fetch tag + rebuild
+orbit sync                  # push/pull config (needs [sync] remote)
 ```
 
 On Windows, quit the Orbit window first so `orbit.exe` is not locked. Palette **Check for Updates** runs the same check; **Update Orbit** reminds you to run the command in a shell.
@@ -86,6 +90,8 @@ These work from the Orbit repo, and from **any folder** after `zig build setup` 
 | `zig build run-fg` | Build and launch in the foreground (logs here) |
 | `zig build setup` | Install global `orbit` + `--help` shell helper |
 | `zig build test` | Unit tests |
+| `zig build package` | Release archive for this platform |
+| `zig build -Dharfbuzz` | Link system HarfBuzz for OpenType ligatures |
 | `zig build security-scan` | Scan `src/`, `scripts/`, plugins for secrets / injection |
 | `zig build -Doptimize=ReleaseSafe` | Optimized build |
 | `./scripts/bump-version.sh patch` | Bump `VERSION` (`minor` / `major` also) |

@@ -613,30 +613,31 @@ The product pitch: projects are first-class. Make that true on every launch.
 | Desktop bell / notifications | Shipped — OS notify when unfocused |
 | File drop | Shipped — path pasted into the shell |
 | Close confirm | Shipped — quit / close tab / close pane |
-| Inline images (iTerm OSC 1337) | Next — after text rendering is solid |
+| Inline images (iTerm OSC 1337) | Shipped — plus Kitty graphics protocol |
 
 ---
 
 ## Phase 11 — Distribution (v2.5)
 
-| Item | Why |
+| Item | Status |
 | --- | --- |
-| Prebuilt binaries per platform | Source-only install blocks non-Zig users |
-| Signed macOS `.app` / Linux archives / Windows zip | GitHub Releases as the install path |
+| Prebuilt binaries per platform | Shipped — `zig build package` + CI uploads zip/tar/`Orbit.app` |
+| Signed macOS `.app` / Linux archives / Windows zip | Shipped — `scripts/sign-macos.sh` when `ORBIT_SIGN_IDENTITY` is set; `orbit update` prefers the matching asset |
 
 ---
 
-## Phase 12 — Later
+## Phase 12 — Later (first slice shipped)
 
-Do not schedule these ahead of Phases 8–11.
-
-- HarfBuzz ligatures and full shaping
-- Kitty graphics protocol (beyond iTerm inline images)
-- SSH keys, jump hosts, ControlMaster, reconnect
-- Cloud sync, workspace sharing, remote development
-- Session recording, terminal replay, command timeline
-- GPU effects, multi-cursor
-- WebGPU renderer
+| Item | Status |
+| --- | --- |
+| HarfBuzz ligatures and full shaping | Shipped — software ligature table always; `-Dharfbuzz` links system HarfBuzz |
+| Kitty graphics protocol | Shipped — transmit+display + delete; PNG / RGB / RGBA |
+| SSH keys, jump hosts, ControlMaster, reconnect | Shipped — `ssh.toml` + `~/.ssh/config`; palette Reconnect |
+| Cloud sync | Shipped — git remote via `[sync] remote` and `orbit sync` |
+| Workspace sharing, remote development | Later |
+| Session recording, terminal replay, command timeline | Later |
+| GPU effects, multi-cursor | Later |
+| WebGPU renderer | Later |
 
 ---
 

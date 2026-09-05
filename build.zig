@@ -9,11 +9,13 @@ pub fn build(b: *std.Build) void {
     const glfw_path = b.option([]const u8, "glfw-path", "Root path containing GLFW include/ and lib/ (Windows)");
     const glfw_include = b.option([]const u8, "glfw-include", "Path to GLFW headers");
     const glfw_lib = b.option([]const u8, "glfw-lib", "Path to GLFW library directory");
+    const harfbuzz = b.option(bool, "harfbuzz", "Link system HarfBuzz for OpenType ligatures") orelse false;
 
     // Absolute repo path so Orbit can refresh config source_root on launch.
     const source_root: []const u8 = b.build_root.path orelse ".";
     const build_opts = b.addOptions();
     build_opts.addOption([]const u8, "source_root", source_root);
+    build_opts.addOption(bool, "harfbuzz", harfbuzz);
 
     const root_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -40,6 +42,13 @@ pub fn build(b: *std.Build) void {
     });
 
     addGlfwPaths(b, root_module, target, glfw_path, glfw_include, glfw_lib);
+    if (harfbuzz) {
+        root_module.addCSourceFile(.{
+            .file = b.path("src/font/hb_bridge.c"),
+            .flags = &.{ "-std=c99", "-fno-sanitize=undefined" },
+        });
+        root_module.linkSystemLibrary("harfbuzz", .{});
+    }
 
     // System GLFW via Homebrew / pkg / vcpkg.
     if (target.result.os.tag == .macos) {
@@ -209,6 +218,13 @@ pub fn build(b: *std.Build) void {
     });
 
     addGlfwPaths(b, test_module, target, glfw_path, glfw_include, glfw_lib);
+    if (harfbuzz) {
+        test_module.addCSourceFile(.{
+            .file = b.path("src/font/hb_bridge.c"),
+            .flags = &.{ "-std=c99", "-fno-sanitize=undefined" },
+        });
+        test_module.linkSystemLibrary("harfbuzz", .{});
+    }
 
     if (target.result.os.tag == .macos) {
         test_module.linkSystemLibrary("glfw", .{});
@@ -279,6 +295,13 @@ pub fn build(b: *std.Build) void {
     }
     const security_step = b.step("security-scan", "Scan codebase for secrets and injection risks");
     security_step.dependOn(&run_security.step);
+
+    const package_step = b.step("package", "Build a signed-ready release archive for this platform");
+    const package_cmd = b.addSystemCommand(&.{ "bash", "scripts/package.sh" });
+    package_cmd.setCwd(b.path("."));
+    package_cmd.step.dependOn(b.getInstallStep());
+    if (bundle_step) |bs| package_cmd.step.dependOn(bs);
+    package_step.dependOn(&package_cmd.step);
 }
 
 fn addGlfwPaths(

@@ -11,7 +11,7 @@ A new tab starts a login-style session:
 - **Unix:** POSIX PTY, `$SHELL` unless you set [`shell`](appearance.md#shell)
 - **Windows:** ConPTY (`powershell.exe` / `pwsh` / `cmd`)
 
-`TERM=xterm-256color`. ANSI/CSI/OSC/SGR/DEC/UTF-8 are parsed (colors, cursor, titles, OSC 7 cwd, OSC 8 hyperlinks, xterm mouse 1000/1002/1006). Glyphs load on demand with fallback fonts; CJK and emoji occupy two columns.
+`TERM=xterm-256color`. ANSI/CSI/OSC/SGR/DEC/UTF-8 are parsed (colors, cursor, titles, OSC 7 cwd, OSC 8 hyperlinks, xterm mouse 1000/1002/1006). Kitty graphics (`APC G`) and iTerm inline images (`OSC 1337;File=inline=1`) draw after the cell grid. Glyphs load on demand with fallback fonts; CJK and emoji occupy two columns. Programming ligatures (`=>`, `!=`, `->`, …) cluster when `font_ligatures = true`; `zig build -Dharfbuzz` adds OpenType GSUB.
 
 Ctrl+A–Z (except app chords) go to the shell: `Ctrl+C` interrupt, `Ctrl+D` EOF, readline, and so on. On Windows/Linux, `Ctrl+C` **copies** when there is a selection (`performable:`), otherwise it interrupts.
 

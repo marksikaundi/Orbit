@@ -3,7 +3,9 @@
 const std = @import("std");
 const version = @import("../version.zig");
 
-pub const Action = enum { run, help, version, ide_setup, update };
+pub const Action = enum { run, help, version, ide_setup, update, sync };
+
+pub const SyncMode = enum { status, pull, push, sync };
 
 pub const ParseError = error{
     MissingValue,
@@ -28,6 +30,8 @@ pub const Launch = struct {
     update_force: bool = false,
     /// Hidden Windows helper: finish rebuild from a copied binary.
     update_rebuild: bool = false,
+    /// `orbit sync` / pull / push / status
+    sync_mode: SyncMode = .sync,
 
     pub fn deinit(self: *Launch, allocator: std.mem.Allocator) void {
         if (self.cwd) |p| allocator.free(p);
@@ -62,6 +66,10 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8) ParseError!
             out.action = .update;
             continue;
         }
+        if (i == 1 and isSyncCommand(arg)) {
+            out.action = .sync;
+            continue;
+        }
         if (i == 1 and isRebuildCommand(arg)) {
             out.action = .update;
             out.update_rebuild = true;
@@ -82,6 +90,29 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8) ParseError!
             }
             if (out.update_rebuild) {
                 try setOwned(&out.cwd, allocator, arg);
+                continue;
+            }
+            return error.UnknownArgument;
+        }
+        if (out.action == .sync) {
+            if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+                out.action = .help;
+                return out;
+            }
+            if (std.mem.eql(u8, arg, "pull")) {
+                out.sync_mode = .pull;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "push")) {
+                out.sync_mode = .push;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "status")) {
+                out.sync_mode = .status;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "sync")) {
+                out.sync_mode = .sync;
                 continue;
             }
             return error.UnknownArgument;
@@ -190,6 +221,7 @@ pub const help_text =
     \\  orbit help | --help | -h
     \\  orbit --version | -V
     \\  orbit update [--check] [--force]
+    \\  orbit sync [pull|push|status]
     \\  orbit ide-setup [--editor cursor|code|codium|windsurf|all]
     \\
     \\After `zig build setup`, open a new terminal and run `--help` or `orbit --help`.
@@ -202,6 +234,8 @@ pub const help_text =
     \\  update                       Install the latest GitHub release (git pull + rebuild)
     \\  update --check               Report whether a newer release exists
     \\  update --force               Overwrite local source changes, then update
+    \\  sync                         Git pull --rebase then push ~/.config/orbit
+    \\  sync pull|push|status        One-way or status only
     \\  ide-setup                    Register Orbit as the external terminal in IDEs
     \\
     \\Launch options:
@@ -223,8 +257,9 @@ pub const help_text =
     \\  orbit --working-directory=/tmp
     \\  orbit -e git status
     \\  orbit --wait-after-command -e make test
-    \\  orbit update                 Fetch the latest release and rebuild
+    \\  orbit update                 Fetch the latest release (prebuilt, else rebuild)
     \\  orbit update --check         Only print current vs latest
+    \\  orbit sync                   Push/pull config, workspaces, ssh.toml
     \\  orbit ide-setup              Cursor, VS Code, VSCodium, Windsurf if found
     \\  orbit ide-setup --editor cursor
     \\
@@ -239,6 +274,8 @@ pub const help_text =
     \\  zig build run-fg             Build and launch in the foreground (logs here)
     \\  zig build setup              Install global `orbit` + shell helper (`--help`)
     \\  zig build test               Run unit tests
+    \\  zig build package            Release archive (zip / tar / Orbit.app)
+    \\  zig build -Dharfbuzz         Link system HarfBuzz for OpenType ligatures
     \\  zig build security-scan      Scan src/, scripts/, plugins for secrets / injection
     \\  zig build -Doptimize=ReleaseSafe
     \\                               Optimized build
@@ -280,6 +317,8 @@ pub const help_text =
     \\  Palette → Reload Plugins     Re-read ~/.config/orbit/plugins/
     \\  Palette → Check for Updates  Compare this build to GitHub Releases
     \\  Palette → Update Orbit       Same as `orbit update` (run from a shell)
+    \\  Palette → SSH… / Reconnect   ~/.ssh/config + ssh.toml (keys, jump, mux)
+    \\  Palette → Sync Config        `orbit sync` (needs [sync] remote)
     \\
     \\Developer commands in a shell tab (also on the palette if plugins are installed):
     \\  git status                   Working tree
@@ -333,6 +372,10 @@ fn isIdeSetup(arg: []const u8) bool {
 
 fn isUpdateCommand(arg: []const u8) bool {
     return std.mem.eql(u8, arg, "update") or std.mem.eql(u8, arg, "--update");
+}
+
+fn isSyncCommand(arg: []const u8) bool {
+    return std.mem.eql(u8, arg, "sync") or std.mem.eql(u8, arg, "--sync");
 }
 
 fn isRebuildCommand(arg: []const u8) bool {

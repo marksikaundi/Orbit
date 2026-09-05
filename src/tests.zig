@@ -10,6 +10,7 @@ comptime {
     _ = @import("tests/terminal/parser_test.zig");
     _ = @import("tests/terminal/selection_test.zig");
     _ = @import("tests/terminal/mouse_test.zig");
+    _ = @import("tests/terminal/graphics_test.zig");
 
     _ = @import("tests/config/config_test.zig");
     _ = @import("tests/config/theme_test.zig");
@@ -38,14 +39,19 @@ comptime {
     _ = @import("tests/font/bitmap_test.zig");
     _ = @import("tests/font/atlas_test.zig");
     _ = @import("tests/font/width_test.zig");
+    _ = @import("tests/font/shape_test.zig");
+    _ = @import("font/hb.zig");
+    _ = @import("font/shape.zig");
 
     _ = @import("tests/workspace/workspace_test.zig");
 
     _ = @import("tests/platform/ssh_config_test.zig");
+    _ = @import("tests/platform/ssh_hosts_test.zig");
 
     _ = @import("tests/cli/args_test.zig");
     _ = @import("tests/cli/jsonc_test.zig");
     _ = @import("cli/update.zig");
+    _ = @import("cli/sync.zig");
 
     _ = @import("tests/version_test.zig");
 

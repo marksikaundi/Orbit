@@ -5,6 +5,7 @@ const Color = cell_mod.Color;
 const Attrs = cell_mod.Attrs;
 const width = @import("../font/width.zig");
 const mouse_mod = @import("mouse.zig");
+const gfx = @import("graphics.zig");
 
 pub const Screen = struct {
     allocator: std.mem.Allocator,
@@ -60,6 +61,11 @@ pub const Screen = struct {
     mouse_sgr: bool = false,
     bell: bool = false,
 
+    images: std.ArrayList(gfx.Placement) = .empty,
+    gfx_acc: std.ArrayList(u8) = .empty,
+    kitty_keys: gfx.KittyKeys = .{},
+    image_seq: u32 = 1,
+
     pub fn init(allocator: std.mem.Allocator, cols: u16, rows: u16) !Screen {
         const n = @as(usize, cols) * @as(usize, rows);
         const cells = try allocator.alloc(Cell, n);
@@ -83,9 +89,95 @@ pub const Screen = struct {
         self.scrollback.deinit(self.allocator);
         for (self.links.items) |s| self.allocator.free(s);
         self.links.deinit(self.allocator);
+        self.clearImages();
+        self.images.deinit(self.allocator);
+        self.gfx_acc.deinit(self.allocator);
         self.allocator.free(self.alt_cells);
         self.allocator.free(self.cells);
         self.* = undefined;
+    }
+
+    pub fn clearImages(self: *Screen) void {
+        for (self.images.items) |*img| img.deinit(self.allocator);
+        self.images.clearRetainingCapacity();
+    }
+
+    pub fn gfxReset(self: *Screen) void {
+        self.gfx_acc.clearRetainingCapacity();
+        self.kitty_keys = .{};
+    }
+
+    pub fn gfxAppend(self: *Screen, bytes: []const u8) void {
+        if (bytes.len == 0) return;
+        if (self.gfx_acc.items.len + bytes.len > gfx.max_payload) return;
+        self.gfx_acc.appendSlice(self.allocator, bytes) catch {};
+    }
+
+    pub fn gfxSetKittyKeys(self: *Screen, header: []const u8) void {
+        self.kitty_keys = gfx.parseKittyKeys(header);
+    }
+
+    pub fn finishKitty(self: *Screen) void {
+        const keys = self.kitty_keys;
+        if (keys.action == 'd') {
+            if (keys.id == 0) self.clearImages() else self.removeImage(keys.id);
+            self.gfxReset();
+            self.dirty = true;
+            return;
+        }
+        if (keys.more) return;
+        var place = gfx.decodeKitty(self.allocator, keys, self.gfx_acc.items) catch {
+            self.gfxReset();
+            return;
+        };
+        place.col = self.cursor_col;
+        place.row = self.cursor_row;
+        if (place.id == 0) {
+            place.id = self.image_seq;
+            self.image_seq +%= 1;
+            if (self.image_seq == 0) self.image_seq = 1;
+        }
+        self.addImage(place);
+        self.gfxReset();
+    }
+
+    pub fn finishIterm(self: *Screen) void {
+        var place = gfx.decodeIterm(self.allocator, self.gfx_acc.items) catch {
+            self.gfxReset();
+            return;
+        };
+        place.col = self.cursor_col;
+        place.row = self.cursor_row;
+        place.id = self.image_seq;
+        self.image_seq +%= 1;
+        if (self.image_seq == 0) self.image_seq = 1;
+        self.addImage(place);
+        self.gfxReset();
+    }
+
+    fn addImage(self: *Screen, place: gfx.Placement) void {
+        while (self.images.items.len >= 8) {
+            var old = self.images.orderedRemove(0);
+            old.deinit(self.allocator);
+        }
+        self.images.append(self.allocator, place) catch {
+            var tmp = place;
+            tmp.deinit(self.allocator);
+            return;
+        };
+        self.dirty = true;
+    }
+
+    fn removeImage(self: *Screen, id: u32) void {
+        var i: usize = 0;
+        while (i < self.images.items.len) {
+            if (self.images.items[i].id == id) {
+                var old = self.images.orderedRemove(i);
+                old.deinit(self.allocator);
+            } else {
+                i += 1;
+            }
+        }
     }
 
     pub fn internLink(self: *Screen, url: []const u8) u16 {

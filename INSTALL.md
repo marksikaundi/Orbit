@@ -2,7 +2,7 @@
 
 Step-by-step guide to download and install [Orbit](https://github.com/marksikaundi/Orbit) on **macOS**, **Linux**, and **Windows**.
 
-Orbit is currently distributed as **source**. You clone the repository, install Zig and GLFW, then build. Prebuilt installers may arrive in a later release — until then, follow the steps below for your OS.
+Orbit ships **prebuilt archives** on [GitHub Releases](https://github.com/marksikaundi/Orbit/releases) (`orbit-VERSION-macos-aarch64.zip`, Linux `.tar.gz`, Windows `.zip`). macOS builds can be codesigned when `ORBIT_SIGN_IDENTITY` is set in CI. You can still clone and build from source — follow the steps below for your OS.
 
 ---
 
@@ -57,7 +57,16 @@ git checkout v2.1.0
 
 Browse tags and notes: [GitHub Releases](https://github.com/marksikaundi/Orbit/releases).
 
-### Option B — Download a ZIP
+### Option B — Prebuilt binary (no Zig)
+
+1. Open [GitHub Releases](https://github.com/marksikaundi/Orbit/releases) and download the archive for your OS/CPU.
+2. **macOS:** unzip and drag `Orbit.app` to Applications. Gatekeeper: right-click → Open the first time if the build is unsigned.
+3. **Linux:** `tar -xzf orbit-*-linux-*.tar.gz && install -m 755 orbit/orbit ~/.local/bin/orbit`
+4. **Windows:** unzip and run `orbit.exe`, or copy it to `%LOCALAPPDATA%\Orbit\bin` and add that folder to `PATH`.
+
+`orbit update` prefers the matching prebuilt asset, then falls back to a source rebuild.
+
+### Option C — Source ZIP
 
 1. Open [marksikaundi/Orbit](https://github.com/marksikaundi/Orbit).
 2. Click **Code → Download ZIP**, or download a source archive from [Releases](https://github.com/marksikaundi/Orbit/releases).
@@ -480,7 +489,9 @@ orbit update --check        # current vs latest GitHub release
 orbit update                # fetch the latest tag, rebuild, refresh the launcher
 ```
 
-That is the path for people who installed before a new version shipped — nothing is pushed to their machine automatically. `orbit update` talks to [GitHub Releases](https://github.com/marksikaundi/Orbit/releases), checks out the newest `vX.Y.Z` tag in the recorded source tree (`~/.config/orbit/source_root`), then runs `zig build -Doptimize=ReleaseFast` and `zig build setup`.
+That is the path for people who installed before a new version shipped — nothing is pushed to their machine automatically. `orbit update` talks to [GitHub Releases](https://github.com/marksikaundi/Orbit/releases), downloads the matching prebuilt archive when one exists, and otherwise checks out the newest `vX.Y.Z` tag in the recorded source tree (`~/.config/orbit/source_root`) then runs `zig build -Doptimize=ReleaseFast` and `zig build setup`.
+
+Package a release archive locally with `zig build package` (or `scripts/package.sh`). On macOS, `ORBIT_SIGN_IDENTITY` runs `scripts/sign-macos.sh`; set `ORBIT_NOTARIZE=1` plus Apple ID secrets to notarize.
 
 Restart Orbit after it finishes. On Windows, quit the Orbit window first (the running `orbit.exe` cannot be overwritten).
 

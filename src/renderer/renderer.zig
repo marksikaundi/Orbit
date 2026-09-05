@@ -5,6 +5,7 @@ const Selection = @import("../terminal/selection.zig").Selection;
 const Color = @import("../terminal/cell.zig").Color;
 const atlas_mod = @import("../font/atlas.zig");
 const dyn_mod = @import("../font/dynamic.zig");
+const shape = @import("../font/shape.zig");
 const faces = @import("../font/faces.zig");
 const theme_mod = @import("../config/theme.zig");
 const CursorStyle = @import("../config/config.zig").CursorStyle;
@@ -51,6 +52,10 @@ pub const Renderer = struct {
     cursor_blink: bool = true,
     /// Frame counter for cursor blink (incremented each draw).
     frame_tick: u64 = 0,
+    /// Programming ligatures (`=>`, `!=`, …). OpenType GSUB when `-Dharfbuzz`.
+    ligatures: bool = true,
+    image_tex: [8]c.GLuint = .{0} ** 8,
+    image_ids: [8]u32 = .{0} ** 8,
 
     // Vertex: x y u v r g b a  (8 floats)
     const vert_src =
@@ -103,6 +108,7 @@ pub const Renderer = struct {
         if (self.atlas) |*a| a.deinit();
         if (self.atlas_tex != 0) c.glDeleteTextures(1, &self.atlas_tex);
         if (self.logo_tex != 0) c.glDeleteTextures(1, &self.logo_tex);
+        self.dropImageTextures();
         if (self.vbo != 0) c.glDeleteBuffers(1, &self.vbo);
         if (self.vao != 0) c.glDeleteVertexArrays(1, &self.vao);
         if (self.program != 0) c.glDeleteProgram(self.program);
@@ -311,8 +317,7 @@ pub const Renderer = struct {
                     try self.appendPixelRect(fw, fh, x0, uy, span_w, 1.5, link_c, 0.85);
                 }
 
-                const cp = cell.codepoint;
-                if (cp == 0 or cp == ' ') continue;
+                const lig_n: u8 = if (self.ligatures) shape.matchRow(screen, row, col) orelse 1 else 1;
 
                 var fg = cell.fg;
                 if (cell.attrs.bold) {
@@ -323,11 +328,23 @@ pub const Renderer = struct {
                     );
                 }
                 if (self.glyphs) |*g| {
-                    const slot = g.lookup(cp);
-                    if (slot.ok) {
-                        try self.appendGlyphUv(ox, oy, fw, fh, col, row, span_w, cell_h, slot.u0, slot.v0, slot.u1, slot.v1, fg);
+                    var li: u8 = 0;
+                    while (li < lig_n) : (li += 1) {
+                        const cp2 = screen.visibleCell(col + li, row).codepoint;
+                        if (cp2 == 0 or cp2 == ' ') continue;
+                        const slot = g.lookup(cp2);
+                        if (!slot.ok) continue;
+                        const packed_w = if (lig_n > 1) cell_w * @as(f32, 0.72) else span_w;
+                        const pack: f32 = if (lig_n > 1) 0.72 else 1.0;
+                        const x = x0 + @as(f32, @floatFromInt(li)) * cell_w * pack;
+                        const extra = cell_h - self.glyph_h;
+                        const gy = y0 + extra * 0.5;
+                        try self.appendGlyphPxUv(fw, fh, x, gy, packed_w, self.glyph_h, slot.u0, slot.v0, slot.u1, slot.v1, fg);
                     }
+                    if (lig_n > 1) col += lig_n - 1;
                 } else {
+                    const cp = cell.codepoint;
+                    if (cp == 0 or cp == ' ') continue;
                     if (cp < atlas_mod.first_codepoint or cp > atlas_mod.last_codepoint) continue;
                     const glyph_count: f32 = @floatFromInt(atlas_mod.glyph_count);
                     const gi: f32 = @floatFromInt(cp - atlas_mod.first_codepoint);
@@ -359,6 +376,84 @@ pub const Renderer = struct {
         }
 
         try self.flush();
+        try self.drawImages(screen, origin_x, origin_y);
+    }
+
+    fn drawImages(self: *Renderer, screen: *const Screen, origin_x: i32, origin_y: i32) !void {
+        if (screen.images.items.len == 0) return;
+        const cell_w = self.cell_w;
+        const cell_h = self.cell_h;
+        for (screen.images.items) |img| {
+            if (img.rgba.len == 0 or img.px_w == 0 or img.px_h == 0) continue;
+            const tex = self.textureForImage(img.id, img.rgba, img.px_w, img.px_h) orelse continue;
+            var cols: f32 = @floatFromInt(if (img.cols == 0) 1 else img.cols);
+            var rows: f32 = @floatFromInt(if (img.rows == 0) 1 else img.rows);
+            if (img.cols <= 1 and img.px_w > 0) {
+                cols = @max(1.0, @as(f32, @floatFromInt(img.px_w)) / cell_w);
+            }
+            if (img.rows <= 1 and img.px_h > 0) {
+                rows = @max(1.0, @as(f32, @floatFromInt(img.px_h)) / cell_h);
+            }
+            const x = origin_x + @as(i32, @intFromFloat(@as(f32, @floatFromInt(img.col)) * cell_w));
+            const y = origin_y + @as(i32, @intFromFloat(@as(f32, @floatFromInt(img.row)) * cell_h));
+            const w: i32 = @intFromFloat(cols * cell_w);
+            const h: i32 = @intFromFloat(rows * cell_h);
+            try self.drawTexture(tex, x, y, w, h);
+        }
+    }
+
+    fn textureForImage(self: *Renderer, id: u32, rgba: []const u8, w: u32, h: u32) ?c.GLuint {
+        var i: usize = 0;
+        while (i < self.image_ids.len) : (i += 1) {
+            if (self.image_ids[i] == id and self.image_tex[i] != 0) return self.image_tex[i];
+        }
+        var slot: ?usize = null;
+        i = 0;
+        while (i < self.image_ids.len) : (i += 1) {
+            if (self.image_tex[i] == 0) {
+                slot = i;
+                break;
+            }
+        }
+        if (slot == null) {
+            if (self.image_tex[0] != 0) c.glDeleteTextures(1, &self.image_tex[0]);
+            self.image_tex[0] = 0;
+            self.image_ids[0] = 0;
+            slot = 0;
+        }
+        const idx = slot.?;
+        var tex: c.GLuint = 0;
+        c.glGenTextures(1, &tex);
+        c.glBindTexture(c.GL_TEXTURE_2D, tex);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MIN_FILTER, c.GL_LINEAR);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MAG_FILTER, c.GL_LINEAR);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_S, c.GL_CLAMP_TO_EDGE);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_T, c.GL_CLAMP_TO_EDGE);
+        c.glPixelStorei(c.GL_UNPACK_ALIGNMENT, 1);
+        c.glTexImage2D(
+            c.GL_TEXTURE_2D,
+            0,
+            c.GL_RGBA,
+            @intCast(w),
+            @intCast(h),
+            0,
+            c.GL_RGBA,
+            c.GL_UNSIGNED_BYTE,
+            rgba.ptr,
+        );
+        c.glBindTexture(c.GL_TEXTURE_2D, 0);
+        self.image_tex[idx] = tex;
+        self.image_ids[idx] = id;
+        return tex;
+    }
+
+    fn dropImageTextures(self: *Renderer) void {
+        var i: usize = 0;
+        while (i < self.image_tex.len) : (i += 1) {
+            if (self.image_tex[i] != 0) c.glDeleteTextures(1, &self.image_tex[i]);
+            self.image_tex[i] = 0;
+            self.image_ids[i] = 0;
+        }
     }
 
     fn appendCursor(

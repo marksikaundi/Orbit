@@ -11,6 +11,12 @@ Releases are published automatically when `VERSION` is bumped and pushed to the
 ## [Unreleased]
 
 ### Added
+- **Prebuilt / signed installers** — `zig build package` writes `orbit-VERSION-os-arch` zip/tar (macOS `Orbit.app`). Release CI uploads archives. `scripts/sign-macos.sh` codesigns (and optionally notarizes) when `ORBIT_SIGN_IDENTITY` is set. `orbit update` prefers the matching GitHub asset, then falls back to a source rebuild
+- **Ligatures** — programming sequences (`=>`, `!=`, `->`, `...`, …) cluster in the GPU renderer. `font_ligatures` in config. Optional `zig build -Dharfbuzz` for OpenType GSUB
+- **Inline images** — Kitty graphics (`APC G`) and iTerm `OSC 1337;File=inline=1` (PNG / RGB / RGBA)
+- **SSH manager** — `~/.ssh/config` plus `ssh.toml`: user, host, port, identity, jump, ControlMaster. Palette **SSH Reconnect** repeats the last command
+- **Cloud sync** — `[sync] remote` and `orbit sync` / `pull` / `push` / `status` for `~/.config/orbit` (logs stay local). Palette Sync Config Now / Push / Pull
+
 - **Unicode text** — on-demand glyph cache with fallback fonts, wide cells (CJK / emoji), synthesized box-drawing for TUI apps, and UTF-8 clipboard copy
 - **xterm mouse** — DECSET 1000 / 1002 / 1003 / 1006 so vim, less, tmux, htop, and lazygit receive clicks and wheel events (Shift still selects)
 - **Selection** — double-click word, triple-click line, Alt-drag rectangle

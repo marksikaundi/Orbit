@@ -61,13 +61,11 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, opts: Options) !void {
         return;
     }
 
-    const root = resolveSourceRoot(allocator, io) orelse {
-        fail("source tree not configured. From the Orbit repo run: zig build setup", .{});
-        std.process.exit(1);
-    };
-    defer allocator.free(root);
+    const root_opt = resolveSourceRoot(allocator, io);
+    defer if (root_opt) |r| allocator.free(r);
+    const query_root = root_opt orelse ".";
 
-    var status = queryLatest(allocator, io, root) catch |err| {
+    var status = queryLatest(allocator, io, query_root) catch |err| {
         switch (err) {
             error.Offline => fail("could not reach GitHub. Check the network and try again.", .{}),
             error.NoRelease => fail("no numbered release tags found on GitHub.", .{}),
@@ -94,6 +92,17 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, opts: Options) !void {
         },
         .behind => {},
     }
+
+    if (tryInstallPrebuilt(allocator, io, status.latest, status.latest_tag, root_opt)) {
+        std.debug.print("\nOrbit updated {s} → {s} (prebuilt). Restart Orbit to use it.\n", .{ version.tagged, status.latest_tag });
+        return;
+    }
+
+    const root = root_opt orelse {
+        fail("no prebuilt archive for this platform, and source tree is not configured.", .{});
+        std.debug.print("Install from https://github.com/marksikaundi/Orbit/releases or clone and run zig build setup.\n", .{});
+        std.process.exit(1);
+    };
 
     if (!gitRepo(root)) {
         fail("this install is not a git clone, so it cannot self-update.", .{});
@@ -493,6 +502,102 @@ fn sleepMs(ms: u64) void {
 
 fn fail(comptime fmt: []const u8, args: anytype) void {
     std.debug.print("orbit update: " ++ fmt ++ "\n", args);
+}
+
+fn tryInstallPrebuilt(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    ver: []const u8,
+    tag: []const u8,
+    source_root: ?[]const u8,
+) bool {
+    var name_buf: [96]u8 = undefined;
+    const asset = prebuiltAssetName(ver, &name_buf) orelse return false;
+    var url_buf: [256]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "https://github.com/marksikaundi/Orbit/releases/download/{s}/{s}", .{ tag, asset }) catch return false;
+
+    const dest_dir = source_root orelse {
+        std.debug.print("Trying prebuilt {s}…\n", .{asset});
+        return downloadAndUnpack(allocator, io, url, asset, null);
+    };
+    std.debug.print("Trying prebuilt {s}…\n", .{asset});
+    return downloadAndUnpack(allocator, io, url, asset, dest_dir);
+}
+
+fn prebuiltAssetName(ver: []const u8, buf: []u8) ?[]const u8 {
+    const os = switch (builtin.os.tag) {
+        .macos => "macos",
+        .linux => "linux",
+        .windows => "windows",
+        else => return null,
+    };
+    const arch = switch (builtin.cpu.arch) {
+        .aarch64 => "aarch64",
+        .x86_64 => "x86_64",
+        else => return null,
+    };
+    const ext = if (builtin.os.tag == .linux) "tar.gz" else "zip";
+    return std.fmt.bufPrint(buf, "orbit-{s}-{s}-{s}.{s}", .{ ver, os, arch, ext }) catch null;
+}
+
+fn downloadAndUnpack(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    url: []const u8,
+    asset: []const u8,
+    source_root: ?[]const u8,
+) bool {
+    const curl_name: []const u8 = if (builtin.os.tag == .windows) "curl.exe" else "curl";
+    const tmp = paths.joinConfig(allocator, &.{ "tmp", asset }) catch return false;
+    defer allocator.free(tmp);
+    if (std.fs.path.dirname(tmp)) |dir| paths.ensureDir(dir);
+
+    const curl = std.process.run(allocator, io, .{
+        .argv = &.{ curl_name, "-fsSL", "--max-time", "120", "-o", tmp, url },
+        .stdout_limit = .limited(1024),
+        .stderr_limit = .limited(8 * 1024),
+        .timeout = timeoutMs(130_000),
+    }) catch return false;
+    defer allocator.free(curl.stdout);
+    defer allocator.free(curl.stderr);
+    if (!exitedZero(curl.term)) return false;
+
+    const dest = source_root orelse {
+        const home = paths.homeDir() orelse return false;
+        return unpackArchive(allocator, io, tmp, asset, home);
+    };
+    var out_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const zig_out = std.fmt.bufPrint(&out_buf, "{s}{c}zig-out", .{ dest, std.fs.path.sep }) catch return false;
+    paths.ensureDir(zig_out);
+    return unpackArchive(allocator, io, tmp, asset, zig_out);
+}
+
+fn unpackArchive(allocator: std.mem.Allocator, io: std.Io, archive: []const u8, asset: []const u8, dest: []const u8) bool {
+    _ = allocator;
+    if (std.mem.endsWith(u8, asset, ".tar.gz")) {
+        var child = std.process.spawn(io, .{
+            .argv = &.{ "tar", "-xzf", archive, "-C", dest },
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .inherit,
+        }) catch return false;
+        const term = child.wait(io) catch return false;
+        return switch (term) {
+            .exited => |code| code == 0,
+            else => false,
+        };
+    }
+    var child = std.process.spawn(io, .{
+        .argv = &.{ "unzip", "-o", "-q", archive, "-d", dest },
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .inherit,
+    }) catch return false;
+    const term = child.wait(io) catch return false;
+    return switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
 }
 
 test "parseSemver accepts v-prefix and rejects junk" {

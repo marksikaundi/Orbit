@@ -23,6 +23,11 @@ pub const Parser = struct {
     utf8_buf: [4]u8 = undefined,
     utf8_len: u8 = 0,
     utf8_need: u8 = 0,
+    apc_hdr: [256]u8 = undefined,
+    apc_hdr_len: u16 = 0,
+    apc_semi: bool = false,
+    apc_kitty: bool = false,
+    osc_iterm: bool = false,
 
     const State = enum {
         ground,
@@ -32,6 +37,8 @@ pub const Parser = struct {
         csi_intermediate,
         osc_string,
         osc_esc,
+        apc_string,
+        apc_esc,
     };
 
     pub fn init() Parser {
@@ -64,7 +71,17 @@ pub const Parser = struct {
                     self.state = .ground;
                 } else {
                     self.state = .osc_string;
-                    self.oscPush(byte);
+                    self.oscPush(screen, byte);
+                }
+            },
+            .apc_string => self.apc(screen, byte),
+            .apc_esc => {
+                if (byte == '\\') {
+                    self.finishApc(screen);
+                    self.state = .ground;
+                } else {
+                    self.state = .apc_string;
+                    self.apcPush(screen, byte);
                 }
             },
         }
@@ -119,7 +136,15 @@ pub const Parser = struct {
             },
             ']' => {
                 self.osc_len = 0;
+                self.osc_iterm = false;
                 self.state = .osc_string;
+            },
+            '_' => {
+                self.apc_hdr_len = 0;
+                self.apc_semi = false;
+                self.apc_kitty = false;
+                screen.gfxReset();
+                self.state = .apc_string;
             },
             '7' => {
                 screen.saveCursor();
@@ -432,10 +457,19 @@ pub const Parser = struct {
         }
     }
 
-    fn oscPush(self: *Parser, byte: u8) void {
+    fn oscPush(self: *Parser, screen: *Screen, byte: u8) void {
+        if (self.osc_iterm) {
+            screen.gfxAppend(&.{byte});
+            return;
+        }
         if (self.osc_len < self.osc_buf.len) {
             self.osc_buf[self.osc_len] = byte;
             self.osc_len += 1;
+        }
+        if (!self.osc_iterm and self.osc_len == 5 and std.mem.eql(u8, self.osc_buf[0..5], "1337;")) {
+            self.osc_iterm = true;
+            screen.gfxReset();
+            screen.gfxAppend(self.osc_buf[0..5]);
         }
     }
 
@@ -446,11 +480,63 @@ pub const Parser = struct {
                 self.state = .ground;
             },
             0x1B => self.state = .osc_esc,
-            else => self.oscPush(byte),
+            else => self.oscPush(screen, byte),
         }
     }
 
+    fn apc(self: *Parser, screen: *Screen, byte: u8) void {
+        switch (byte) {
+            0x07 => {
+                self.finishApc(screen);
+                self.state = .ground;
+            },
+            0x1B => self.state = .apc_esc,
+            else => self.apcPush(screen, byte),
+        }
+    }
+
+    fn apcPush(self: *Parser, screen: *Screen, byte: u8) void {
+        if (!self.apc_kitty and self.apc_hdr_len == 0 and !self.apc_semi) {
+            if (byte == 'G') {
+                self.apc_kitty = true;
+            }
+            return;
+        }
+        if (!self.apc_kitty) return;
+        if (!self.apc_semi) {
+            if (byte == ';') {
+                self.apc_semi = true;
+                screen.gfxSetKittyKeys(self.apc_hdr[0..self.apc_hdr_len]);
+                return;
+            }
+            if (self.apc_hdr_len < self.apc_hdr.len) {
+                self.apc_hdr[self.apc_hdr_len] = byte;
+                self.apc_hdr_len += 1;
+            }
+            return;
+        }
+        screen.gfxAppend(&.{byte});
+    }
+
+    fn finishApc(self: *Parser, screen: *Screen) void {
+        if (self.apc_kitty) {
+            if (!self.apc_semi) {
+                screen.gfxSetKittyKeys(self.apc_hdr[0..self.apc_hdr_len]);
+            }
+            screen.finishKitty();
+        }
+        self.apc_hdr_len = 0;
+        self.apc_semi = false;
+        self.apc_kitty = false;
+    }
+
     fn finishOsc(self: *Parser, screen: *Screen) void {
+        if (self.osc_iterm) {
+            screen.finishIterm();
+            self.osc_iterm = false;
+            self.osc_len = 0;
+            return;
+        }
         const data = self.osc_buf[0..self.osc_len];
         if (data.len >= 2 and (data[0] == '0' or data[0] == '1' or data[0] == '2') and data[1] == ';') {
             screen.setTitle(data[2..]);

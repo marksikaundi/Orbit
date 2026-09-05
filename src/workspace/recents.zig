@@ -15,6 +15,7 @@ pub const Store = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     last: ?[]u8 = null,
+    last_ssh: ?[]u8 = null,
     restore_on_launch: bool = true,
     names: std.ArrayList([]u8) = .empty,
 
@@ -27,6 +28,7 @@ pub const Store = struct {
     pub fn deinit(self: *Store) void {
         self.clearNames();
         if (self.last) |n| self.allocator.free(n);
+        if (self.last_ssh) |n| self.allocator.free(n);
         self.names.deinit(self.allocator);
     }
 
@@ -71,6 +73,16 @@ pub const Store = struct {
         self.save() catch {};
     }
 
+    pub fn setLastSsh(self: *Store, cmd: []const u8) void {
+        if (self.last_ssh) |n| self.allocator.free(n);
+        self.last_ssh = self.allocator.dupe(u8, cmd) catch null;
+        self.save() catch {};
+    }
+
+    pub fn lastSsh(self: *const Store) ?[]const u8 {
+        return self.last_ssh;
+    }
+
     fn load(self: *Store) !void {
         const path = self.filePath() catch return;
         defer self.allocator.free(path);
@@ -94,6 +106,9 @@ pub const Store = struct {
             if (std.mem.eql(u8, key, "last_workspace") or std.mem.eql(u8, key, "last")) {
                 if (self.last) |n| self.allocator.free(n);
                 self.last = self.allocator.dupe(u8, val) catch null;
+            } else if (std.mem.eql(u8, key, "last_ssh")) {
+                if (self.last_ssh) |n| self.allocator.free(n);
+                self.last_ssh = self.allocator.dupe(u8, val) catch null;
             } else if (std.mem.eql(u8, key, "restore_on_launch")) {
                 self.restore_on_launch = std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "1");
             } else if (std.mem.eql(u8, key, "recent")) {
@@ -114,6 +129,11 @@ pub const Store = struct {
         try out.appendSlice(self.allocator, "# Orbit session — last workspace and recents\n");
         if (self.last) |n| {
             try out.appendSlice(self.allocator, "last_workspace = \"");
+            try out.appendSlice(self.allocator, n);
+            try out.appendSlice(self.allocator, "\"\n");
+        }
+        if (self.last_ssh) |n| {
+            try out.appendSlice(self.allocator, "last_ssh = \"");
             try out.appendSlice(self.allocator, n);
             try out.appendSlice(self.allocator, "\"\n");
         }

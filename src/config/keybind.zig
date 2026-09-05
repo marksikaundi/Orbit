@@ -525,6 +525,10 @@ fn mapAppAction(name: []const u8, param: []const u8) ?AppAction {
     if (eql(name, "search") or eql(name, "toggle_search")) return .search;
     if (eql(name, "open_file")) return .open_file;
     if (eql(name, "ssh")) return .ssh;
+    if (eql(name, "ssh_reconnect") or eql(name, "ssh-reconnect")) return .ssh_reconnect;
+    if (eql(name, "sync_now") or eql(name, "sync")) return .sync_now;
+    if (eql(name, "sync_push")) return .sync_push;
+    if (eql(name, "sync_pull")) return .sync_pull;
     if (eql(name, "list_plugins") or eql(name, "plugins")) return .list_plugins;
     if (eql(name, "format_document") or eql(name, "format")) return .format_document;
     if (eql(name, "lint_file") or eql(name, "lint")) return .lint_file;

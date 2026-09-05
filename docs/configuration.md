@@ -60,6 +60,10 @@ prompt = "ghostty"        # default | ghostty | minimal | starship
 cursor_style = "block"    # block | underline | bar (beam = bar)
 cursor_blink = true
 restore_last_workspace = true
+font_ligatures = true
+
+# [sync]
+# remote = "git@github.com:you/orbit-dotfiles.git"
 
 # Ghostty-compatible (overlay the defaults)
 # keybind = ctrl+k=reload_config
@@ -108,8 +112,26 @@ Setting `look` applies that profile’s padding, spacing, and opacity. Fine-tune
 | `cursor_style` | `block` | `block`, `underline`, `bar` (`beam` = bar) |
 | `cursor_blink` | `true` | `true` / `false` |
 | `restore_last_workspace` | `true` | Reopen the last tabs/splits on launch (auto-saved as `__last__`). Alias: `restore-last-workspace`. |
+| `font_ligatures` | `true` | Cluster `=>` `!=` `->` and the other programming ligatures. Aliases: `font-ligatures`, `ligatures`. OpenType GSUB when built with `-Dharfbuzz`. |
 
 `shell` applies to **new** tabs, not the one already open. Saved pane cwd follows OSC 7 after `zig build setup` sources `orbit.sh`.
+
+---
+
+## `[sync]`
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `remote` | unset | Git URL for `orbit sync`. Alias: `url`. Syncs `config.toml`, `workspaces/`, `ssh.toml`, `session.toml`. `logs/` stays local. |
+
+```bash
+orbit sync          # pull --rebase then push
+orbit sync pull
+orbit sync push
+orbit sync status
+```
+
+Palette: **Sync Config Now / Push / Pull**.
 
 ---
 

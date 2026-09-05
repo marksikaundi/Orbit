@@ -34,7 +34,7 @@ const clipboard = @import("../clipboard/clipboard.zig");
 const folder_picker = @import("../platform/folder_picker.zig");
 const macos_open = @import("../platform/macos_open.zig");
 const recents_mod = @import("../workspace/recents.zig");
-const ssh_config = @import("../platform/ssh_config.zig");
+const ssh_hosts_mod = @import("../platform/ssh_hosts.zig");
 const notify = @import("../platform/notify.zig");
 const open_url = @import("../platform/open_url.zig");
 const url_mod = @import("../ui/url.zig");
@@ -103,9 +103,9 @@ pub const App = struct {
     save_name_len: usize = 0,
     ssh_host: [128]u8 = undefined,
     ssh_host_len: usize = 0,
-    /// Inject `ssh -- host` only after the new tab's shell has printed a prompt.
+    /// Inject a built `ssh …` line only after the new tab's shell has printed a prompt.
     pending_ssh_len: usize = 0,
-    pending_ssh_host: [128]u8 = undefined,
+    pending_ssh_cmd: [384]u8 = undefined,
     status_msg: [96]u8 = undefined,
     status_len: usize = 0,
     /// Seconds (glfwGetTime) when the toast should disappear (0 = hidden).
@@ -125,7 +125,7 @@ pub const App = struct {
     seq: [keybind_mod.max_sequence]keybind_mod.Trigger = undefined,
     seq_len: u8 = 0,
     recents: recents_mod.Store = undefined,
-    ssh_hosts: [ssh_config.max_hosts]ssh_config.Host = undefined,
+    ssh_hosts: [ssh_hosts_mod.max_hosts]ssh_hosts_mod.Host = undefined,
     ssh_host_count: usize = 0,
     ssh_pick: usize = 0,
     zoomed: bool = false,
@@ -1103,7 +1103,7 @@ pub const App = struct {
         try self.renderer.drawText(x + 16, y + 38, label, chrome.muted);
         var row: usize = 0;
         while (row < self.ssh_host_count and row < 8) : (row += 1) {
-            const name = self.ssh_hosts[row].slice();
+            const name = self.ssh_hosts[row].nameSlice();
             const ry = y + 60 + @as(i32, @intCast(row)) * 20;
             const fg = if (row == self.ssh_pick) chrome.fg else chrome.muted;
             if (row == self.ssh_pick) {
@@ -2065,7 +2065,7 @@ pub const App = struct {
     fn openSshPrompt(self: *App) void {
         self.ssh_host_len = 0;
         self.ssh_pick = 0;
-        self.ssh_host_count = ssh_config.load(self.allocator, self.io, &self.ssh_hosts);
+        self.ssh_host_count = ssh_hosts_mod.loadAll(self.allocator, self.io, &self.ssh_hosts);
         self.ui = .ssh_prompt;
     }
 
@@ -2232,15 +2232,19 @@ pub const App = struct {
                 if (self.ssh_host_len > 0) self.ssh_host_len -= 1;
             },
             c.GLFW_KEY_ENTER => {
-                const host = if (self.ssh_host_len > 0)
-                    self.ssh_host[0..self.ssh_host_len]
-                else if (self.ssh_host_count > 0)
-                    self.ssh_hosts[self.ssh_pick].slice()
-                else
+                if (self.ssh_host_len > 0) {
+                    const typed = ssh_hosts_mod.parseTyped(self.ssh_host[0..self.ssh_host_len]);
+                    ssh_hosts_mod.appendSaved(self.allocator, self.io, &typed);
+                    self.connectSshHost(&typed) catch {
+                        self.setStatus("ssh failed");
+                    };
+                } else if (self.ssh_host_count > 0) {
+                    self.connectSshHost(&self.ssh_hosts[self.ssh_pick]) catch {
+                        self.setStatus("ssh failed");
+                    };
+                } else {
                     return;
-                self.connectSsh(host) catch {
-                    self.setStatus("ssh failed");
-                };
+                }
                 self.ui = .normal;
             },
             else => {},
@@ -2322,6 +2326,10 @@ pub const App = struct {
                 }
             },
             .ssh => self.openSshPrompt(),
+            .ssh_reconnect => self.reconnectSsh(),
+            .sync_now => self.runOrbitSync("sync"),
+            .sync_push => self.runOrbitSync("push"),
+            .sync_pull => self.runOrbitSync("pull"),
             .theme_orbit_dark => self.applyTheme("orbit-dark"),
             .theme_orbit_light => self.applyTheme("orbit-light"),
             .theme_nord => self.applyTheme("nord"),
@@ -3424,6 +3432,7 @@ pub const App = struct {
     }
 
     fn applyRendererHooks(self: *App) void {
+        self.renderer.ligatures = self.config.font_ligatures;
         if (self.plugins.rendererClearColor()) |col| {
             var theme = self.renderer.theme;
             theme.background = col;
@@ -3463,21 +3472,60 @@ pub const App = struct {
         self.setStatus("theme applied");
     }
 
-    fn connectSsh(self: *App, host: []const u8) !void {
-        if (!isSafeSshTarget(host)) {
+    fn connectSshHost(self: *App, host: *const ssh_hosts_mod.Host) !void {
+        var cmd_buf: [360]u8 = undefined;
+        const built = ssh_hosts_mod.buildCommand(host, &cmd_buf);
+        if (!isSafeSshCommand(built)) {
             self.setStatus("invalid ssh host");
             return;
         }
-        // Open a tab titled with the host; inject the command only after the prompt appears
-        // so we don't get a ghost echoed line + weird highlight before the shell is ready.
         var title_buf: [64]u8 = undefined;
-        const title = std.fmt.bufPrint(&title_buf, "ssh {s}", .{host}) catch "ssh";
+        const title = std.fmt.bufPrint(&title_buf, "ssh {s}", .{host.nameSlice()}) catch "ssh";
         try self.newTabInDir(self.sessionCwd(), title[0..@min(title.len, 32)]);
         if (self.focused()) |s| s.selection.clear();
-        const n = @min(host.len, self.pending_ssh_host.len);
-        @memcpy(self.pending_ssh_host[0..n], host[0..n]);
+        const n = @min(built.len, self.pending_ssh_cmd.len);
+        @memcpy(self.pending_ssh_cmd[0..n], built[0..n]);
         self.pending_ssh_len = n;
+        self.recents.setLastSsh(built);
         self.setStatus("ssh starting…");
+    }
+
+    fn reconnectSsh(self: *App) void {
+        const last = self.recents.lastSsh() orelse {
+            self.openSshPrompt();
+            return;
+        };
+        if (!isSafeSshCommand(last)) {
+            self.openSshPrompt();
+            return;
+        }
+        var title_buf: [64]u8 = undefined;
+        const title = std.fmt.bufPrint(&title_buf, "ssh reconnect", .{}) catch "ssh";
+        self.newTabInDir(self.sessionCwd(), title) catch {
+            self.setStatus("ssh failed");
+            return;
+        };
+        if (self.focused()) |s| s.selection.clear();
+        const n = @min(last.len, self.pending_ssh_cmd.len);
+        @memcpy(self.pending_ssh_cmd[0..n], last[0..n]);
+        self.pending_ssh_len = n;
+        self.setStatus("ssh reconnecting…");
+    }
+
+    fn runOrbitSync(self: *App, mode: []const u8) void {
+        var line: [48]u8 = undefined;
+        const cmd = std.fmt.bufPrint(&line, "orbit sync {s}\r", .{mode}) catch return;
+        if (self.focused()) |s| {
+            s.write(cmd);
+            self.setStatus("orbit sync");
+            return;
+        }
+        self.newTabInDir(self.sessionCwd(), "sync") catch {
+            self.setStatus("sync failed");
+            return;
+        };
+        if (self.focused()) |s| s.write(cmd);
+        self.setStatus("orbit sync");
     }
 
     fn flushPendingSsh(self: *App) void {
@@ -3488,11 +3536,11 @@ pub const App = struct {
         };
         if (!session.alive or !session.output_seen) return;
 
-        var cmd: [192]u8 = undefined;
+        var cmd: [400]u8 = undefined;
         const line = std.fmt.bufPrint(
             &cmd,
-            "ssh -- {s}\r",
-            .{self.pending_ssh_host[0..self.pending_ssh_len]},
+            "{s}\r",
+            .{self.pending_ssh_cmd[0..self.pending_ssh_len]},
         ) catch {
             self.pending_ssh_len = 0;
             self.setStatus("ssh failed");
@@ -3501,6 +3549,18 @@ pub const App = struct {
         session.write(line);
         self.pending_ssh_len = 0;
         self.setStatus("ssh started");
+    }
+
+    fn isSafeSshCommand(cmd: []const u8) bool {
+        if (cmd.len < 3 or cmd.len > 360) return false;
+        if (!std.mem.startsWith(u8, cmd, "ssh")) return false;
+        for (cmd) |ch| {
+            switch (ch) {
+                'a'...'z', 'A'...'Z', '0'...'9', ' ', '.', '-', '_', '/', '~', '@', ':', '=', '%', '\\' => {},
+                else => return false,
+            }
+        }
+        return true;
     }
 
     /// Allow `user@host`, hostnames, IPv4, and optional `:port` — reject shell metacharacters.

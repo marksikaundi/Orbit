@@ -38,6 +38,12 @@ cursor_style = "block"
 cursor_blink = true
 # Reopen the last tabs/splits when Orbit starts with no folder argument.
 restore_last_workspace = true
+# Programming ligatures (`=>` `!=` `->`). OpenType GSUB with `zig build -Dharfbuzz`.
+font_ligatures = true
+
+# Git remote for `orbit sync` (config, workspaces, ssh.toml). Logs stay local.
+# [sync]
+# remote = "git@github.com:you/orbit-dotfiles.git"
 
 # Custom keybindings — Ghostty-compatible: trigger=action
 # https://ghostty.org/docs/config/keybind

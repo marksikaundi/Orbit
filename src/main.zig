@@ -4,6 +4,8 @@ const version = @import("version.zig");
 const cli = @import("cli/args.zig");
 const ide_setup = @import("cli/ide_setup.zig");
 const updater = @import("cli/update.zig");
+const syncer = @import("cli/sync.zig");
+const Config = @import("config/config.zig").Config;
 const macos_open = @import("platform/macos_open.zig");
 
 pub fn main(init: std.process.Init) !void {
@@ -47,6 +49,18 @@ pub fn main(init: std.process.Init) !void {
                 .rebuild_only = launch.update_rebuild,
                 .rebuild_root = launch.cwd,
             });
+            return;
+        },
+        .sync => {
+            var cfg = Config.load(gpa, init.io);
+            defer cfg.deinit(gpa);
+            const mode: syncer.Mode = switch (launch.sync_mode) {
+                .status => .status,
+                .pull => .pull,
+                .push => .push,
+                .sync => .sync,
+            };
+            try syncer.run(gpa, init.io, mode, cfg.sync_remote);
             return;
         },
         .run => {},
